@@ -201,6 +201,28 @@ func TestKVBackfillTTL_PromptWarnsAboutOneExpiredKeyInTheSingular(t *testing.T) 
 	}
 }
 
+// --yes skips only the question. The loss warning still prints, so a script's
+// log shows which run deleted keys.
+func TestKVBackfillTTL_YesStillWarnsAboutExpiredKeys(t *testing.T) {
+	cfgPath, dbPath := kvBackfillFixture(t, `{ "log:" = "30d" }`)
+	backdateKey(t, dbPath, "log:a", 800*time.Hour)
+
+	var out bytes.Buffer
+	if err := runKVBackfillTTL(context.Background(), &out, strings.NewReader(""), cfgPath, false, true); err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "\n1 key is already past its new expiry and will disappear at once. This cannot be undone.\n") {
+		t.Errorf("--yes dropped the expiry warning:\n%s", got)
+	}
+	if strings.Contains(got, "[y/N]") {
+		t.Errorf("--yes still asked:\n%s", got)
+	}
+	if !strings.Contains(got, "Updated 2 key(s); 1 already expired") || !hasExpiry(t, dbPath, "log:b") {
+		t.Errorf("--yes did not write:\n%s", got)
+	}
+}
+
 func TestKVBackfillTTL_NoDefaultTTLIsNotice(t *testing.T) {
 	cfgPath, dbPath := kvBackfillFixture(t, "")
 

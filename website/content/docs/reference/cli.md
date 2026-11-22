@@ -24,11 +24,11 @@ toc: true
 
 ## Flags
 
-`--config` / `-c` is accepted by the commands that read the config file — `serve`, `keys`, `sessions`, and `decide`. It is not a root-level flag, so `denkeeper --config ... <command>` will not work; put it after the subcommand instead.
+`--config` / `-c` is accepted by the commands that read the config file — `serve`, `keys`, `sessions`, `kv`, and `decide`. It is not a root-level flag, so `denkeeper --config ... <command>` will not work; put it after the subcommand instead.
 
 | Flag | Available on | Description |
 |---|---|---|
-| `--config PATH`, `-c` | `serve`, `keys`, `sessions`, `decide` | Path to config file (default: `~/.denkeeper/denkeeper.toml`) |
+| `--config PATH`, `-c` | `serve`, `keys`, `sessions`, `kv`, `decide` | Path to config file (default: `~/.denkeeper/denkeeper.toml`) |
 | `--help` | all commands | Print help |
 
 There is no `--version` flag. Use the `denkeeper version` subcommand.
@@ -158,7 +158,7 @@ Maintain the key-value store the agents write with `kv_set`. It lives in the mem
 
 ### `denkeeper kv backfill-ttl`
 
-Give existing keys the expiry [`[kv] default_ttl`](/docs/reference/config/) gives new writes. Every key that has no expiry and matches a `default_ttl` prefix gets `expires_at = updated_at + ttl`, whoever wrote it: the agent's `kv_set`, `kv_setnx` locks, the dashboard, the REST API or the external MCP server. The store does not record which writer stored a key, so keys deliberately stored without an expiry get one too, such as a `kv_set` with `ttl: "0s"` or a value you saved from the dashboard. Prefixes match the way `kv_set` matches them: longest prefix wins, case-sensitive. Keys that already have an expiry are left alone, as are keys under a prefix with no default. Values, `created_at` and `updated_at` do not change.
+Give existing keys the expiry [`[kv] default_ttl`](/docs/reference/config/) gives new writes. Every key that has no expiry and matches a `default_ttl` prefix gets `expires_at = updated_at + ttl`, whoever wrote it: the agent's `kv_set`, `kv_set_nx` locks, the dashboard, the REST API or the external MCP server. The store does not record which writer stored a key, so keys deliberately stored without an expiry get one too, such as a `kv_set` with `ttl: "0s"` or a value you saved from the dashboard. Prefixes match the way `kv_set` matches them: longest prefix wins, case-sensitive. Keys that already have an expiry are left alone, as are keys under a prefix with no default. Values, `created_at` and `updated_at` do not change.
 
 ```bash
 denkeeper kv backfill-ttl --dry-run
@@ -175,7 +175,7 @@ pamela  log:       720h  214   40
 Dry run: nothing was written.
 ```
 
-`ALREADY EXPIRED` counts keys whose new expiry is in the past. Those keys disappear from reads as soon as the backfill runs, and the next cleanup deletes them, so this cannot be undone. Without `--dry-run` the command prints the same table and asks for confirmation before writing; the prompt names the key count and, when any are already past their new expiry, how many will disappear. Without a terminal it writes nothing unless you pass `--yes`. Running it again prints `No keys need a TTL.` It is safe to run while `denkeeper serve` is up.
+`ALREADY EXPIRED` counts keys whose new expiry is in the past. Those keys disappear from reads as soon as the backfill runs, and the next cleanup deletes them, so this cannot be undone. Without `--dry-run` the command prints the same table, warns how many keys will disappear when any are already past their new expiry, and asks for confirmation before writing. `--yes` skips only the question; the warning still prints. If stdin closes with no answer, as in a cron job, it writes nothing; a piped `y` or `yes` counts as confirmation. Running it again prints `No keys need a TTL.` It is safe to run while `denkeeper serve` is up: the backfill takes the database write lock before it reads, so a server write in the meantime waits for it instead of failing it.
 
 | Flag | Description |
 |---|---|

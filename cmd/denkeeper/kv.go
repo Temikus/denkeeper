@@ -28,7 +28,7 @@ func newKVCmd() *cobra.Command {
 		Use:   "backfill-ttl",
 		Short: "Give existing keys the expiry [kv] default_ttl gives new writes",
 		Long: "Sets expires_at = updated_at + ttl on every key that has no expiry and matches a [kv] default_ttl prefix, " +
-			"whoever wrote it: kv_set, kv_setnx locks, the dashboard, the REST API or the external MCP server. " +
+			"whoever wrote it: kv_set, kv_set_nx locks, the dashboard, the REST API or the external MCP server. " +
 			"Keys stored without an expiry on purpose, such as a kv_set with ttl \"0s\", get one too. " +
 			"Keys that already have an expiry, and keys under a prefix with no default, are left alone. " +
 			"Run with --dry-run first to see the count per agent and namespace. " +
@@ -90,8 +90,10 @@ func backfillTTL(ctx context.Context, w io.Writer, r io.Reader, store *kv.SQLite
 		_, _ = fmt.Fprintln(w, "Dry run: nothing was written.")
 		return nil
 	}
+	keys, expired := backfillTotals(planned)
+	_, _ = fmt.Fprint(w, backfillWarning(expired))
 	if !yes {
-		ok, answered := confirm(w, r, backfillPrompt(planned))
+		ok, answered := confirm(w, r, backfillQuestion(keys))
 		if !answered {
 			_, _ = fmt.Fprintln(w, "No answer; nothing was written. Pass --yes to run without a prompt.")
 			return nil
@@ -106,7 +108,7 @@ func backfillTTL(ctx context.Context, w io.Writer, r io.Reader, store *kv.SQLite
 	if err != nil {
 		return fmt.Errorf("setting expiries: %w", err)
 	}
-	keys, expired := backfillTotals(done)
+	keys, expired = backfillTotals(done)
 	if expired > 0 {
 		_, _ = fmt.Fprintf(w, "Updated %d key(s); %d already expired and will be deleted by the next cleanup.\n", keys, expired)
 	} else {
@@ -125,20 +127,22 @@ func printBackfill(w io.Writer, counts []kv.BackfillCount, rawTTL map[string]str
 	return tw.Flush()
 }
 
-// backfillPrompt names the count and warns about loss only when some keys are
-// already past their new expiry. A warning shown on every run gets skipped on
-// the run where it matters. The warning goes on its own line first, so the
-// question stays short and ends at the prompt.
-func backfillPrompt(planned []kv.BackfillCount) string {
-	keys, expired := backfillTotals(planned)
-	var warning string
+// backfillWarning is printed only when some keys are already past their new
+// expiry: a warning shown on every run gets skipped on the run where it
+// matters. It prints with --yes too, which skips only the question.
+func backfillWarning(expired int) string {
 	switch {
 	case expired == 1:
-		warning = "1 key is already past its new expiry and will disappear at once. This cannot be undone.\n"
+		return "1 key is already past its new expiry and will disappear at once. This cannot be undone.\n"
 	case expired > 1:
-		warning = fmt.Sprintf("%d keys are already past their new expiry and will disappear at once. This cannot be undone.\n", expired)
+		return fmt.Sprintf("%d keys are already past their new expiry and will disappear at once. This cannot be undone.\n", expired)
 	}
-	return warning + fmt.Sprintf("Set expiries on %d key(s), including any stored without one on purpose? [y/N]: ", keys)
+	return ""
+}
+
+// backfillQuestion stays short and ends at the prompt.
+func backfillQuestion(keys int) string {
+	return fmt.Sprintf("Set expiries on %d key(s), including any stored without one on purpose? [y/N]: ", keys)
 }
 
 func backfillTotals(counts []kv.BackfillCount) (keys, expired int) {

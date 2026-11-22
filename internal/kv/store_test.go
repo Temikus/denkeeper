@@ -2,9 +2,12 @@ package kv
 
 import (
 	"context"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/jmoiron/sqlx"
 )
 
 func mustStore(t *testing.T, opts ...Option) *SQLiteStore {
@@ -381,6 +384,42 @@ func mustBackfill(t *testing.T, s *SQLiteStore, dryRun bool) []BackfillCount {
 		t.Fatalf("BackfillTTL(dryRun=%v): %v", dryRun, err)
 	}
 	return counts
+}
+
+// The running server writes on its own connection. If it commits between the
+// backfill's SELECT and UPDATE, a deferred transaction fails the UPDATE with
+// SQLITE_BUSY_SNAPSHOT. Holding the write lock from the start makes that
+// writer wait instead, so the backfill succeeds while serve is up.
+func TestBackfillTTL_WriterBetweenSelectAndUpdateWaits(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "kv.db")
+	s, err := NewSQLiteStore(path)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	mustSet(t, s, "agent1", "log:a", 0)
+
+	// A short busy_timeout, so a writer kept out by the lock fails fast.
+	other, err := sqlx.Open("sqlite", path+"?_pragma=busy_timeout(100)")
+	if err != nil {
+		t.Fatalf("opening second connection: %v", err)
+	}
+	t.Cleanup(func() { _ = other.Close() })
+	insert := `INSERT INTO kv (agent_name, key, value) VALUES ('agent2', ?, 'v')`
+
+	var otherErr error
+	backfillBeforeWrite = func() { _, otherErr = other.Exec(insert, "pref:during") }
+	t.Cleanup(func() { backfillBeforeWrite = nil })
+
+	if counts := mustBackfill(t, s, false); len(counts) != 1 || counts[0].Keys != 1 {
+		t.Errorf("counts = %+v, want log:a backfilled", counts)
+	}
+	if otherErr == nil {
+		t.Error("another connection committed inside the backfill, so the write lock was not held")
+	}
+	if _, err := other.Exec(insert, "pref:after"); err != nil {
+		t.Errorf("write after the backfill committed: %v, want it to succeed", err)
+	}
 }
 
 func TestBackfillTTL_SetsUpdatedAtPlusTTL(t *testing.T) {
