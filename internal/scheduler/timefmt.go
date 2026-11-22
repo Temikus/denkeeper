@@ -46,6 +46,18 @@ func FormatScheduledTextWithPrev(name, skill string, fireTime, prevRun time.Time
 var scheduledHeader = regexp.MustCompile(
 	`^\[(Scheduled: |Scheduled trigger: )(.+?) \| (\S+) (\S+) \| \d{4}-W\d{2}(?: \| last run (\S+) \(\d+[mhd] ago\))?\]`)
 
+// ParseScheduledHeader returns the name in a header FormatScheduledTextWithPrev
+// wrote, and whether it names a skill ("Scheduled: ") rather than a schedule
+// ("Scheduled trigger: "). The match anchors on the fields after the name, so
+// a name containing " | " comes back whole. ok is false for anything else.
+func ParseScheduledHeader(text string) (name string, isSkill, ok bool) {
+	m := scheduledHeader.FindStringSubmatch(text)
+	if m == nil {
+		return "", false, false
+	}
+	return m[2], m[1] == "Scheduled: ", true
+}
+
 // RetimeScheduledText re-renders a scheduled header as if it fired at
 // fireTime, in the zone the header names. A last-run segment keeps its gap to
 // the fire time. Text after the header is kept. Anything it cannot parse is

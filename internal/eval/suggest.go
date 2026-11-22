@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Temikus/denkeeper/internal/agent"
+	"github.com/Temikus/denkeeper/internal/scheduler"
 )
 
 // Signals a past turn can carry. A turn with none of them is not offered at
@@ -256,13 +257,18 @@ func categoryFor(t agent.InterestingTurn) string {
 // generated prompt, the one part of that label a person recognises. Empty for
 // anything a person actually typed.
 func triggerOf(content string) string {
+	// A well-formed header is parsed from the right, so a name containing
+	// " | " is kept whole.
+	if name, _, ok := scheduler.ParseScheduledHeader(content); ok {
+		return name
+	}
 	for _, label := range scheduledLabels {
 		rest, ok := strings.CutPrefix(content, label)
 		if !ok {
 			continue
 		}
-		// FormatScheduledText separates the label from the fire time with
-		// " | "; a name containing one would only cut short, never mislead.
+		// A header the scheduler did not write: cut at the first " | ", which
+		// can shorten a name but never invent one.
 		if i := strings.Index(rest, " | "); i >= 0 {
 			rest = rest[:i]
 		}
@@ -292,7 +298,9 @@ func scheduledSkillNotes(t agent.InterestingTurn, lookup func(string, string) (s
 	if !ok || desc == "" {
 		return note
 	}
-	return note + ` The skill describes itself as: "` + cutRunes(desc, skillNoteDescMax) + `"`
+	// %q escapes quotes and newlines, so the description cannot close the
+	// quotation and carry on as if it were the note.
+	return note + fmt.Sprintf(" The skill describes itself as: %q", cutRunes(desc, skillNoteDescMax))
 }
 
 // cutRunes keeps the first limit runes of s and marks the cut with "…".

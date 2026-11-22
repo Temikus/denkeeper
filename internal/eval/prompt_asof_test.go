@@ -51,7 +51,11 @@ func TestRunner_ScheduledTaskSentAtRunAsOf(t *testing.T) {
 	task := f.addTasks(t, scheduledPrompt)[0]
 	runAsOf(t, f, scheduledAsOf)
 
-	for _, text := range f.engine.seenTexts() {
+	texts := f.engine.seenTexts()
+	if len(texts) == 0 {
+		t.Fatal("the engine received no prompt, so there is nothing to check")
+	}
+	for _, text := range texts {
 		if text != scheduledAtAsOf {
 			t.Errorf("engine got %q, want %q", text, scheduledAtAsOf)
 		}
@@ -71,7 +75,11 @@ func TestRunner_ChatTaskSentVerbatim(t *testing.T) {
 	f.addTasks(t, prompt)
 	runAsOf(t, f, scheduledAsOf)
 
-	for _, text := range f.engine.seenTexts() {
+	texts := f.engine.seenTexts()
+	if len(texts) == 0 {
+		t.Fatal("the engine received no prompt, so there is nothing to check")
+	}
+	for _, text := range texts {
 		if text != prompt {
 			t.Errorf("engine got %q, want %q", text, prompt)
 		}
