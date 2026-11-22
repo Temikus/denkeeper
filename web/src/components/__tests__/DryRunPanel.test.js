@@ -262,9 +262,83 @@ describe('DryRunPanel', () => {
       expect(right).not.toBeNull()
       expect(within(right).getByText('moonshotai/kimi-k3')).toBeInTheDocument()
       expect(within(right).getByText('CANDIDATE')).toBeInTheDocument()
-      expect(within(right).getByRole('status')).toHaveTextContent(/Running through the agent/)
+      expect(within(right).getByText(/Running through the agent/)).toBeInTheDocument()
+      // Announced by the panel's persistent live region, not this div.
+      expect(within(right).queryByRole('status')).toBeNull()
       expect(container.querySelector('.body.split')).not.toBeNull()
       expect(primaryCol(container).querySelector('.lane-args')).toBeNull()
+    })
+
+    const strip = (c) => c.querySelector('.deltas')
+    const liveStatus = (c) => c.querySelector('.sr-only[role="status"]')
+
+    test('reserves the delta strip and caveat while the candidate runs', async () => {
+      const { container } = await startWithPendingCandidate()
+
+      expect(strip(container)).not.toBeNull()
+      const rounds = within(strip(container)).getByText('Rounds').closest('.delta')
+      expect(rounds.querySelector('.delta-from')).toHaveTextContent('3 →')
+      expect(container.querySelectorAll('.delta-pending')).toHaveLength(4)
+      expect(screen.getByText(/a smoke test, not a verdict/i)).toBeInTheDocument()
+    })
+
+    // Same element before and after: the strip is filled in, not inserted.
+    test('the reserved strip fills in with real values when the candidate lands', async () => {
+      const { pending, container } = await startWithPendingCandidate()
+      const reserved = strip(container)
+
+      pending.resolve(makeTranscript({ model: 'kimi-k3', rounds: 4, response: 'Candidate answer.' }))
+      await screen.findByText('Candidate answer.')
+      expect(strip(container)).toBe(reserved)
+      expect(container.querySelector('.delta-pending')).toBeNull()
+      expect(screen.getByText('3 → 4')).toBeInTheDocument()
+    })
+
+    test('a failed candidate keeps the strip in place with no values', async () => {
+      const { pending, container } = await startWithPendingCandidate()
+      const reserved = strip(container)
+
+      pending.reject(new Error('candidate: provider timeout'))
+      await within(rightCol(container)).findByRole('alert')
+      expect(strip(container)).toBe(reserved)
+      const marks = [...container.querySelectorAll('.delta-pending')].map(m => m.textContent)
+      expect(marks).toEqual(['—', '—', '—', '—'])
+    })
+
+    test('announces the candidate run in a live region that is always present', async () => {
+      const pending = deferred()
+      const primaryRun = deferred()
+      const run = vi.fn().mockReturnValueOnce(primaryRun.promise).mockReturnValueOnce(pending.promise)
+      const { container } = render(DryRunPanel, { props: { run } })
+      expect(liveStatus(container)).toHaveTextContent(/^$/)
+
+      await pickCompare()
+      await clickRun()
+      expect(liveStatus(container)).toHaveTextContent(/^$/)
+
+      primaryRun.resolve(makeTranscript())
+      await screen.findByText(/Morning\. Nothing needs you/)
+      expect(liveStatus(container)).toHaveTextContent('Running the candidate…')
+
+      pending.resolve(makeTranscript({ model: 'kimi-k3', response: 'Candidate answer.' }))
+      await screen.findByText('Candidate answer.')
+      expect(liveStatus(container)).toHaveTextContent(/^$/)
+    })
+
+    // A result that lands after the comparison was removed must not draw
+    // deltas over what is now a single column.
+    test('clearing the comparison mid-run drops the late candidate result', async () => {
+      const { pending, container } = await startWithPendingCandidate()
+
+      await fireEvent.click(screen.getByLabelText('Remove comparison'))
+      pending.resolve(makeTranscript({ model: 'kimi-k3', response: 'Candidate answer.' }))
+      await waitFor(() => expect(screen.getByText(/Compare with/)).toBeInTheDocument())
+
+      expect(strip(container)).toBeNull()
+      expect(rightCol(container)).toBeNull()
+      expect(container.querySelector('.body.split')).toBeNull()
+      expect(screen.queryByText('Candidate answer.')).not.toBeInTheDocument()
+      expect(screen.getByText(/Morning\. Nothing needs you/)).toBeInTheDocument()
     })
 
     test('the primary column keeps its shape when the candidate lands', async () => {

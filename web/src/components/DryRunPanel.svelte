@@ -114,16 +114,26 @@
   // Deltas are the answer; the transcripts are the explanation. Only "worse"
   // is coloured — a candidate that improves on something should not compete
   // for attention with the one that regresses.
-  let deltas = $derived(!(primary && candidate) ? [] : [
-    { label: 'Rounds', from: primary.rounds, to: candidate.rounds,
-      delta: pct(primary.rounds, candidate.rounds), worse: candidate.rounds > primary.rounds, suffix: '%' },
-    { label: 'Bad tool args', from: faultCount(primary), to: faultCount(candidate),
-      delta: faultCount(candidate) - faultCount(primary), worse: faultCount(candidate) > faultCount(primary), suffix: '', absolute: true },
-    { label: 'Cost', from: `$${(primary.cost_usd || 0).toFixed(4)}`, to: `$${(candidate.cost_usd || 0).toFixed(4)}`,
-      delta: pct(primary.cost_usd, candidate.cost_usd), worse: (candidate.cost_usd || 0) > (primary.cost_usd || 0), suffix: '%' },
-    { label: 'Latency', from: `${((primary.duration_ms || 0) / 1000).toFixed(1)}s`, to: `${((candidate.duration_ms || 0) / 1000).toFixed(1)}s`,
-      delta: pct(primary.duration_ms, candidate.duration_ms), worse: false, suffix: '%' },
-  ])
+  const METRICS = [
+    { label: 'Rounds', show: t => t.rounds, num: t => t.rounds, delta: pct, worse: (a, b) => b > a, suffix: '%' },
+    { label: 'Bad tool args', show: faultCount, num: faultCount, delta: (a, b) => b - a, worse: (a, b) => b > a, suffix: '' },
+    { label: 'Cost', show: t => `$${(t.cost_usd || 0).toFixed(4)}`, num: t => t.cost_usd || 0, delta: pct, worse: (a, b) => b > a, suffix: '%' },
+    { label: 'Latency', show: t => `${((t.duration_ms || 0) / 1000).toFixed(1)}s`, num: t => t.duration_ms, delta: pct, worse: () => false, suffix: '%' },
+  ]
+
+  // Reserved from the moment the primary lands in a compare run, so the
+  // candidate fills the strip in instead of pushing the columns down. Gated
+  // on `comparing` too: a result landing after the compare was removed must
+  // not draw deltas over a single column.
+  const showStrip = $derived(split && !!primary)
+  const candidatePending = $derived(showStrip && !candidate && !candidateError)
+
+  let deltas = $derived(!showStrip ? [] : METRICS.map(m => {
+    if (!candidate) return { label: m.label, from: m.show(primary), to: null }
+    const a = m.num(primary), b = m.num(candidate)
+    return { label: m.label, from: m.show(primary), to: m.show(candidate),
+      delta: m.delta(a, b), worse: m.worse(a, b), suffix: m.suffix }
+  }))
 
   function deltaText(d) {
     if (d.delta == null) return ''
@@ -210,15 +220,22 @@
     </div>
   {/if}
 
-  {#if primary && candidate}
+  <!-- Always rendered: a live region inserted already filled is often not read. -->
+  <span class="sr-only" role="status">{candidatePending ? 'Running the candidate…' : ''}</span>
+
+  {#if showStrip}
     <div class="deltas">
       {#each deltas as d}
         <div class="delta">
           <div class="delta-label">{d.label}</div>
           <div class="delta-values">
-            <span class="delta-from">{d.from} &rarr; {d.to}</span>
-            {#if d.delta != null && d.delta !== 0}
-              <span class="delta-pct" class:worse={d.worse}>{deltaText(d)}</span>
+            {#if d.to == null}
+              <span class="delta-from">{d.from} &rarr; <span class="delta-pending">{candidateError ? '—' : '…'}</span></span>
+            {:else}
+              <span class="delta-from">{d.from} &rarr; {d.to}</span>
+              {#if d.delta != null && d.delta !== 0}
+                <span class="delta-pct" class:worse={d.worse}>{deltaText(d)}</span>
+              {/if}
             {/if}
           </div>
         </div>
@@ -251,7 +268,7 @@
                 <button class="btn-sm" onclick={runCandidate} disabled={loading}>Try again</button>
               </div>
             {:else}
-              <div class="state candidate-wait" role="status">
+              <div class="state candidate-wait">
                 <span class="spinner" aria-hidden="true"></span>
                 Running through the agent&hellip;
               </div>
@@ -353,6 +370,7 @@
   .delta-from { font-size: 15px; font-weight: 600; color: var(--text); }
   .delta-pct { font-size: 12px; font-weight: 600; color: var(--text-muted); }
   .delta-pct.worse { color: var(--danger); }
+  .delta-pending { font-weight: 400; color: var(--text-muted); }
 
   .caveat {
     display: flex; align-items: flex-start; gap: 10px; padding: 12px 16px;
@@ -369,6 +387,7 @@
      12px matches the transcript's header-to-body gap. */
   .candidate-wait { padding: 12px 0 0; }
   .candidate-error { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding-top: 12px; }
+  /* Overrides the shared class: fills the row so the retry sits at its end, and long provider errors wrap. */
   .candidate-error .inline-error { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 
   /* Empty compare slot: a rail, not half the panel. The single-model preview
