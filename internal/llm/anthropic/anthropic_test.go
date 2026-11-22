@@ -674,3 +674,57 @@ func TestChatCompletionStream_ToolUsesAfterTextKeepAllInOrder(t *testing.T) {
 		t.Errorf("tool call order = %s, %s; want toolu_a, toolu_b", calls[0].ID, calls[1].ID)
 	}
 }
+
+func TestChatCompletion_MaxTokensStopIsLength(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(apiResponse{
+			Content:    []contentBlock{{Type: "text", Text: "partial"}},
+			StopReason: "max_tokens",
+		})
+	}))
+	defer server.Close()
+
+	client := NewWithHTTPClient("key", server.URL, server.Client())
+	resp, err := client.ChatCompletion(context.Background(), llm.ChatRequest{
+		Model:    "claude-sonnet-5-5",
+		Messages: []llm.Message{{Role: "user", Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.FinishReason != "length" {
+		t.Errorf("finish_reason = %q, want length", resp.FinishReason)
+	}
+}
+
+// A stream cut off inside a tool_use block keeps the call with its partial
+// arguments; the engine, not the provider, decides not to run it.
+func TestChatCompletionStream_MaxTokensStopIsLengthWithPartialCall(t *testing.T) {
+	stream := sseEvent("message_start", `{"type":"message_start","message":{"model":"claude-sonnet-5-5","usage":{"input_tokens":4}}}`) +
+		sseEvent("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"kv_set","input":{}}}`) +
+		sseEvent("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"key\":\"a\",\"val"}}`) +
+		sseEvent("message_delta", `{"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":16}}`) +
+		sseEvent("message_stop", `{"type":"message_stop"}`)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(stream))
+	}))
+	defer server.Close()
+
+	client := NewWithHTTPClient("key", server.URL, server.Client())
+	resp, err := client.ChatCompletion(context.Background(), llm.ChatRequest{
+		Model:    "claude-sonnet-5-5",
+		Messages: []llm.Message{{Role: "user", Content: "hi"}},
+		OnStream: func(llm.StreamChunk) {},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.FinishReason != "length" {
+		t.Errorf("finish_reason = %q, want length", resp.FinishReason)
+	}
+	if len(resp.ToolCalls) != 1 || resp.ToolCalls[0].Function.Arguments != `{"key":"a","val` {
+		t.Errorf("tool calls = %+v, want the one partial call", resp.ToolCalls)
+	}
+}

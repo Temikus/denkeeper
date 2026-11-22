@@ -9,7 +9,15 @@ import "context"
 const (
 	stopRepeatedCalls = "repeated_calls"
 	stopMaxRounds     = "max_rounds"
+	stopOutputLimit   = "output_limit"
 )
+
+// isWrapupStop reports whether a sample's stop reason ended its tool loop
+// early on the model's account. stop_requested and cancelled are operator
+// stops and do not count.
+func isWrapupStop(slug string) bool {
+	return slug == stopRepeatedCalls || slug == stopMaxRounds || slug == stopOutputLimit
+}
 
 // VariantMetrics is one variant's objective scorecard, computed over its
 // status-ok samples.
@@ -256,7 +264,7 @@ func variantMetrics(variants []Variant, samples []Sample) []VariantMetrics {
 		acc.latency += smp.LatencyMs
 		acc.cost += smp.Cost
 		acc.taskIDs[smp.TaskID] = struct{}{}
-		if smp.StopReason == stopRepeatedCalls || smp.StopReason == stopMaxRounds {
+		if isWrapupStop(smp.StopReason) {
 			acc.wrapups++
 		}
 		acc.tools += smp.OutcomeOK + smp.OutcomeRejected + smp.OutcomeFailed + smp.OutcomeDenied

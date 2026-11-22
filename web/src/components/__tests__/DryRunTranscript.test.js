@@ -36,6 +36,11 @@ describe('DryRunTranscript — stop reason', () => {
     }
   })
 
+  test('an output-limit stop names the token limit', () => {
+    render(DryRunTranscript, { props: { transcript: makeTranscript({ stop_reason: 'output_limit' }) } })
+    expect(screen.getByTestId('stop-reason')).toHaveTextContent('Cut short: hit the output-token limit')
+  })
+
   test('the badge spells out the wrap-up caveat in its tooltip', () => {
     render(DryRunTranscript, { props: { transcript: makeTranscript({ stop_reason: 'max_rounds' }) } })
     expect(screen.getByTestId('stop-reason'))
