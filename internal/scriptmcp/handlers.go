@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/dop251/goja"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -91,14 +92,10 @@ func (s *Server) handleRunJavaScript(ctx context.Context, req *mcp.CallToolReque
 	close(done)
 	if err != nil {
 		// goja surfaces JS exceptions and interrupts as Go errors; feed back to the LLM.
-		return toolError(scriptErrorText(err, args.decoded)), nil
+		return toolError(scriptErrorText(err, args.decoded, s.deps.MaxOutputChars)), nil
 	}
 
-	out := exportResult(val)
-	if s.deps.MaxOutputChars > 0 && len(out) > s.deps.MaxOutputChars {
-		out = out[:s.deps.MaxOutputChars]
-	}
-	return toolText(out), nil
+	return toolText(capOutput(exportResult(val), s.deps.MaxOutputChars)), nil
 }
 
 // runArgs holds the arguments after normalizeArgs.
@@ -221,8 +218,9 @@ func missingCodeError(badKey bool) error {
 
 // scriptErrorText formats a script failure. After a decoded string input, a
 // script that throws most likely still calls JSON.parse(input) on the object.
-func scriptErrorText(err error, decoded bool) string {
-	text := "javascript error: " + err.Error()
+// The script controls err.Error() (`throw input`), so it is capped; the hint is not.
+func scriptErrorText(err error, decoded bool, limit int) string {
+	text := "javascript error: " + capOutput(err.Error(), limit)
 	var interrupted *goja.InterruptedError
 	if decoded && !errors.As(err, &interrupted) {
 		text += "\n`input` was sent as a JSON-encoded string and was decoded to an object " +
@@ -279,6 +277,24 @@ func exportResult(val goja.Value) string {
 		return fmt.Sprintf("%v", exported)
 	}
 	return string(b)
+}
+
+// capOutput cuts s to at most limit bytes, backing up to a rune boundary, and
+// appends truncationMarker. limit <= 0 means no cap.
+func capOutput(s string, limit int) string {
+	if limit <= 0 || len(s) <= limit {
+		return s
+	}
+	n := limit
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n] + truncationMarker(limit)
+}
+
+// truncationMarker follows text cut by capOutput, so the model knows it was cut.
+func truncationMarker(limit int) string {
+	return fmt.Sprintf("\n[truncated: over max_output_chars (%d bytes)]", limit)
 }
 
 func toolText(text string) *mcp.CallToolResult {
