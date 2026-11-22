@@ -11,7 +11,7 @@ import (
 )
 
 func TestBuildSkillPayload_RequiresRoundTrips(t *testing.T) {
-	payload := configmcp.BuildSkillPayload("gated", "desc", "1.0.0", []string{"command:gated"}, "body", 0,
+	payload := configmcp.BuildSkillPayload("gated", "desc", "1.0.0", []string{"command:gated"}, "body", 0, 0,
 		[]string{"web_fetch", "kv_get"})
 
 	s, err := skill.ParseFile("(test)", []byte(payload))
@@ -27,14 +27,14 @@ func TestBuildSkillPayload_RequiresRoundTrips(t *testing.T) {
 // scalar. A scalar emitted below "[requires]" would be silently reparsed as a
 // member of that table — this asserts the layout, not just the round-trip.
 func TestBuildSkillPayload_RequiresTableComesLast(t *testing.T) {
-	payload := configmcp.BuildSkillPayload("gated", "desc", "1.0.0", []string{"command:gated"}, "body", 12,
+	payload := configmcp.BuildSkillPayload("gated", "desc", "1.0.0", []string{"command:gated"}, "body", 12, 2048,
 		[]string{"web_fetch"})
 
 	tableIdx := strings.Index(payload, "[requires]")
 	if tableIdx == -1 {
 		t.Fatalf("payload has no [requires] table:\n%s", payload)
 	}
-	for _, key := range []string{"name =", "description =", "version =", "triggers =", "max_tool_rounds ="} {
+	for _, key := range []string{"name =", "description =", "version =", "triggers =", "max_tool_rounds =", "max_output_tokens ="} {
 		idx := strings.Index(payload, key)
 		if idx == -1 {
 			t.Errorf("payload missing %q:\n%s", key, payload)
@@ -54,10 +54,16 @@ func TestBuildSkillPayload_RequiresTableComesLast(t *testing.T) {
 	if s.MaxToolRounds != 12 {
 		t.Errorf("MaxToolRounds = %d, want 12", s.MaxToolRounds)
 	}
+	if s.MaxOutputTokens != 2048 {
+		t.Errorf("MaxOutputTokens = %d, want 2048 (a top-level key, not a [requires] member)", s.MaxOutputTokens)
+	}
+	if len(s.Requires.Tools) != 1 || s.Requires.Tools[0] != "web_fetch" {
+		t.Errorf("Requires.Tools = %v, want [web_fetch] alongside the output cap", s.Requires.Tools)
+	}
 }
 
 func TestBuildSkillPayload_EmptyRequiresOmitsTable(t *testing.T) {
-	payload := configmcp.BuildSkillPayload("plain", "desc", "1.0.0", nil, "body", 0, nil)
+	payload := configmcp.BuildSkillPayload("plain", "desc", "1.0.0", nil, "body", 0, 0, nil)
 
 	if strings.Contains(payload, "requires") {
 		t.Errorf("payload mentions requires when unset:\n%s", payload)
@@ -78,7 +84,7 @@ func TestMergeSkillFields_PreservesExistingRequires(t *testing.T) {
 	}
 	newBody := "new body"
 
-	payload := configmcp.MergeSkillFields("gated", existing, nil, nil, nil, &newBody, nil, nil)
+	payload := configmcp.MergeSkillFields("gated", existing, nil, nil, nil, &newBody, nil, nil, nil)
 
 	s, err := skill.ParseFile("(test)", []byte(payload))
 	if err != nil {
@@ -102,7 +108,7 @@ func TestMergeSkillFields_EmptyRequiresClears(t *testing.T) {
 		Body:     "body",
 	}
 
-	payload := configmcp.MergeSkillFields("gated", existing, nil, nil, nil, nil, nil, []string{})
+	payload := configmcp.MergeSkillFields("gated", existing, nil, nil, nil, nil, nil, nil, []string{})
 
 	s, err := skill.ParseFile("(test)", []byte(payload))
 	if err != nil {
@@ -118,12 +124,13 @@ func TestMergeSkillFields_EmptyRequiresClears(t *testing.T) {
 // declaration on the way through.
 func TestSkillPatch_PreservesRequiresAndRoundCap(t *testing.T) {
 	sk := &skill.Skill{
-		Name:          "gated",
-		Description:   "Gated skill",
-		Version:       "1.2.3",
-		MaxToolRounds: 6,
-		Requires:      skill.SkillRequires{Tools: []string{"web_fetch", "kv_get"}},
-		Body:          "Hello world, welcome!",
+		Name:            "gated",
+		Description:     "Gated skill",
+		Version:         "1.2.3",
+		MaxToolRounds:   6,
+		MaxOutputTokens: 3000,
+		Requires:        skill.SkillRequires{Tools: []string{"web_fetch", "kv_get"}},
+		Body:            "Hello world, welcome!",
 	}
 
 	var mu sync.RWMutex
@@ -171,6 +178,9 @@ func TestSkillPatch_PreservesRequiresAndRoundCap(t *testing.T) {
 	if sk.MaxToolRounds != 6 {
 		t.Errorf("MaxToolRounds = %d, want 6 preserved through the patch", sk.MaxToolRounds)
 	}
+	if sk.MaxOutputTokens != 3000 {
+		t.Errorf("MaxOutputTokens = %d, want 3000 preserved through the patch", sk.MaxOutputTokens)
+	}
 	if sk.Version != "1.2.3" || sk.Description != "Gated skill" {
 		t.Errorf("version/description = %q/%q, want them preserved", sk.Version, sk.Description)
 	}
@@ -184,7 +194,7 @@ func TestMergeSkillFields_ReplacesRequires(t *testing.T) {
 		Body:     "body",
 	}
 
-	payload := configmcp.MergeSkillFields("gated", existing, nil, nil, nil, nil, nil, []string{"kv_get", "kv_set"})
+	payload := configmcp.MergeSkillFields("gated", existing, nil, nil, nil, nil, nil, nil, []string{"kv_get", "kv_set"})
 
 	s, err := skill.ParseFile("(test)", []byte(payload))
 	if err != nil {
@@ -199,21 +209,25 @@ func TestMergeSkillFields_ReplacesRequires(t *testing.T) {
 // which is the exact shape of a skill_patch.
 func TestMergeSkillFields_PreservesAllFieldsOnBodyOnlyEdit(t *testing.T) {
 	existing := skill.Skill{
-		Name:          "gated",
-		Description:   "desc",
-		Version:       "1.2.3",
-		Triggers:      []string{"command:gated"},
-		MaxToolRounds: 6,
-		Requires:      skill.SkillRequires{Tools: []string{"web_fetch"}},
-		Body:          "old body",
+		Name:            "gated",
+		Description:     "desc",
+		Version:         "1.2.3",
+		Triggers:        []string{"command:gated"},
+		MaxToolRounds:   6,
+		MaxOutputTokens: 3000,
+		Requires:        skill.SkillRequires{Tools: []string{"web_fetch"}},
+		Body:            "old body",
 	}
 	newBody := "new body"
 
-	payload := configmcp.MergeSkillFields("gated", existing, nil, nil, nil, &newBody, nil, nil)
+	payload := configmcp.MergeSkillFields("gated", existing, nil, nil, nil, &newBody, nil, nil, nil)
 
 	s, err := skill.ParseFile("(test)", []byte(payload))
 	if err != nil {
 		t.Fatalf("ParseFile: %v", err)
+	}
+	if s.MaxOutputTokens != 3000 {
+		t.Errorf("MaxOutputTokens = %d, want 3000", s.MaxOutputTokens)
 	}
 	if s.Description != "desc" || s.Version != "1.2.3" {
 		t.Errorf("description/version = %q/%q, want desc/1.2.3", s.Description, s.Version)

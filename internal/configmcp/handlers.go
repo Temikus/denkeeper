@@ -106,6 +106,7 @@ func (s *Server) registerSkillTools() {
 					"triggers":    {"type": "array", "items": {"type": "string"}, "description": "Trigger strings, e.g. [\"command:skill-name\", \"schedule:schedule-name\"]. A schedule: trigger must name an existing schedule."},
 					"body":        {"type": "string",  "description": "Markdown body — the skill instructions"},
 					"max_tool_rounds": {"type": "integer", "minimum": 0, "description": "Optional cap on tool-call ROUNDS (not calls) for turns this skill drives. Omit or 0 for no cap; it can only lower the agent's budget, never raise it. Prefer this over telling the model in the body to count its own tool calls."},
+					"max_output_tokens": {"type": "integer", "minimum": 0, "description": "Optional cap on output tokens per completion for turns this skill drives. Omit or 0 for no skill cap; it can only lower the agent's max_output_tokens, never raise it."},
 					"requires_tools": {"type": "array", "items": {"type": "string"}, "description": "Optional list of tool names this skill depends on (frontmatter [requires] tools). Declaring it documents the skill's tool surface; omit when the skill needs no particular tools."}
 				},
 				"required": ["name", "body"]
@@ -149,6 +150,7 @@ func (s *Server) registerSkillTools() {
 					"triggers":    {"type": "array", "items": {"type": "string"}, "description": "New triggers (omit to keep current). A newly added schedule: trigger must name an existing schedule."},
 					"body":        {"type": "string",  "description": "New markdown body (omit to keep current)"},
 					"max_tool_rounds": {"type": "integer", "minimum": 0, "description": "New cap on tool-call ROUNDS (not calls) for turns this skill drives; 0 removes the cap (omit to keep current). It can only lower the agent's budget, never raise it."},
+					"max_output_tokens": {"type": "integer", "minimum": 0, "description": "New cap on output tokens per completion for turns this skill drives; 0 removes the cap (omit to keep current). It can only lower the agent's max_output_tokens, never raise it."},
 					"requires_tools": {"type": "array", "items": {"type": "string"}, "description": "New list of required tool names (omit to keep current; pass [] to clear)."}
 				},
 				"required": ["name"]
@@ -425,13 +427,14 @@ func (s *Server) handleSkillCreate(ctx context.Context, req *mcp.CallToolRequest
 	}
 
 	var input struct {
-		Name          string   `json:"name"`
-		Description   string   `json:"description"`
-		Version       string   `json:"version"`
-		Triggers      []string `json:"triggers"`
-		Body          string   `json:"body"`
-		MaxToolRounds int      `json:"max_tool_rounds"`
-		RequiresTools []string `json:"requires_tools"`
+		Name            string   `json:"name"`
+		Description     string   `json:"description"`
+		Version         string   `json:"version"`
+		Triggers        []string `json:"triggers"`
+		Body            string   `json:"body"`
+		MaxToolRounds   int      `json:"max_tool_rounds"`
+		MaxOutputTokens int      `json:"max_output_tokens"`
+		RequiresTools   []string `json:"requires_tools"`
 	}
 	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
 		return toolError("invalid arguments: " + err.Error()), nil
@@ -455,7 +458,7 @@ func (s *Server) handleSkillCreate(ctx context.Context, req *mcp.CallToolRequest
 		version = "1.0.0"
 	}
 
-	payload := BuildSkillPayload(input.Name, input.Description, version, input.Triggers, input.Body, input.MaxToolRounds, input.RequiresTools)
+	payload := BuildSkillPayload(input.Name, input.Description, version, input.Triggers, input.Body, input.MaxToolRounds, input.MaxOutputTokens, input.RequiresTools)
 
 	deps := s.deps
 	applyFn := approval.ActionFunc(func(ctx context.Context, p string) error {
@@ -541,19 +544,21 @@ func (s *Server) handleSkillGet(_ context.Context, req *mcp.CallToolRequest) (*m
 		SubFiles    []string `json:"sub_files,omitempty"`
 		// Both are omitted when unset, so they show up only on skills that
 		// declare them — where a read-modify-write must carry them back.
-		MaxToolRounds int      `json:"max_tool_rounds,omitempty"`
-		RequiresTools []string `json:"requires_tools,omitempty"`
+		MaxToolRounds   int      `json:"max_tool_rounds,omitempty"`
+		MaxOutputTokens int      `json:"max_output_tokens,omitempty"`
+		RequiresTools   []string `json:"requires_tools,omitempty"`
 	}
 
 	data, err := json.MarshalIndent(skillDetail{
-		Name:          sk.Name,
-		Description:   sk.Description,
-		Version:       sk.Version,
-		Triggers:      sk.Triggers,
-		Body:          sk.Body,
-		SubFiles:      sk.SubFileNames,
-		MaxToolRounds: sk.MaxToolRounds,
-		RequiresTools: sk.Requires.Tools,
+		Name:            sk.Name,
+		Description:     sk.Description,
+		Version:         sk.Version,
+		Triggers:        sk.Triggers,
+		Body:            sk.Body,
+		SubFiles:        sk.SubFileNames,
+		MaxToolRounds:   sk.MaxToolRounds,
+		MaxOutputTokens: sk.MaxOutputTokens,
+		RequiresTools:   sk.Requires.Tools,
 	}, "", "  ")
 	if err != nil {
 		return toolError("marshaling skill: " + err.Error()), nil
@@ -563,10 +568,11 @@ func (s *Server) handleSkillGet(_ context.Context, req *mcp.CallToolRequest) (*m
 
 // MergeSkillFields merges optional update fields with existing skill values and
 // returns the payload built with the given name. A nil pointer (or a nil slice)
-// keeps the existing value — notably, an omitted maxToolRounds or requiresTools
-// keeps the cap and the declared tool set the skill already carries rather than
-// silently clearing them. A non-nil but empty slice clears, matching triggers.
-func MergeSkillFields(name string, existing skill.Skill, desc, ver *string, triggers []string, body *string, maxToolRounds *int, requiresTools []string) string {
+// keeps the existing value — notably, an omitted maxToolRounds, maxOutputTokens
+// or requiresTools keeps the caps and the declared tool set the skill already
+// carries rather than silently clearing them. A non-nil but empty slice clears,
+// matching triggers.
+func MergeSkillFields(name string, existing skill.Skill, desc, ver *string, triggers []string, body *string, maxToolRounds, maxOutputTokens *int, requiresTools []string) string {
 	description := existing.Description
 	if desc != nil {
 		description = *desc
@@ -587,11 +593,15 @@ func MergeSkillFields(name string, existing skill.Skill, desc, ver *string, trig
 	if maxToolRounds != nil {
 		rounds = *maxToolRounds
 	}
+	outTokens := existing.MaxOutputTokens
+	if maxOutputTokens != nil {
+		outTokens = *maxOutputTokens
+	}
 	reqTools := existing.Requires.Tools
 	if requiresTools != nil {
 		reqTools = requiresTools
 	}
-	return BuildSkillPayload(name, description, version, trig, b, rounds, reqTools)
+	return BuildSkillPayload(name, description, version, trig, b, rounds, outTokens, reqTools)
 }
 
 func (s *Server) handleSkillUpdate(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -605,14 +615,15 @@ func (s *Server) handleSkillUpdate(ctx context.Context, req *mcp.CallToolRequest
 	}
 
 	var input struct {
-		Name          string   `json:"name"`
-		NewName       *string  `json:"new_name"`
-		Description   *string  `json:"description"`
-		Version       *string  `json:"version"`
-		Triggers      []string `json:"triggers"`
-		Body          *string  `json:"body"`
-		MaxToolRounds *int     `json:"max_tool_rounds"`
-		RequiresTools []string `json:"requires_tools"`
+		Name            string   `json:"name"`
+		NewName         *string  `json:"new_name"`
+		Description     *string  `json:"description"`
+		Version         *string  `json:"version"`
+		Triggers        []string `json:"triggers"`
+		Body            *string  `json:"body"`
+		MaxToolRounds   *int     `json:"max_tool_rounds"`
+		MaxOutputTokens *int     `json:"max_output_tokens"`
+		RequiresTools   []string `json:"requires_tools"`
 	}
 	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
 		return toolError("invalid arguments: " + err.Error()), nil
@@ -633,7 +644,7 @@ func (s *Server) handleSkillUpdate(ctx context.Context, req *mcp.CallToolRequest
 		}
 	}
 
-	payload := MergeSkillFields(effectiveName, existing, input.Description, input.Version, input.Triggers, input.Body, input.MaxToolRounds, input.RequiresTools)
+	payload := MergeSkillFields(effectiveName, existing, input.Description, input.Version, input.Triggers, input.Body, input.MaxToolRounds, input.MaxOutputTokens, input.RequiresTools)
 	applyFn, summary := s.buildSkillUpdateAction(input.Name, effectiveName, isRename, payload)
 
 	return s.applyLintedSkill(ctx, &existing, approval.ActionKindUpdateSkill,
@@ -724,7 +735,7 @@ func (s *Server) handleSkillPatch(ctx context.Context, req *mcp.CallToolRequest)
 	}
 
 	newBody := strings.Replace(sk.Body, input.OldString, input.NewString, 1)
-	payload := BuildSkillPayload(input.Name, sk.Description, sk.Version, sk.Triggers, newBody, sk.MaxToolRounds, sk.Requires.Tools)
+	payload := BuildSkillPayload(input.Name, sk.Description, sk.Version, sk.Triggers, newBody, sk.MaxToolRounds, sk.MaxOutputTokens, sk.Requires.Tools)
 
 	deps := s.deps
 	skillName := input.Name
@@ -2136,29 +2147,31 @@ func RemoveSkillFile(agentSkillsDir, name string) error {
 //
 // This is the single frontmatter writer behind every CRUD surface (config MCP,
 // external MCP, REST), so a field missing here is silently dropped from any
-// skill that is updated or patched. Both optional fields are omitted when
-// empty, leaving skills that use neither byte-identical to what earlier
-// versions wrote.
+// skill that is updated or patched. The optional fields (the two caps and
+// requires) are omitted when empty, leaving skills that use none of them
+// byte-identical to what earlier versions wrote.
 //
 // Table-valued fields (requires) must stay LAST in fm: a TOML table header
 // captures every key after it, so a scalar declared below one would be parsed
 // as a member of that table.
-func BuildSkillPayload(name, description, version string, triggers []string, body string, maxToolRounds int, requiresTools []string) string {
+func BuildSkillPayload(name, description, version string, triggers []string, body string, maxToolRounds, maxOutputTokens int, requiresTools []string) string {
 	type fm struct {
-		Name          string              `toml:"name"`
-		Description   string              `toml:"description,omitempty"`
-		Version       string              `toml:"version,omitempty"`
-		Triggers      []string            `toml:"triggers,omitempty"`
-		MaxToolRounds int                 `toml:"max_tool_rounds,omitempty"`
-		Requires      skill.SkillRequires `toml:"requires,omitempty"`
+		Name            string              `toml:"name"`
+		Description     string              `toml:"description,omitempty"`
+		Version         string              `toml:"version,omitempty"`
+		Triggers        []string            `toml:"triggers,omitempty"`
+		MaxToolRounds   int                 `toml:"max_tool_rounds,omitempty"`
+		MaxOutputTokens int                 `toml:"max_output_tokens,omitempty"`
+		Requires        skill.SkillRequires `toml:"requires,omitempty"`
 	}
 	data, _ := toml.Marshal(fm{
-		Name:          name,
-		Description:   description,
-		Version:       version,
-		Triggers:      triggers,
-		MaxToolRounds: maxToolRounds,
-		Requires:      skill.SkillRequires{Tools: requiresTools},
+		Name:            name,
+		Description:     description,
+		Version:         version,
+		Triggers:        triggers,
+		MaxToolRounds:   maxToolRounds,
+		MaxOutputTokens: maxOutputTokens,
+		Requires:        skill.SkillRequires{Tools: requiresTools},
 	})
 	return "+++\n" + strings.TrimSpace(string(data)) + "\n+++\n\n" + strings.TrimSpace(body)
 }

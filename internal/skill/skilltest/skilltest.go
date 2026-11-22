@@ -55,3 +55,12 @@ func NewWithRoundCap(name, description string, triggers []string, body string, m
 	s.MaxToolRounds = maxRounds
 	return s
 }
+
+// NewWithOutputCap is New with an explicit MaxOutputTokens, for tests that
+// exercise the per-skill output-token cap. Like MaxToolRounds it has no parsed
+// companion field. Panics if any trigger string is invalid.
+func NewWithOutputCap(name, description string, triggers []string, body string, maxOutputTokens int) skill.Skill {
+	s := New(name, description, triggers, body)
+	s.MaxOutputTokens = maxOutputTokens
+	return s
+}

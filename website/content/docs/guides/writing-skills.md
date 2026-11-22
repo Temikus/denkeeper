@@ -56,6 +56,7 @@ Always acknowledge with: "Logged: $AMOUNT for CATEGORY"
 | `triggers` | No | When to activate (see below) |
 | `requires.tools` | No | MCP tools this skill needs. The skill is skipped while any of them is unavailable, and an active declaration narrows the tools the model is shown (see below) |
 | `max_tool_rounds` | No | Cap on tool-call rounds for turns this skill drives (command or schedule trigger). Only lowers the agent's limit, never raises it; must be ≥ 0 |
+| `max_output_tokens` | No | Cap on output tokens per completion for turns this skill drives. Same name and unit as the agent's `max_output_tokens`. Only lowers the agent's cap, never raises it; 0 or omitted means no skill cap; must be ≥ 0 |
 
 ## Trigger types
 
@@ -63,7 +64,7 @@ Always acknowledge with: "Logged: $AMOUNT for CATEGORY"
 - **`schedule:<name>`** — marks the skill as scheduler-driven. Timing comes from a `[[schedules]]` entry whose `skill` field names this skill; without one, the skill never fires. Skill writes (REST, MCP, or the agent itself) reject a newly added `<name>` that isn't an existing schedule; triggers the skill already carries, and a bare `schedule:`, are accepted
 - **No triggers** — *ambient*: always included in the system prompt, and matched on every turn
 
-The distinction between ambient and scheduled matters for `max_tool_rounds`: the cap applies only when a single skill explicitly drives the turn (a command match, or a schedule naming it). An ambient skill matches every message, so capping on it would throttle unrelated conversation — it is deliberately exempt.
+The distinction between ambient and scheduled matters for `max_tool_rounds` and `max_output_tokens`: each cap applies only when a single skill explicitly drives the turn (a command match, or a schedule naming it). An ambient skill matches every message, so capping on it would throttle unrelated conversation — it is deliberately exempt.
 
 ## Tool requirements
 
