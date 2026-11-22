@@ -337,7 +337,7 @@ Bounds for the in-process `run_javascript` tool, which runs short ES5.1 snippets
 |---|---|---|---|
 | `enabled` | bool | `true` | Enable `run_javascript` |
 | `timeout` | string | `"2s"` | Per-call wall-clock limit |
-| `max_output_chars` | int | `16000` | Result length cap (truncates) |
+| `max_output_chars` | int | `16000` | Length cap in bytes for the result and for error text. Longer text is cut and marked as truncated |
 | `max_input_bytes` | int | `262144` | Accepted input payload cap, 256 KiB (rejects) |
 | `max_concurrent` | int | `4` | Simultaneous VM executions across **all** agents. Negative = unlimited |
 | `max_concurrent_per_agent` | int | `0` | Additional per-agent cap so one agent cannot monopolize the global pool. 0 = off |
