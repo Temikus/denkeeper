@@ -681,6 +681,14 @@ func (e *Engine) turnStopReason(run turnRun) loopStopReason {
 	return run.stop.stopReason()
 }
 
+// pendingStop is the stop raised since this turn began, or stopNone.
+func (e *Engine) pendingStop(run turnRun) loopStopReason {
+	if !e.turnStopRequested(run) {
+		return stopNone
+	}
+	return e.turnStopReason(run)
+}
+
 // SetApprovalConfig configures the approval timeout and retry count.
 // Call this after NewEngine, before the engine starts handling messages.
 func (e *Engine) SetApprovalConfig(timeout time.Duration, retries int) {
@@ -2673,7 +2681,7 @@ func (e *Engine) runToolLoop(ctx context.Context, convID string, perms *security
 		}
 	}
 	out.resp = resp
-	noteOutputLimit(&out, resp, softStopped, &accumulatedContent)
+	noteOutputLimit(&out, resp, softStopped, e.pendingStop(run), &accumulatedContent)
 	out.accumulated = accumulatedContent.String()
 	return out, nil
 }
@@ -2689,13 +2697,18 @@ func isOutputLimitStop(resp *llm.ChatResponse) bool {
 // noteOutputLimit sets stopOutputLimit when the loop ended on such a
 // response. The loop never appended that response, so its calls did not run;
 // its text is kept for the fallback answer. A soft-cost stop or another stop
-// reason wins, since a wrap-up would spend more. Out of runToolLoop to keep it
-// under the gocyclo ceiling.
-func noteOutputLimit(out *toolLoopOutcome, resp *llm.ChatResponse, softStopped bool, accumulated *strings.Builder) {
+// reason wins, since a wrap-up would spend more. A stop raised while the
+// cut-off completion was in flight (pending) wins too: an emergency stop must
+// not spend a wrap-up, and a cancel must read as a cancel. Out of runToolLoop
+// to keep it under the gocyclo ceiling.
+func noteOutputLimit(out *toolLoopOutcome, resp *llm.ChatResponse, softStopped bool, pending loopStopReason, accumulated *strings.Builder) {
 	if softStopped || out.stopReason != stopNone || !isOutputLimitStop(resp) {
 		return
 	}
 	out.stopReason = stopOutputLimit
+	if pending != stopNone {
+		out.stopReason = pending
+	}
 	if resp.Content != "" {
 		accumulated.WriteString(resp.Content)
 	}
@@ -3001,12 +3014,7 @@ func (e *Engine) wrapUpToolLoop(ctx context.Context, convID string, reason loopS
 	if onEvent != nil {
 		onEvent(ChatEvent{Type: "thinking", Round: toolRounds, Text: fmt.Sprintf("Wrapping up (tool loop stopped: %s)...", reason)})
 	}
-	llmMessages = append(llmMessages, llm.Message{
-		Role: "user",
-		Content: fmt.Sprintf("[engine: tool loop stopped (%s). Tools are no longer available this turn. "+
-			"Summarize the outcome for the user from the tool results above — what you found, what you did, "+
-			"and anything that still needs attention. Do not mention the loop stop unless it affected the result.]", reason),
-	})
+	llmMessages = append(llmMessages, llm.Message{Role: "user", Content: wrapUpInstruction(reason)})
 	resp, err := run.router.CompleteFinal(ctx, convID, llmMessages)
 	if err != nil {
 		e.emitLLMAudit(ctx, convID, nil, err.Error(), llmAuditOpts{wrapUp: true})
@@ -3014,6 +3022,21 @@ func (e *Engine) wrapUpToolLoop(ctx context.Context, convID string, reason loopS
 	}
 	e.emitLLMAudit(ctx, convID, resp, "", llmAuditOpts{wrapUp: true})
 	return resp, llmMessages, nil
+}
+
+// wrapUpInstruction is the user message that asks for the wrap-up. An
+// output-limit stop gets its own text: no call of the cut-off response ran,
+// possibly none at all, so a "summarize what you found" prompt would invite a
+// made-up result.
+func wrapUpInstruction(reason loopStopReason) string {
+	if reason == stopOutputLimit {
+		return "[engine: your last response hit the output-token limit and was cut off, so its tool call did not run. " +
+			"Tools are no longer available this turn. Briefly tell the user what was done and what was not, " +
+			"using only the tool results above if there are any. Do not guess the result of a call that did not run.]"
+	}
+	return fmt.Sprintf("[engine: tool loop stopped (%s). Tools are no longer available this turn. "+
+		"Summarize the outcome for the user from the tool results above — what you found, what you did, "+
+		"and anything that still needs attention. Do not mention the loop stop unless it affected the result.]", reason)
 }
 
 // recoverEmptyToolResponse attempts to recover when the LLM returns empty

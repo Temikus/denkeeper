@@ -157,6 +157,117 @@ func TestOutputLimit_OrdinaryToolRoundUnchanged(t *testing.T) {
 	}
 }
 
+// cutOffStepA is a stop-test response ended on the output limit in the middle
+// of a step_a call.
+func cutOffStepA() *llm.ChatResponse {
+	return &llm.ChatResponse{
+		ToolCalls:    []llm.ToolCall{{ID: "cut", Type: "function", Function: llm.FunctionCall{Name: "step_a", Arguments: `{"query":"x`}}},
+		Model:        "test-model",
+		FinishReason: "length",
+	}
+}
+
+const stopRequestedMarker = "[engine: turn ended early — stop requested]"
+
+// A panic raised while the cut-off completion is in flight must not spend a
+// wrap-up: the emergency stop wins over the output limit.
+func TestOutputLimit_PanicDuringInitialCompletionSpendsNothing(t *testing.T) {
+	var engine *Engine
+	provider := &hookedSequentialProvider{responses: []*llm.ChatResponse{cutOffStepA()}}
+	provider.beforeCall = func(call int) {
+		if call == 1 {
+			engine.RequestStop()
+		}
+	}
+	engine, _, execCount := newStopTestEngine(t, provider, nil)
+
+	result, err := engine.ChatWithEvents(context.Background(), stopTestMessage("limit-panic-initial"), nil)
+	if err != nil {
+		t.Fatalf("stopped turn should end gracefully, got error: %v", err)
+	}
+	if len(provider.requests) != 1 {
+		t.Errorf("got %d provider requests, want 1 (no wrap-up)", len(provider.requests))
+	}
+	if !strings.Contains(result, stopRequestedMarker) {
+		t.Errorf("result = %q, want the stop-requested marker", result)
+	}
+	if execCount.Load() != 0 {
+		t.Errorf("executed %d calls, want 0", execCount.Load())
+	}
+}
+
+func TestOutputLimit_PanicDuringFollowUpSpendsNothing(t *testing.T) {
+	var engine *Engine
+	provider := &hookedSequentialProvider{responses: []*llm.ChatResponse{
+		toolRoundResponse("", stopToolCall("c1", "step_a")),
+		cutOffStepA(),
+	}}
+	provider.beforeCall = func(call int) {
+		if call == 2 {
+			engine.RequestStop()
+		}
+	}
+	engine, _, execCount := newStopTestEngine(t, provider, nil)
+
+	result, err := engine.ChatWithEvents(context.Background(), stopTestMessage("limit-panic-followup"), nil)
+	if err != nil {
+		t.Fatalf("stopped turn should end gracefully, got error: %v", err)
+	}
+	if len(provider.requests) != 2 {
+		t.Errorf("got %d provider requests, want 2 (no wrap-up)", len(provider.requests))
+	}
+	if !strings.Contains(result, stopRequestedMarker) {
+		t.Errorf("result = %q, want the stop-requested marker", result)
+	}
+	if execCount.Load() != 1 {
+		t.Errorf("executed %d calls, want 1 (the complete round only)", execCount.Load())
+	}
+}
+
+// A cancel during the cut-off completion is a cancel, not an output-limit stop.
+func TestOutputLimit_CancelDuringInitialCompletionIsACancel(t *testing.T) {
+	var engine *Engine
+	const sessionID = "limit-cancel-initial"
+	provider := &hookedSequentialProvider{responses: []*llm.ChatResponse{cutOffStepA()}}
+	provider.beforeCall = func(call int) {
+		if call == 1 && !engine.RequestStopChat("telegram", sessionID) {
+			t.Error("RequestStopChat did not reach the in-flight turn")
+		}
+	}
+	engine, _, _ = newStopTestEngine(t, provider, nil)
+
+	result, err := engine.ChatWithEvents(context.Background(), stopTestMessage(sessionID), nil)
+	if err != nil {
+		t.Fatalf("cancelled turn should end gracefully, got error: %v", err)
+	}
+	if len(provider.requests) != 1 {
+		t.Errorf("got %d provider requests, want 1", len(provider.requests))
+	}
+	if !strings.Contains(result, "[engine: turn ended early — cancelled at your request]") {
+		t.Errorf("result = %q, want the cancel marker", result)
+	}
+}
+
+func TestOutputLimit_WrapUpCarriesItsOwnInstruction(t *testing.T) {
+	provider := &sequentialProvider{responses: []*llm.ChatResponse{cutOffCall(), finalText("Nothing ran.")}}
+	e, _, _, _ := newPolicyTestEngineWithProvider(t, provider, "autonomous")
+
+	if _, err := e.DryRun(context.Background(), adapter.IncomingMessage{Text: "go"}, dryRunPolicy()); err != nil {
+		t.Fatalf("DryRun: %v", err)
+	}
+	if len(provider.requests) != 2 {
+		t.Fatalf("got %d requests, want 2", len(provider.requests))
+	}
+	msgs := provider.requests[1].Messages
+	last := msgs[len(msgs)-1].Content
+	want := "[engine: your last response hit the output-token limit and was cut off, so its tool call did not run. " +
+		"Tools are no longer available this turn. Briefly tell the user what was done and what was not, " +
+		"using only the tool results above if there are any. Do not guess the result of a call that did not run.]"
+	if last != want {
+		t.Errorf("wrap-up instruction = %q, want %q", last, want)
+	}
+}
+
 // llmEventDetails decodes the detail of every llm audit event, in order.
 func llmEventDetails(t *testing.T, events []audit.Event) []map[string]any {
 	t.Helper()
