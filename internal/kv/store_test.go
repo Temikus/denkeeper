@@ -2,6 +2,7 @@ package kv
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -332,5 +333,227 @@ func TestGetEntry_ReturnsMetadata(t *testing.T) {
 	}
 	if e.ExpiresAt == nil {
 		t.Error("ExpiresAt = nil, want the TTL expiry")
+	}
+}
+
+var backfillDefaults = map[string]time.Duration{
+	"log:":          720 * time.Hour,
+	"log:research:": 168 * time.Hour,
+	"cache:":        time.Hour,
+}
+
+func mustSet(t *testing.T, s *SQLiteStore, agent, key string, ttl time.Duration) {
+	t.Helper()
+	if err := s.Set(context.Background(), agent, key, "v-"+key, ttl); err != nil {
+		t.Fatalf("Set %s: %v", key, err)
+	}
+}
+
+// backdate stamps a key's timestamps directly, since Set always writes now.
+func backdate(t *testing.T, s *SQLiteStore, agent, key string, at time.Time) {
+	t.Helper()
+	stamp := at.UTC().Format(timeLayout)
+	if _, err := s.db.Exec(`UPDATE kv SET created_at = ?, updated_at = ? WHERE agent_name = ? AND key = ?`,
+		stamp, stamp, agent, key); err != nil {
+		t.Fatalf("backdate %s: %v", key, err)
+	}
+}
+
+// rawExpiry reads expires_at as stored text, bypassing the expiry filter, so
+// the layout the text comparison against datetime('now') relies on is checked.
+func rawExpiry(t *testing.T, s *SQLiteStore, agent, key string) (string, bool) {
+	t.Helper()
+	var exp *string
+	if err := s.db.QueryRow(`SELECT CAST(expires_at AS TEXT) FROM kv WHERE agent_name = ? AND key = ?`,
+		agent, key).Scan(&exp); err != nil {
+		t.Fatalf("read expires_at %s: %v", key, err)
+	}
+	if exp == nil {
+		return "", false
+	}
+	return *exp, true
+}
+
+func mustBackfill(t *testing.T, s *SQLiteStore, dryRun bool) []BackfillCount {
+	t.Helper()
+	counts, err := s.BackfillTTL(context.Background(), backfillDefaults, dryRun)
+	if err != nil {
+		t.Fatalf("BackfillTTL(dryRun=%v): %v", dryRun, err)
+	}
+	return counts
+}
+
+func TestBackfillTTL_SetsUpdatedAtPlusTTL(t *testing.T) {
+	s := mustStore(t)
+	mustSet(t, s, "agent1", "log:heartbeat:a", 0)
+	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	backdate(t, s, "agent1", "log:heartbeat:a", at)
+
+	counts := mustBackfill(t, s, false)
+
+	want := []BackfillCount{{Agent: "agent1", Namespace: "log:", TTL: 720 * time.Hour, Keys: 1}}
+	if !reflect.DeepEqual(counts, want) {
+		t.Errorf("counts = %+v, want %+v", counts, want)
+	}
+	got, ok := rawExpiry(t, s, "agent1", "log:heartbeat:a")
+	if wantExp := at.Add(720 * time.Hour).Format(timeLayout); !ok || got != wantExp {
+		t.Errorf("expires_at = %q (set=%v), want %q", got, ok, wantExp)
+	}
+}
+
+func TestBackfillTTL_LongestPrefixWins(t *testing.T) {
+	s := mustStore(t)
+	mustSet(t, s, "agent1", "log:research:x", 0)
+	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	backdate(t, s, "agent1", "log:research:x", at)
+
+	counts := mustBackfill(t, s, false)
+
+	if len(counts) != 1 || counts[0].Namespace != "log:research:" || counts[0].TTL != 168*time.Hour {
+		t.Errorf("counts = %+v, want one log:research: row at 168h", counts)
+	}
+	if got, _ := rawExpiry(t, s, "agent1", "log:research:x"); got != at.Add(168*time.Hour).Format(timeLayout) {
+		t.Errorf("expires_at = %q, want the log:research: TTL", got)
+	}
+}
+
+func TestBackfillTTL_UnconfiguredNamespacesUntouched(t *testing.T) {
+	s := mustStore(t)
+	mustSet(t, s, "agent1", "pref:theme", 0)
+	mustSet(t, s, "agent1", "state:cursor", 0)
+
+	if counts := mustBackfill(t, s, false); len(counts) != 0 {
+		t.Errorf("counts = %+v, want none", counts)
+	}
+	for _, key := range []string{"pref:theme", "state:cursor"} {
+		if got, ok := rawExpiry(t, s, "agent1", key); ok {
+			t.Errorf("%s expires_at = %q, want NULL", key, got)
+		}
+	}
+}
+
+func TestBackfillTTL_ExistingExpiryKept(t *testing.T) {
+	s := mustStore(t)
+	mustSet(t, s, "agent1", "log:x", 5*time.Hour)
+	before, _ := rawExpiry(t, s, "agent1", "log:x")
+
+	if counts := mustBackfill(t, s, false); len(counts) != 0 {
+		t.Errorf("counts = %+v, want none", counts)
+	}
+	if after, _ := rawExpiry(t, s, "agent1", "log:x"); after != before {
+		t.Errorf("expires_at changed from %q to %q", before, after)
+	}
+}
+
+func TestBackfillTTL_ValueAndTimestampsUnchanged(t *testing.T) {
+	s := mustStore(t)
+	ctx := context.Background()
+	mustSet(t, s, "agent1", "cache:page", 0)
+	backdate(t, s, "agent1", "cache:page", time.Now().UTC().Add(-10*time.Minute).Truncate(time.Second))
+	before, _, err := s.GetEntry(ctx, "agent1", "cache:page")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mustBackfill(t, s, false)
+
+	after, ok, err := s.GetEntry(ctx, "agent1", "cache:page")
+	if err != nil || !ok {
+		t.Fatalf("GetEntry after: ok=%v err=%v", ok, err)
+	}
+	if after.Value != before.Value || !after.CreatedAt.Equal(before.CreatedAt) || !after.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Errorf("entry changed: before %+v, after %+v", before, after)
+	}
+	if after.ExpiresAt == nil {
+		t.Error("ExpiresAt = nil, want the backfilled expiry")
+	}
+}
+
+func TestBackfillTTL_PastExpiryHiddenThenCleaned(t *testing.T) {
+	s := mustStore(t)
+	ctx := context.Background()
+	mustSet(t, s, "agent1", "log:old", 0)
+	backdate(t, s, "agent1", "log:old", time.Now().UTC().Add(-800*time.Hour))
+
+	counts := mustBackfill(t, s, false)
+
+	if len(counts) != 1 || counts[0].Keys != 1 || counts[0].AlreadyExpired != 1 {
+		t.Errorf("counts = %+v, want 1 key, 1 already expired", counts)
+	}
+	if _, ok, err := s.Get(ctx, "agent1", "log:old"); err != nil || ok {
+		t.Errorf("Get after backfill: ok=%v err=%v, want hidden", ok, err)
+	}
+	if err := s.Cleanup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM kv WHERE key = 'log:old'`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("rows after Cleanup = %d (err %v), want 0", n, err)
+	}
+}
+
+// SQL LIKE would match both: it ignores ASCII case and treats _ as a wildcard.
+func TestBackfillTTL_NoCaseOrWildcardMatch(t *testing.T) {
+	s := mustStore(t)
+	defaults := map[string]time.Duration{"log:": time.Hour, "a_b:": time.Hour}
+	mustSet(t, s, "agent1", "LOG:x", 0)
+	mustSet(t, s, "agent1", "axb:1", 0)
+
+	counts, err := s.BackfillTTL(context.Background(), defaults, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(counts) != 0 {
+		t.Errorf("counts = %+v, want none", counts)
+	}
+	for _, key := range []string{"LOG:x", "axb:1"} {
+		if got, ok := rawExpiry(t, s, "agent1", key); ok {
+			t.Errorf("%s expires_at = %q, want NULL", key, got)
+		}
+	}
+}
+
+func TestBackfillTTL_DryRunCountsWithoutWriting(t *testing.T) {
+	s := mustStore(t)
+	mustSet(t, s, "agent1", "log:a", 0)
+	mustSet(t, s, "agent1", "cache:b", 0)
+
+	dry := mustBackfill(t, s, true)
+	for _, key := range []string{"log:a", "cache:b"} {
+		if got, ok := rawExpiry(t, s, "agent1", key); ok {
+			t.Errorf("dry run wrote %s expires_at = %q", key, got)
+		}
+	}
+	if real := mustBackfill(t, s, false); !reflect.DeepEqual(dry, real) {
+		t.Errorf("dry run counts %+v differ from the real run's %+v", dry, real)
+	}
+}
+
+func TestBackfillTTL_SecondRunChangesNothing(t *testing.T) {
+	s := mustStore(t)
+	mustSet(t, s, "agent1", "log:a", 0)
+
+	if first := mustBackfill(t, s, false); len(first) != 1 {
+		t.Fatalf("first run counts = %+v, want one row", first)
+	}
+	if second := mustBackfill(t, s, false); len(second) != 0 {
+		t.Errorf("second run counts = %+v, want none", second)
+	}
+}
+
+func TestBackfillTTL_AgentsCountedSeparately(t *testing.T) {
+	s := mustStore(t)
+	mustSet(t, s, "zeta", "log:a", 0)
+	mustSet(t, s, "alpha", "log:a", 0)
+	mustSet(t, s, "alpha", "log:b", 0)
+
+	counts := mustBackfill(t, s, false)
+
+	want := []BackfillCount{
+		{Agent: "alpha", Namespace: "log:", TTL: 720 * time.Hour, Keys: 2},
+		{Agent: "zeta", Namespace: "log:", TTL: 720 * time.Hour, Keys: 1},
+	}
+	if !reflect.DeepEqual(counts, want) {
+		t.Errorf("counts = %+v, want %+v", counts, want)
 	}
 }

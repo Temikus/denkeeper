@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -16,6 +17,10 @@ const MaxValueBytes = 65536
 
 // MaxKeysPerAgent is the default maximum number of keys per agent.
 const MaxKeysPerAgent = 1000
+
+// timeLayout is how expires_at is written. Reads and Cleanup compare it to
+// datetime('now') as text, so every writer must use exactly this layout.
+const timeLayout = "2006-01-02 15:04:05"
 
 const schema = `
 CREATE TABLE IF NOT EXISTS kv (
@@ -169,7 +174,7 @@ func (s *SQLiteStore) Set(ctx context.Context, agent, key, value string, ttl tim
 
 	var expiresAt *string
 	if ttl > 0 {
-		t := time.Now().UTC().Add(ttl).Format("2006-01-02 15:04:05")
+		t := time.Now().UTC().Add(ttl).Format(timeLayout)
 		expiresAt = &t
 	}
 
@@ -244,7 +249,7 @@ func (s *SQLiteStore) SetNX(ctx context.Context, agent, key, value string, ttl t
 
 	var expiresAt *string
 	if ttl > 0 {
-		t := time.Now().UTC().Add(ttl).Format("2006-01-02 15:04:05")
+		t := time.Now().UTC().Add(ttl).Format(timeLayout)
 		expiresAt = &t
 	}
 
@@ -272,6 +277,122 @@ func (s *SQLiteStore) Cleanup(ctx context.Context) error {
 		return fmt.Errorf("kv cleanup: %w", err)
 	}
 	return nil
+}
+
+// BackfillCount is one agent-and-namespace row of a TTL backfill.
+type BackfillCount struct {
+	Agent     string
+	Namespace string // the matched default_ttl prefix
+	TTL       time.Duration
+	Keys      int
+	// AlreadyExpired counts keys whose new expiry is already past: reads hide
+	// them at once and the next Cleanup deletes them.
+	AlreadyExpired int
+}
+
+type backfillRow struct {
+	agent, key, namespace string
+	ttl                   time.Duration
+	expiresAt             time.Time
+}
+
+// BackfillTTL gives every key with no expiry the default TTL kv_set would
+// have applied: expires_at = updated_at + ttl. Keys with any expiry are never
+// touched, and value and timestamps never change. With dryRun it only counts.
+// Rows are sorted by agent, then namespace. Not on Store: only the CLI uses it.
+func (s *SQLiteStore) BackfillTTL(ctx context.Context, defaults map[string]time.Duration, dryRun bool) ([]BackfillCount, error) {
+	if len(defaults) == 0 {
+		return nil, nil
+	}
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("kv backfill: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	rows, err := selectBackfill(ctx, tx, defaults)
+	if err != nil {
+		return nil, err
+	}
+	if !dryRun {
+		if rows, err = applyBackfill(ctx, tx, rows); err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("kv backfill: commit: %w", err)
+		}
+	}
+	return summarizeBackfill(rows, time.Now().UTC()), nil
+}
+
+// selectBackfill matches in Go, not SQL: LIKE ignores ASCII case and treats
+// _ and % as wildcards, so it would select keys kv_set would not.
+func selectBackfill(ctx context.Context, tx *sqlx.Tx, defaults map[string]time.Duration) ([]backfillRow, error) {
+	var candidates []struct {
+		Agent     string    `db:"agent_name"`
+		Key       string    `db:"key"`
+		UpdatedAt time.Time `db:"updated_at"`
+	}
+	if err := tx.SelectContext(ctx, &candidates,
+		`SELECT agent_name, key, updated_at FROM kv WHERE expires_at IS NULL`,
+	); err != nil {
+		return nil, fmt.Errorf("kv backfill: select: %w", err)
+	}
+	var rows []backfillRow
+	for _, c := range candidates {
+		prefix, ttl := DefaultTTLFor(defaults, c.Key)
+		if ttl <= 0 {
+			continue
+		}
+		rows = append(rows, backfillRow{agent: c.Agent, key: c.Key, namespace: prefix,
+			ttl: ttl, expiresAt: c.UpdatedAt.UTC().Add(ttl)})
+	}
+	return rows, nil
+}
+
+// applyBackfill returns the rows it actually updated. The repeated
+// expires_at IS NULL keeps a TTL the running server set meanwhile.
+func applyBackfill(ctx context.Context, tx *sqlx.Tx, rows []backfillRow) ([]backfillRow, error) {
+	updated := rows[:0]
+	for _, r := range rows {
+		res, err := tx.ExecContext(ctx,
+			`UPDATE kv SET expires_at = ? WHERE agent_name = ? AND key = ? AND expires_at IS NULL`,
+			r.expiresAt.Format(timeLayout), r.agent, r.key)
+		if err != nil {
+			return nil, fmt.Errorf("kv backfill %q: %w", r.key, err)
+		}
+		if n, err := res.RowsAffected(); err != nil {
+			return nil, fmt.Errorf("kv backfill %q rows affected: %w", r.key, err)
+		} else if n > 0 {
+			updated = append(updated, r)
+		}
+	}
+	return updated, nil
+}
+
+func summarizeBackfill(rows []backfillRow, now time.Time) []BackfillCount {
+	index := map[[2]string]int{}
+	var out []BackfillCount
+	for _, r := range rows {
+		g := [2]string{r.agent, r.namespace}
+		i, ok := index[g]
+		if !ok {
+			i = len(out)
+			index[g] = i
+			out = append(out, BackfillCount{Agent: r.agent, Namespace: r.namespace, TTL: r.ttl})
+		}
+		out[i].Keys++
+		if !r.expiresAt.After(now) {
+			out[i].AlreadyExpired++
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Agent != out[j].Agent {
+			return out[i].Agent < out[j].Agent
+		}
+		return out[i].Namespace < out[j].Namespace
+	})
+	return out
 }
 
 // Close releases the database connection.

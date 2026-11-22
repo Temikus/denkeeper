@@ -17,6 +17,7 @@ toc: true
 | `denkeeper version` | Print version information |
 | `denkeeper keys` | Manage REST API keys |
 | `denkeeper sessions` | Inspect and prune conversation sessions |
+| `denkeeper kv` | Maintain the agents' key-value store |
 | `denkeeper decide` | Calibrate decision models against recorded supervisor reviews |
 | `denkeeper passwd` | Generate a bcrypt hash for dashboard login |
 | `denkeeper plugin` | Ed25519 plugin signing |
@@ -149,6 +150,36 @@ denkeeper sessions prune --older-than 720h --yes
 | Flag | Description |
 |---|---|
 | `--older-than` | Duration threshold (e.g., `720h` for 30 days). Required. |
+| `--yes`, `-y` | Skip confirmation prompt |
+
+## `denkeeper kv`
+
+Maintain the key-value store the agents write with `kv_set`. It lives in the memory database, and `--config`/`-c` picks the config file as for `sessions`.
+
+### `denkeeper kv backfill-ttl`
+
+Give existing keys the expiry [`[kv] default_ttl`](/docs/reference/config/) gives new writes. Every key that has no expiry and matches a `default_ttl` prefix gets `expires_at = updated_at + ttl`, which is what `kv_set` would have set. Prefixes match the way `kv_set` matches them: longest prefix wins, case-sensitive. Keys that already have an expiry are left alone, as are keys under a prefix with no default. Values and timestamps do not change.
+
+```bash
+denkeeper kv backfill-ttl --dry-run
+denkeeper kv backfill-ttl
+denkeeper kv backfill-ttl --yes
+```
+
+A dry run prints one row per agent and namespace and writes nothing:
+
+```
+AGENT   NAMESPACE  TTL   KEYS  ALREADY EXPIRED
+pamela  cache:     168h  12    3
+pamela  log:       720h  214   40
+Dry run: nothing was written.
+```
+
+`ALREADY EXPIRED` counts keys whose new expiry is in the past. Those keys disappear from reads as soon as the backfill runs, and the next cleanup deletes them, so this cannot be undone. Without `--dry-run` the command prints the same table and asks for confirmation before writing. Running it again prints `No keys need a TTL.` It is safe to run while `denkeeper serve` is up.
+
+| Flag | Description |
+|---|---|
+| `--dry-run` | Show what would change and write nothing |
 | `--yes`, `-y` | Skip confirmation prompt |
 
 ## `denkeeper decide`
