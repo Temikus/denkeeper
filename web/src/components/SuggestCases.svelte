@@ -102,10 +102,10 @@
   function contextHint(c) {
     const pinned = c.preceding?.length > 0
     if (pinned && c.notes) {
-      return 'The pinned turns replay as history when this case runs. Notes are saved with the case for the judge; edit them in Test sets.'
+      return 'The pinned turns replay as history when this case runs. Notes are saved with the case for the judge; edit them on the saved case.'
     }
     if (pinned) return 'The pinned turns replay as history when this case runs.'
-    if (c.notes) return 'Saved with the case for the judge; edit them in Test sets.'
+    if (c.notes) return 'Notes are saved with the case for the judge; edit them on the saved case.'
     return ''
   }
 

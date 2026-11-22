@@ -439,7 +439,7 @@ describe('SuggestCases — session context', () => {
     expect(context).toHaveClass('open')
     expect(context).toHaveTextContent('judge notes')
     expect(context).toHaveTextContent(notes)
-    expect(context).toHaveTextContent('Saved with the case for the judge; edit them in Test sets.')
+    expect(context).toHaveTextContent('Notes are saved with the case for the judge; edit them on the saved case.')
   })
 
   test('pinned turns and notes share one hint line', async () => {
@@ -451,7 +451,7 @@ describe('SuggestCases — session context', () => {
     const hints = screen.getByTestId('context-chan:cron:104').querySelectorAll('.hint')
     expect(hints).toHaveLength(1)
     expect(hints[0]).toHaveTextContent('The pinned turns replay as history when this case runs.')
-    expect(hints[0]).toHaveTextContent('Notes are saved with the case for the judge; edit them in Test sets.')
+    expect(hints[0]).toHaveTextContent('Notes are saved with the case for the judge; edit them on the saved case.')
   })
 
   test('a turn with nothing behind it has no disclosure', async () => {
