@@ -1,6 +1,7 @@
 package persona
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -279,9 +280,9 @@ func (p *Persona) checkContentLocked(section, trimmed string) error {
 	// Load refuses an empty SOUL.md, so writing one would leave a persona
 	// that fails to load on the next start.
 	if trimmed == "" && strings.EqualFold(section, "soul") {
-		return fmt.Errorf("persona: soul cannot be empty")
+		return errors.New("persona: soul cannot be empty: it defines the agent. Send its full text")
 	}
-	if section == "user" && p.userCharLimit > 0 && len(trimmed) > p.userCharLimit {
+	if strings.EqualFold(section, "user") && p.userCharLimit > 0 && len(trimmed) > p.userCharLimit {
 		return &MemoryFullError{
 			Section: "user",
 			Limit:   p.userCharLimit,

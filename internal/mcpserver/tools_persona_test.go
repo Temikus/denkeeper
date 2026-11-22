@@ -101,8 +101,20 @@ func TestPersonaGet_AgentWithoutPersona(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handler error: %v", err)
 	}
-	if !res.IsError {
-		t.Errorf("got %q, want a tool error", toolResultText(res))
+	if !res.IsError || toolResultText(res) != `agent "bare" has no persona configured` {
+		t.Errorf("got %q, want the no-persona error", toolResultText(res))
+	}
+}
+
+func TestPersonaUpdate_AgentWithoutPersona(t *testing.T) {
+	s, _, _ := personaServer(t)
+
+	res, _, err := s.handlePersonaUpdate(agentWriteScope(), nil, personaUpdateInput{Agent: "bare", Section: "memory", Content: "x"})
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if !res.IsError || toolResultText(res) != `agent "bare" has no persona configured` {
+		t.Errorf("got %q, want the no-persona error", toolResultText(res))
 	}
 }
 
@@ -198,8 +210,8 @@ func TestPersonaUpdate_UserOverLimitKeepsOldContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handler error: %v", err)
 	}
-	if !res.IsError {
-		t.Fatalf("got %q, want a tool error", toolResultText(res))
+	if want := "user section would be 11 chars; the limit is 10. Send a shorter text."; toolResultText(res) != want {
+		t.Fatalf("got %q, want %q", toolResultText(res), want)
 	}
 	if p.GetUser() != "Short." {
 		t.Errorf("user = %q, want the old content", p.GetUser())
@@ -213,8 +225,8 @@ func TestPersonaUpdate_EmptySoulIsToolError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handler error: %v", err)
 	}
-	if !res.IsError {
-		t.Fatalf("got %q, want a tool error", toolResultText(res))
+	if !res.IsError || !strings.Contains(toolResultText(res), "soul cannot be empty: it defines the agent. Send its full text") {
+		t.Fatalf("got %q, want the empty-soul error", toolResultText(res))
 	}
 	if p.GetSoul() != "I am Pamela." || readFile(t, filepath.Join(dir, "SOUL.md")) != "I am Pamela." {
 		t.Error("soul changed after a refused write")

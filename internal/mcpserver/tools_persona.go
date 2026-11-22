@@ -2,9 +2,11 @@ package mcpserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/Temikus/denkeeper/internal/agent"
+	"github.com/Temikus/denkeeper/internal/persona"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -43,10 +45,24 @@ func (s *Server) personaTarget(name, section string) (*agent.Engine, *mcp.CallTo
 	if e == nil {
 		return nil, toolError("agent not found: " + name)
 	}
+	if e.PersonaSections() == nil {
+		return nil, toolError(fmt.Sprintf("agent %q has no persona configured", name))
+	}
 	if _, _, _, ok := e.PersonaSection(section); !ok {
 		return nil, toolError(fmt.Sprintf("unknown section %q, must be one of: identity, soul, user, memory", section))
 	}
 	return e, nil
+}
+
+// personaSaveError words a refused save for a whole-section replace.
+// MemoryFullError's own text is written for appends ("adding", "remove
+// existing entries"), which does not fit here.
+func personaSaveError(err error) string {
+	var full *persona.MemoryFullError
+	if errors.As(err, &full) {
+		return fmt.Sprintf("%s section would be %d chars; the limit is %d. Send a shorter text.", full.Section, full.Adding, full.Limit)
+	}
+	return fmt.Sprintf("saving persona section: %v", err)
 }
 
 func (s *Server) handlePersonaGet(ctx context.Context, _ *mcp.CallToolRequest, input personaGetInput) (*mcp.CallToolResult, any, error) {
@@ -77,9 +93,10 @@ func (s *Server) handlePersonaUpdate(ctx context.Context, _ *mcp.CallToolRequest
 		return failed, nil, nil
 	}
 	if err := e.SavePersonaSection(input.Section, input.Content); err != nil {
-		return toolError(fmt.Sprintf("saving persona section: %v", err)), nil, nil
+		return toolError(personaSaveError(err)), nil, nil
 	}
-	s.deps.Logger.Info("persona section updated via MCP", "agent", input.Agent, "section", input.Section)
+	s.deps.Logger.Info("persona section updated via MCP",
+		"agent", input.Agent, "section", input.Section, "key", keyNameFromCtx(ctx))
 	r, err := toolJSON(map[string]string{
 		"agent":   input.Agent,
 		"section": input.Section,
