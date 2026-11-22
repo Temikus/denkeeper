@@ -180,3 +180,33 @@ func TestExecuteToolCallDeduped_DeniedByGrant_NeverReachesApproval(t *testing.T)
 		t.Error("no denied audit event emitted for the refused call")
 	}
 }
+
+func TestEngine_IsReadOnlyTool_AgreesWithToolManager(t *testing.T) {
+	e := newRestrictedTestEngine(t, "supervised")
+	for _, name := range []string{"read_thing", "write_thing"} {
+		if got, want := e.IsReadOnlyTool(name), e.tools.IsReadOnly(name); got != want {
+			t.Errorf("IsReadOnlyTool(%q) = %v, tool manager says %v", name, got, want)
+		}
+	}
+	if !e.IsReadOnlyTool("read_thing") || e.IsReadOnlyTool("write_thing") {
+		t.Error("want read_thing read-only and write_thing not, as the fixture declares")
+	}
+}
+
+func TestEngine_IsReadOnlyTool_NoToolManager(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	permissions, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+	router := llm.NewRouter("mock", "test-model", llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil))
+	e := NewEngine("default", router, store, nil, permissions, nil, "test", nil, nil, nil, testLogger())
+
+	if e.IsReadOnlyTool("kv_get") {
+		t.Error("IsReadOnlyTool with no tool manager = true, want false")
+	}
+}

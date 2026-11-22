@@ -1186,6 +1186,16 @@ func (e *Engine) ToolNames() []string {
 	return e.tools.ToolNames()
 }
 
+// IsReadOnlyTool reports whether the tool manager classifies name as
+// read-only, the same check the restricted tier and dry runs use. With no tool
+// manager nothing is classified, so it reports false.
+func (e *Engine) IsReadOnlyTool(name string) bool {
+	if e.tools == nil {
+		return false
+	}
+	return e.tools.IsReadOnly(name)
+}
+
 // PersonaDir returns the directory the agent's persona was loaded from.
 // Returns an empty string if no persona is configured.
 func (e *Engine) PersonaDir() string {
