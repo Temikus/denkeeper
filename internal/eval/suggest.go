@@ -39,9 +39,12 @@ const (
 // fired this turn.
 const scheduledPrefix = agent.ScheduledPrefix
 
+// scheduledSkillLabel opens a header for a schedule that fires a skill.
+const scheduledSkillLabel = "[Scheduled: "
+
 // scheduledLabels are the two openings FormatScheduledText emits: a skill name
 // and a bare schedule name respectively.
-var scheduledLabels = []string{"[Scheduled: ", "[Scheduled trigger: "}
+var scheduledLabels = []string{scheduledSkillLabel, "[Scheduled trigger: "}
 
 // PrecedingMessage is one {role, content} pair of context preceding a
 // suggested turn, ready to be pinned as a task's history.
@@ -76,10 +79,21 @@ type Candidate struct {
 	MaxRound  int     `json:"max_round"`
 	Faults    int     `json:"faults"`
 	CostUSD   float64 `json:"cost_usd"`
+	// Notes is suggested judge context, saved with the task when the
+	// candidate is accepted. Set only for a turn a schedule fired for a skill.
+	Notes string `json:"notes,omitempty"`
 }
+
+// skillNoteDescMax caps, in runes, how much of a skill's description a
+// suggested note quotes.
+const skillNoteDescMax = 300
 
 // SuggestOpts bounds a suggestion pass.
 type SuggestOpts struct {
+	// SkillDescription looks up a skill's description for a scheduled
+	// candidate's notes. Nil, or ok == false, gives notes that name the skill
+	// only. The caller decides whether the requester may read descriptions.
+	SkillDescription func(agentName, skillName string) (description string, ok bool)
 	// Limit is the total number of candidates returned across all categories.
 	Limit int
 	// Exclude holds SourceKey values for turns already saved as tasks, so an
@@ -142,6 +156,7 @@ func Suggest(turns []agent.InterestingTurn, opts SuggestOpts) []Candidate {
 				MaxRound:       t.MaxRound,
 				Faults:         t.Faults,
 				CostUSD:        t.ReplyCost,
+				Notes:          scheduledSkillNotes(t, opts.SkillDescription),
 			},
 			score: len(signals),
 		})
@@ -254,6 +269,40 @@ func triggerOf(content string) string {
 		return strings.TrimSuffix(strings.TrimSpace(rest), "]")
 	}
 	return ""
+}
+
+// scheduledSkillNotes writes judge notes for a turn a schedule fired for a
+// skill. A "Scheduled trigger:" turn names no skill, so it gets none.
+func scheduledSkillNotes(t agent.InterestingTurn, lookup func(string, string) (string, bool)) string {
+	if !strings.HasPrefix(t.Content, scheduledSkillLabel) {
+		return ""
+	}
+	name := triggerOf(t.Content)
+	if name == "" {
+		return ""
+	}
+	note := fmt.Sprintf("Good: follows the %s skill's steps and reply shape.", name)
+	if lookup == nil {
+		return note
+	}
+	desc, ok := lookup(t.Agent, name)
+	desc = strings.TrimSpace(desc)
+	if !ok || desc == "" {
+		return note
+	}
+	return note + " The skill: " + cutRunes(desc, skillNoteDescMax)
+}
+
+// cutRunes keeps the first limit runes of s and marks the cut with "…".
+func cutRunes(s string, limit int) string {
+	n := 0
+	for i := range s {
+		if n == limit {
+			return s[:i] + "…"
+		}
+		n++
+	}
+	return s
 }
 
 // topDecileCost returns the cost a reply must reach to count as expensive

@@ -3294,7 +3294,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Mines past turns for ones worth saving as test cases: any rejected or failed tool call, three or more tool rounds, a reply cost in the pool's top decile, or a command-triggered skill. Candidates are stratified across the categories rather than ranked overall, since a set drawn purely by interestingness would be all failures and represent nothing the agent normally does. Turns already saved as a task are skipped, and a turn carrying no signal is never offered. Nothing is written — accepting a candidate is a separate call to the task create endpoint.",
+                "description": "Mines past turns for ones worth saving as test cases: any rejected or failed tool call, three or more tool rounds, a reply cost in the pool's top decile, or a command-triggered skill. Candidates are stratified across the categories rather than ranked overall, since a set drawn purely by interestingness would be all failures and represent nothing the agent normally does. Turns already saved as a task are skipped, and a turn carrying no signal is never offered. A turn a schedule fired for a skill carries suggested judge notes naming that skill; they quote the skill's description only for callers with skills:read. Nothing is written — accepting a candidate is a separate call to the task create endpoint.",
                 "produces": [
                     "application/json"
                 ],
@@ -9675,6 +9675,10 @@
                 },
                 "message_id": {
                     "type": "integer"
+                },
+                "notes": {
+                    "description": "Notes is suggested judge context, saved with the task when the\ncandidate is accepted. Set only for a turn a schedule fired for a skill.",
+                    "type": "string"
                 },
                 "preceding": {
                     "type": "array",

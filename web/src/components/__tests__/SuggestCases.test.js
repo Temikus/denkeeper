@@ -179,6 +179,14 @@ describe('SuggestCases — accept', () => {
     expect(addedTasks[0].body.pinned_history).toBeUndefined()
   })
 
+  test('a candidate without notes posts no notes key', async () => {
+    await renderPanel()
+
+    await fireEvent.click(screen.getByTestId('accept-chan:ops:101'))
+    await waitFor(() => expect(addedTasks).toHaveLength(1))
+    expect('notes' in addedTasks[0].body).toBe(false)
+  })
+
   test('creates the chosen set on the fly before adding', async () => {
     await renderPanel({ sets: [], defaultSet: '' })
 
@@ -387,6 +395,35 @@ describe('SuggestCases — session context', () => {
 
     await fireEvent.click(screen.getByTestId('context-toggle-chan:cron:104'))
     expect(context).not.toHaveClass('open')
+  })
+
+  test('accepting a candidate with notes saves them with the case', async () => {
+    const notes = "Good: follows the skill-forge skill's steps and reply shape."
+    server.use(http.get('/api/v1/eval/suggest', () => HttpResponse.json({
+      candidates: [{ ...SCHEDULED.candidates[0], notes }],
+    })))
+    await renderPanel()
+
+    await fireEvent.click(screen.getByTestId('accept-chan:cron:104'))
+    await waitFor(() => expect(addedTasks).toHaveLength(1))
+    expect(addedTasks[0].body.notes).toBe(notes)
+  })
+
+  test('the expanded context shows the judge notes, even when they are all there is', async () => {
+    const notes = "Good: follows the skill-forge skill's steps and reply shape."
+    server.use(http.get('/api/v1/eval/suggest', () => HttpResponse.json({
+      candidates: [{
+        ...SCHEDULED.candidates[0],
+        trigger: '', preceding: [], reply_preview: '', notes,
+      }],
+    })))
+    await renderPanel()
+
+    await fireEvent.click(screen.getByTestId('context-toggle-chan:cron:104'))
+    const context = screen.getByTestId('context-chan:cron:104')
+    expect(context).toHaveClass('open')
+    expect(context).toHaveTextContent('judge notes')
+    expect(context).toHaveTextContent(notes)
   })
 
   test('a turn with nothing behind it has no disclosure', async () => {

@@ -105,7 +105,7 @@
 
   /** Whether the disclosure has anything behind it. */
   function hasContext(c) {
-    return !!(c.preceding?.length || c.trigger || c.reply_preview)
+    return !!(c.preceding?.length || c.trigger || c.reply_preview || c.notes)
   }
 
   /** The "why" line: the signals that made this turn interesting. */
@@ -267,6 +267,7 @@
       prompt: c.prompt,
       category: c.category,
       pinned_history: pinned.length ? pinned : undefined,
+      notes: c.notes || undefined,
       source_conversation_id: c.conversation_id || undefined,
       source_message_id: c.message_id ?? null,
     })
@@ -465,6 +466,11 @@
                 {#if c.reply_preview}
                   <dt class="role">agent replied</dt>
                   <dd class="turn card-sub">{c.reply_preview}</dd>
+                {/if}
+                {#if c.notes}
+                  <!-- Saved with the case when it is accepted. -->
+                  <dt class="role">judge notes</dt>
+                  <dd class="turn card-sub">{c.notes}</dd>
                 {/if}
               </dl>
               {#if c.preceding?.length}

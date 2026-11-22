@@ -268,6 +268,52 @@ func TestEvalSuggest_NeedsEvalReadScope(t *testing.T) {
 	}
 }
 
+// seedScheduledGreetTurn writes a scheduled turn for the test engine's greet
+// skill (description "Greeting skill"), with a fault so it is offered.
+func seedScheduledGreetTurn(t *testing.T, srv *Server) {
+	t.Helper()
+	seedSuggestTurn(t, srv, "chan:main", "default",
+		"[Scheduled: greet | 2026-08-01T10:00:00Z UTC | 2026-W31]", 0,
+		[]agent.ToolCallRecord{{ToolName: "kv_get", Round: 1, Outcome: "failed"}}, nil)
+}
+
+func scheduledNotes(t *testing.T, srv *Server, key string) string {
+	t.Helper()
+	rec := evalRequest(t, srv, http.MethodGet, "/api/v1/eval/suggest?category=scheduled", "", key)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	got := decodeSuggestions(t, rec.Body.Bytes())
+	if len(got.Candidates) != 1 {
+		t.Fatalf("candidates = %d, want the one scheduled turn: %+v", len(got.Candidates), got.Candidates)
+	}
+	return got.Candidates[0].Notes
+}
+
+func TestEvalSuggest_ScheduledNotesQuoteTheSkillWithSkillsRead(t *testing.T) {
+	srv, _ := evalTestServer(t, allScopesKey())
+	seedScheduledGreetTurn(t, srv)
+
+	want := "Good: follows the greet skill's steps and reply shape. The skill: Greeting skill"
+	if got := scheduledNotes(t, srv, "dk-test-key"); got != want {
+		t.Errorf("notes = %q, want %q", got, want)
+	}
+}
+
+func TestEvalSuggest_ScheduledNotesNameOnlyWithoutSkillsRead(t *testing.T) {
+	// eval:read alone must not become a way to read a skill's description.
+	srv, _ := evalTestServer(t, allScopesKey(), evalReadOnlyKey())
+	seedScheduledGreetTurn(t, srv)
+
+	got := scheduledNotes(t, srv, "dk-eval-readonly")
+	if want := "Good: follows the greet skill's steps and reply shape."; got != want {
+		t.Errorf("notes = %q, want %q", got, want)
+	}
+	if strings.Contains(got, "Greeting skill") {
+		t.Errorf("notes %q quote the skill description to a caller without skills:read", got)
+	}
+}
+
 func TestEvalSuggest_UnwiredStoreReturns503(t *testing.T) {
 	srv := New(testConfig(allScopesKey()), testDeps(), testLogger())
 
