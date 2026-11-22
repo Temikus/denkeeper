@@ -76,6 +76,9 @@ func (s *Server) handleRunJavaScript(ctx context.Context, req *mcp.CallToolReque
 
 	// Wall-clock guard: interrupt the VM after the timeout. Honors ctx cancellation too.
 	done := make(chan struct{})
+	// Closed on return, not after RunString: formatting the result runs script
+	// JS too, and the ctx watcher must still be able to interrupt it.
+	defer close(done)
 	timer := time.AfterFunc(s.deps.Timeout, func() { vm.Interrupt("execution timed out") })
 	defer timer.Stop()
 	go func() {
@@ -89,13 +92,31 @@ func (s *Server) handleRunJavaScript(ctx context.Context, req *mcp.CallToolReque
 	// Wrap user code in an IIFE so `return` works and `input` is scoped.
 	wrapped := "(function(input){" + args.code + "})(JSON.parse(__denkeeper_input_json))"
 	val, err := vm.RunString(wrapped)
-	close(done)
-	if err != nil {
-		// goja surfaces JS exceptions and interrupts as Go errors; feed back to the LLM.
-		return toolError(scriptErrorText(err, args.decoded, s.deps.MaxOutputChars)), nil
-	}
+	return s.formatRun(val, err, args.decoded), nil
+}
 
-	return toolText(capOutput(exportResult(val), s.deps.MaxOutputChars)), nil
+// formatRun builds the tool result. Exception.Error() and Value.Export() run
+// script JS (toString, getters) after RunString has returned, outside goja's
+// exception handling, on a goroutine with no recover. A panic there would kill
+// the process, so it is recovered here. Never format the recovered value: a
+// *goja.Exception's Error() would run the same script JS again.
+func (s *Server) formatRun(val goja.Value, runErr error, decoded bool) (res *mcp.CallToolResult) {
+	defer func() {
+		if r := recover(); r != nil {
+			s.deps.Logger.Warn("run_javascript: formatting the result panicked", "panic_type", fmt.Sprintf("%T", r))
+			res = toolError("javascript error: the result could not be converted to text")
+		}
+	}()
+	limit := s.deps.MaxOutputChars
+	if runErr != nil {
+		// goja surfaces JS exceptions and interrupts as Go errors; feed back to the LLM.
+		return toolError(scriptErrorText(runErr, decoded, limit))
+	}
+	out, err := exportResult(val)
+	if err != nil {
+		return toolError(capOutput(err.Error(), limit))
+	}
+	return toolText(capOutput(out, limit))
 }
 
 // runArgs holds the arguments after normalizeArgs.
@@ -263,20 +284,22 @@ func acquireOne(ctx context.Context, sem chan struct{}) (func(), *mcp.CallToolRe
 	}
 }
 
-// exportResult renders a goja value: strings pass through as-is; everything else is JSON.
-func exportResult(val goja.Value) string {
+// exportResult renders a goja value: strings pass through as-is; everything
+// else is JSON. There is no %v fallback: on a cyclic value it recurses until
+// the runtime aborts with a stack overflow, which recover cannot catch.
+func exportResult(val goja.Value) (string, error) {
 	if val == nil || goja.IsUndefined(val) || goja.IsNull(val) {
-		return ""
+		return "", nil
 	}
 	exported := val.Export()
 	if str, ok := exported.(string); ok {
-		return str
+		return str, nil
 	}
 	b, err := json.Marshal(exported)
 	if err != nil {
-		return fmt.Sprintf("%v", exported)
+		return "", fmt.Errorf("result could not be encoded as JSON: %w", err)
 	}
-	return string(b)
+	return string(b), nil
 }
 
 // capOutput cuts s to at most limit bytes, backing up to a rune boundary, and

@@ -393,6 +393,53 @@ func TestRunJavaScript_ZeroCapReturnsWholeError(t *testing.T) {
 	}
 }
 
+// runFormatProbe runs code that throws or returns a value whose formatting
+// runs script JS after RunString. Before #616 T2 each of these crashed the
+// whole process; now each must come back as an IsError result.
+func runFormatProbe(t *testing.T, code string) string {
+	t.Helper()
+	deps := defaultDeps()
+	deps.Timeout = 200 * time.Millisecond // the looping probes stop here
+	session := newTestServer(t, deps)
+
+	start := time.Now()
+	result := callTool(t, session, "run_javascript", map[string]any{"code": code})
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("call took %v, want it bounded by the timeout", elapsed)
+	}
+	if !result.IsError {
+		t.Fatalf("expected IsError, got %.200q", extractText(result))
+	}
+	return extractText(result)
+}
+
+func TestRunJavaScript_ThrownLoopingToStringReturnsError(t *testing.T) {
+	runFormatProbe(t, `throw {toString: function(){ while(true){} }}`)
+}
+
+func TestRunJavaScript_ThrownThrowingToStringReturnsError(t *testing.T) {
+	runFormatProbe(t, `throw {toString: function(){ throw new Error("x") }}`)
+}
+
+func TestRunJavaScript_ThrowingGetterResultReturnsError(t *testing.T) {
+	runFormatProbe(t, `return {get a(){ throw new Error("boom") }}`)
+}
+
+func TestRunJavaScript_LoopingGetterResultReturnsError(t *testing.T) {
+	runFormatProbe(t, `return {get a(){ while(true){} }}`)
+}
+
+func TestRunJavaScript_CyclicResultReturnsError(t *testing.T) {
+	got := runFormatProbe(t, `var a = {}; a.self = a; return a;`)
+	if !strings.Contains(got, "could not be encoded as JSON") {
+		t.Errorf("error text = %.200q, want the JSON encoding error", got)
+	}
+}
+
+func TestRunJavaScript_DeepNestedResultReturnsError(t *testing.T) {
+	runFormatProbe(t, `var a = []; for (var i = 0; i < 1000000; i++) { a = [a]; } return a;`)
+}
+
 func TestRunJavaScript_DisabledNotRegistered(t *testing.T) {
 	deps := defaultDeps()
 	deps.Enabled = false
