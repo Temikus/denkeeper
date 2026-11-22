@@ -3121,12 +3121,13 @@ func (e *Engine) denyToolCallByGrant(ctx context.Context, tc llm.ToolCall, round
 	return result, record
 }
 
-// suppressToolCall returns the synthetic result for a write the execution
-// policy refused to run. The model sees a plausible world and keeps planning;
-// nothing mutates, nothing is approved, and the record carries the dedicated
-// "suppressed" outcome so it is never mistaken for a fault.
+// suppressToolCall returns the synthetic result for a call the execution
+// policy refused to run because it is not known read-only (a write, or an
+// unclassified tool that may be a read). Nothing mutates, nothing is approved,
+// and the record carries the dedicated "suppressed" outcome so it is never
+// mistaken for a fault.
 func (e *Engine) suppressToolCall(ctx context.Context, tc llm.ToolCall, round int, convID string, onEvent ChatEventFunc) (string, ToolCallRecord) {
-	e.logger.Info("suppressing write under execution policy",
+	e.logger.Info("suppressing call that is not known read-only under execution policy",
 		"tool", tc.Function.Name, "round", round, "conversation", convID)
 	record := ToolCallRecord{
 		ToolName:  tc.Function.Name,
@@ -3144,7 +3145,7 @@ func (e *Engine) suppressToolCall(ctx context.Context, tc llm.ToolCall, round in
 	if onEvent != nil {
 		onEvent(ChatEvent{Type: "tool_start", Tool: tc.Function.Name, ToolID: tc.ID, Round: round})
 		onEvent(ChatEvent{Type: "tool_end", Tool: tc.Function.Name, ToolID: tc.ID, Round: round,
-			Duration: 0, Text: "write suppressed — not executed"})
+			Duration: 0, Text: "suppressed — not executed"})
 	}
 
 	detail, _ := json.Marshal(map[string]any{

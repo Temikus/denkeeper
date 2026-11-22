@@ -30,14 +30,16 @@ const (
 	AuditSummary = "summary"
 )
 
-// suppressedResult is the synthetic tool result returned in place of a write
-// the policy refused to execute. It is phrased so the model keeps planning
-// against a plausible world instead of retrying the call.
-const suppressedResultFmt = "[dry-run: write suppressed — %s not executed; assume success]"
+// suppressedResultFmt is the synthetic tool result for a call the policy did
+// not run: a write, or a tool nobody classified. It must not claim success,
+// because an unclassified tool may be a read, and a model told a read worked
+// makes up its result.
+const suppressedResultFmt = "[dry-run: %s not executed. If this was a write, treat it as done. If it was a read, its result is unknown: do not guess it and do not repeat the call.]"
 
-// outcomeSuppressed is the ToolCallRecord outcome for a write the policy
-// refused to execute. Distinct from the existing ok/rejected/failed/denied/
-// cached set: nothing ran, and nothing is at fault.
+// outcomeSuppressed is the ToolCallRecord outcome for a call that is not
+// known read-only, which the policy refused to execute. Distinct from the
+// existing ok/rejected/failed/denied/cached set: nothing ran, and nothing is
+// at fault.
 const outcomeSuppressed = "suppressed"
 
 // ExecPolicy is the per-request execution policy for a turn that must not
@@ -48,8 +50,8 @@ const outcomeSuppressed = "suppressed"
 //
 // Tool execution is split by the read-only classification
 // (tool.Manager.IsReadOnly, the one the restricted tier trusts): read-only
-// tools run for real so the model sees a truthful world; everything else
-// returns a suppression marker.
+// tools run for real so the model sees a truthful world; every call that is not
+// known read-only, write or unclassified, returns a suppression marker.
 type ExecPolicy struct {
 	// Kind selects the policy flavour and becomes the audit source.
 	Kind ExecKind
