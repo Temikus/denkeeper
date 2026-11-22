@@ -91,56 +91,56 @@
 
   <!-- Without a transcript the column is header only; the caller renders the body. -->
   {#if transcript}
-  {#if transcript.tool_calls.length > 0}
-    <div class="rows">
-      {#each transcript.tool_calls as call, i (i)}
-        <button
-          class="row"
-          class:suppressed={call.suppressed}
-          class:failed={call.outcome === 'failed' || call.outcome === 'rejected'}
-          onclick={() => toggle(i)}
-          aria-expanded={expanded.has(i)}
-          aria-controls="{uid}-call-{i}"
-        >
-          <span class="lane-round">R{call.round}</span>
-          <span class="dot {dotClass(call.outcome)}"></span>
-          <span class="lane-tool">{call.tool}</span>
-          {#if !compact}
-            <span class="lane-args">{call.arguments || ''}</span>
+    {#if transcript.tool_calls.length > 0}
+      <div class="rows">
+        {#each transcript.tool_calls as call, i (i)}
+          <button
+            class="row"
+            class:suppressed={call.suppressed}
+            class:failed={call.outcome === 'failed' || call.outcome === 'rejected'}
+            onclick={() => toggle(i)}
+            aria-expanded={expanded.has(i)}
+            aria-controls="{uid}-call-{i}"
+          >
+            <span class="lane-round">R{call.round}</span>
+            <span class="dot {dotClass(call.outcome)}"></span>
+            <span class="lane-tool">{call.tool}</span>
+            {#if !compact}
+              <span class="lane-args">{call.arguments || ''}</span>
+            {/if}
+            <span class="lane-outcome">
+              {#if call.suppressed}
+                <span class="badge">SUPPRESSED</span>
+              {:else if call.outcome !== 'ok' && call.outcome !== 'cached'}
+                <span class="badge badge-error">{call.outcome.toUpperCase()}</span>
+              {:else}
+                {duration(call.duration_ms)}
+              {/if}
+            </span>
+            <span class="lane-chevron" class:open={expanded.has(i)}>&#x25B6;</span>
+          </button>
+          {#if expanded.has(i)}
+            <div class="row-detail" class:suppressed={call.suppressed} id="{uid}-call-{i}">
+              {#if call.arguments && compact}
+                <div class="detail-label">Arguments</div>
+                <pre class="detail-body">{call.arguments}</pre>
+              {/if}
+              <div class="detail-label">Result returned to the model</div>
+              <pre class="detail-body">{call.result || call.error || '(no result)'}</pre>
+              {#if call.truncated}
+                <div class="detail-note">Trimmed for display.</div>
+              {/if}
+            </div>
           {/if}
-          <span class="lane-outcome">
-            {#if call.suppressed}
-              <span class="badge">SUPPRESSED</span>
-            {:else if call.outcome !== 'ok' && call.outcome !== 'cached'}
-              <span class="badge badge-error">{call.outcome.toUpperCase()}</span>
-            {:else}
-              {duration(call.duration_ms)}
-            {/if}
-          </span>
-          <span class="lane-chevron" class:open={expanded.has(i)}>&#x25B6;</span>
-        </button>
-        {#if expanded.has(i)}
-          <div class="row-detail" class:suppressed={call.suppressed} id="{uid}-call-{i}">
-            {#if call.arguments && compact}
-              <div class="detail-label">Arguments</div>
-              <pre class="detail-body">{call.arguments}</pre>
-            {/if}
-            <div class="detail-label">Result returned to the model</div>
-            <pre class="detail-body">{call.result || call.error || '(no result)'}</pre>
-            {#if call.truncated}
-              <div class="detail-note">Trimmed for display.</div>
-            {/if}
-          </div>
-        {/if}
-      {/each}
-    </div>
-  {/if}
+        {/each}
+      </div>
+    {/if}
 
-  {#if transcript.response}
-    <div class="response" class:accent>{transcript.response}</div>
-  {:else}
-    <div class="response empty">The agent produced no text response.</div>
-  {/if}
+    {#if transcript.response}
+      <div class="response" class:accent>{transcript.response}</div>
+    {:else}
+      <div class="response empty">The agent produced no text response.</div>
+    {/if}
   {/if}
 </div>
 
