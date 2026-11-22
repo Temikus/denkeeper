@@ -2,7 +2,9 @@
   // One transcript column: which model ran, what it did, what it said.
   // Used alone for a single-model preview and twice side by side for a
   // comparison, so it carries no assumptions about its own width.
-  let { transcript, label = '', accent = false, compact = false } = $props()
+  // With no transcript it renders the header alone, naming `model`: the
+  // placeholder for a compare candidate that has not landed yet.
+  let { transcript = null, model = '', label = '', accent = false, compact = false } = $props()
 
   let expanded = $state(new Set())
   const uid = Math.random().toString(36).slice(2, 8)
@@ -26,7 +28,7 @@
 
   // A one-line summary replaces the metric tiles: five tiles for one run is
   // over-furnished, and in compare mode the delta strip does the comparing.
-  let summary = $derived([
+  let summary = $derived(!transcript ? '' : [
     `${transcript.rounds} round${transcript.rounds === 1 ? '' : 's'}`,
     transcript.suppressed_count > 0 ? `${transcript.suppressed_count} suppressed` : null,
     `$${(transcript.cost_usd || 0).toFixed(4)}`,
@@ -43,7 +45,7 @@
   }
 
   // An unknown slug is still a cut-short turn: naming it beats hiding it.
-  let stopLabel = $derived(transcript.stop_reason
+  let stopLabel = $derived(transcript?.stop_reason
     ? (STOP_LABEL[transcript.stop_reason] || transcript.stop_reason)
     : '')
 
@@ -56,17 +58,21 @@
   // by Anthropic, Vertex, or Bedrock — suppressing on the prefix would hide
   // one side of the variance the chip exists to show.
   let upstream = $derived.by(() => {
-    const via = (transcript.upstream || '').trim()
+    const via = (transcript?.upstream || '').trim()
     if (!via) return ''
-    const model = (transcript.model || transcript.requested_model || '').toLowerCase()
-    return model === via.toLowerCase() ? '' : via
+    const ran = (transcript.model || transcript.requested_model || '').toLowerCase()
+    return ran === via.toLowerCase() ? '' : via
   })
+
+  let modelName = $derived(transcript
+    ? (transcript.model || transcript.requested_model || 'unknown')
+    : (model || 'unknown'))
 </script>
 
 <div class="column">
   <div class="head">
     <span class="dot-model" class:accent></span>
-    <span class="model">{transcript.model || transcript.requested_model || 'unknown'}</span>
+    <span class="model">{modelName}</span>
     {#if label}
       <span class="label" class:accent>{label}</span>
     {/if}
@@ -74,13 +80,17 @@
       <span class="upstream" title="The provider that actually served this turn."
         data-testid="upstream">via {upstream}</span>
     {/if}
-    <span class="summary">{summary}</span>
+    {#if summary}
+      <span class="summary">{summary}</span>
+    {/if}
     {#if stopLabel}
       <span class="cut-short" title="The response below is a wrap-up, not a completed answer."
         data-testid="stop-reason">Cut short: {stopLabel}</span>
     {/if}
   </div>
 
+  <!-- Without a transcript the column is header only; the caller renders the body. -->
+  {#if transcript}
   {#if transcript.tool_calls.length > 0}
     <div class="rows">
       {#each transcript.tool_calls as call, i (i)}
@@ -130,6 +140,7 @@
     <div class="response" class:accent>{transcript.response}</div>
   {:else}
     <div class="response empty">The agent produced no text response.</div>
+  {/if}
   {/if}
 </div>
 

@@ -18,12 +18,16 @@
   let picking = $state(null)          // 'primary' | 'compare' | null
 
   let loading = $state(false)
-  let error = $state('')
+  let error = $state('')              // primary failure: top-level
+  let candidateError = $state('')     // candidate failure: right column only
   let primary = $state(null)
   let candidate = $state(null)
   let hasRun = $state(false)
 
   const comparing = $derived(!!compareModel)
+  // Split from the moment the primary lands, so its column never reflows when
+  // the candidate does. The right column holds the wait, the error or the result.
+  const split = $derived(comparing && !!(candidate || loading || candidateError))
 
   $effect(() => { loadModels() })
 
@@ -54,28 +58,45 @@
     // transcript under a new model name would be a lie.
     primary = null
     candidate = null
+    candidateError = ''
     hasRun = false
   }
 
   function clearCompare() {
     compareModel = ''
     candidate = null
+    candidateError = ''
     picking = null
   }
 
   async function start() {
     loading = true
     error = ''
+    candidateError = ''
     primary = null
     candidate = null
     hasRun = true
     try {
-      // Sequential, not parallel: two concurrent turns on one agent would
-      // interleave in the audit log and double the instantaneous spend.
       primary = await run(primaryModel)
-      if (compareModel) candidate = await run(compareModel)
     } catch (e) {
       error = e.message
+      loading = false
+      return
+    }
+    // Sequential, not parallel: two concurrent turns on one agent would
+    // interleave in the audit log and double the instantaneous spend.
+    if (compareModel) await runCandidate()
+    loading = false
+  }
+
+  // Also the right column's retry: the primary is on screen and paid for.
+  async function runCandidate() {
+    loading = true
+    candidateError = ''
+    try {
+      candidate = await run(compareModel)
+    } catch (e) {
+      candidateError = e.message
     } finally {
       loading = false
     }
@@ -214,13 +235,28 @@
   {/if}
 
   {#if primary}
-    <div class="body" class:split={comparing && candidate}>
+    <div class="body" class:split>
       <div class="col">
-        <DryRunTranscript transcript={primary} label={primaryModel ? '' : 'LIVE'} compact={!!(comparing && candidate)} />
+        <DryRunTranscript transcript={primary} label={primaryModel ? '' : 'LIVE'} compact={comparing} />
       </div>
-      {#if comparing && candidate}
+      {#if split}
         <div class="col right">
-          <DryRunTranscript transcript={candidate} label="CANDIDATE" accent={true} compact={true} />
+          {#if candidate}
+            <DryRunTranscript transcript={candidate} label="CANDIDATE" accent={true} compact={true} />
+          {:else}
+            <DryRunTranscript model={compareModel} label="CANDIDATE" accent={true} />
+            {#if candidateError}
+              <div class="candidate-error">
+                <span class="inline-error" role="alert">{candidateError}</span>
+                <button class="btn-sm" onclick={runCandidate} disabled={loading}>Try again</button>
+              </div>
+            {:else}
+              <div class="state candidate-wait" role="status">
+                <span class="spinner" aria-hidden="true"></span>
+                Running through the agent&hellip;
+              </div>
+            {/if}
+          {/if}
         </div>
       {/if}
     </div>
@@ -329,6 +365,11 @@
   .col { display: flex; flex-direction: column; padding: 16px; flex: 1; min-width: 0; }
   .col.right { border-left: 1px solid var(--border); }
   .col.grow { flex: 1; padding: 0; }
+  /* Under the candidate header, aligned with it: the column already pads, and
+     12px matches the transcript's header-to-body gap. */
+  .candidate-wait { padding: 12px 0 0; }
+  .candidate-error { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding-top: 12px; }
+  .candidate-error .inline-error { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 
   /* Empty compare slot: a rail, not half the panel. The single-model preview
      is the common case and keeps its width until a comparison is asked for. */
