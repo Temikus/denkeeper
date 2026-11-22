@@ -132,7 +132,8 @@ func (d *repeatDetector) observe(name, args string) bool {
 // tools-stripped completion that summarizes the work done so far. stopRequested
 // is not — an emergency stop must not spend tokens (see finishStoppedTurn).
 // stopCancelled is: the user asked this one turn to stop and is still waiting
-// for an answer (see finishCancelledTurn).
+// for an answer (see finishAnsweredStop). So is stopOutputLimit, which also
+// gets a wrap-up when no call ran.
 //
 // Wrap-up design: design/archive/loop-guard-wrapup-round.md. Step-boundary stop
 // (stopRequested, stopCancelled): design/plans/6-step-boundary-stop.md.
@@ -144,6 +145,9 @@ const (
 	stopMaxRounds
 	stopRequested
 	stopCancelled
+	// stopOutputLimit: the completion ended on the output-token limit with a
+	// cut-off tool call or nothing to show. The cut-off call never runs.
+	stopOutputLimit
 )
 
 func (r loopStopReason) String() string {
@@ -156,6 +160,8 @@ func (r loopStopReason) String() string {
 		return "stop requested"
 	case stopCancelled:
 		return "cancelled at your request"
+	case stopOutputLimit:
+		return "the model hit its output-token limit"
 	default:
 		return "none"
 	}
@@ -179,6 +185,8 @@ func (r loopStopReason) slug() string {
 		return "stop_requested"
 	case stopCancelled:
 		return "cancelled"
+	case stopOutputLimit:
+		return "output_limit"
 	default:
 		return ""
 	}
@@ -673,6 +681,14 @@ func (e *Engine) turnStopReason(run turnRun) loopStopReason {
 	return run.stop.stopReason()
 }
 
+// pendingStop is the stop raised since this turn began, or stopNone.
+func (e *Engine) pendingStop(run turnRun) loopStopReason {
+	if !e.turnStopRequested(run) {
+		return stopNone
+	}
+	return e.turnStopReason(run)
+}
+
 // SetApprovalConfig configures the approval timeout and retry count.
 // Call this after NewEngine, before the engine starts handling messages.
 func (e *Engine) SetApprovalConfig(timeout time.Duration, retries int) {
@@ -850,6 +866,7 @@ func buildLLMAuditDetail(resp *llm.ChatResponse, provider string) map[string]any
 	if resp.LeakRetry {
 		d["leaked_tool_call_retry"] = true
 	}
+	addOutputLimitDetail(d, resp)
 	if resp.Content != "" {
 		text := resp.Content
 		if len(text) > maxLen {
@@ -874,6 +891,19 @@ func buildLLMAuditDetail(resp *llm.ChatResponse, provider string) map[string]any
 		d["tool_calls"] = names
 	}
 	return d
+}
+
+// addOutputLimitDetail marks a completion that ended on the output-token
+// limit, with the number of calls it was cut off in. Both keys are absent on
+// other completions, so those events are unchanged.
+func addOutputLimitDetail(d map[string]any, resp *llm.ChatResponse) {
+	if resp.FinishReason != "length" {
+		return
+	}
+	d["output_limit"] = true
+	if len(resp.ToolCalls) > 0 {
+		d["pending_tool_calls"] = len(resp.ToolCalls)
+	}
 }
 
 // llmAuditOpts carries optional fields for emitLLMAudit. Exactly one of
@@ -2596,6 +2626,7 @@ func (e *Engine) runToolLoop(ctx context.Context, convID string, perms *security
 	// Scoped to one turn: a new user message gives the approval chain a fresh
 	// look and re-executes every tool.
 	state := newTurnToolState()
+	softStopped := false
 	for round := 0; resp.FinishReason == "tool_calls" && len(resp.ToolCalls) > 0; round++ {
 		if round >= run.budget.maxRounds {
 			// Round budget exhausted with the model still requesting tools.
@@ -2645,12 +2676,42 @@ func (e *Engine) runToolLoop(ctx context.Context, convID string, perms *security
 		*totalCost += resp.BilledUSD
 
 		if e.softCostLimitReached(convID, onEvent) {
+			softStopped = true
 			break
 		}
 	}
 	out.resp = resp
+	noteOutputLimit(&out, resp, softStopped, e.pendingStop(run), &accumulatedContent)
 	out.accumulated = accumulatedContent.String()
 	return out, nil
+}
+
+// isOutputLimitStop reports whether resp ended on the output-token limit with
+// a tool call (its arguments are cut off) or no visible text. A length stop
+// with text and no call is an ordinary, if short, reply.
+func isOutputLimitStop(resp *llm.ChatResponse) bool {
+	return resp.FinishReason == "length" &&
+		(len(resp.ToolCalls) > 0 || strings.TrimSpace(resp.Content) == "")
+}
+
+// noteOutputLimit sets stopOutputLimit when the loop ended on such a
+// response. The loop never appended that response, so its calls did not run;
+// its text is kept for the fallback answer. A soft-cost stop or another stop
+// reason wins, since a wrap-up would spend more. A stop raised while the
+// cut-off completion was in flight (pending) wins too: an emergency stop must
+// not spend a wrap-up, and a cancel must read as a cancel. Out of runToolLoop
+// to keep it under the gocyclo ceiling.
+func noteOutputLimit(out *toolLoopOutcome, resp *llm.ChatResponse, softStopped bool, pending loopStopReason, accumulated *strings.Builder) {
+	if softStopped || out.stopReason != stopNone || !isOutputLimitStop(resp) {
+		return
+	}
+	out.stopReason = stopOutputLimit
+	if pending != stopNone {
+		out.stopReason = pending
+	}
+	if resp.Content != "" {
+		accumulated.WriteString(resp.Content)
+	}
 }
 
 // stopAtRoundBoundary reports whether a stop was requested since this turn
@@ -2826,8 +2887,9 @@ func recordToolRoundEvent(span trace.Span, round int, toolCalls []llm.ToolCall) 
 
 // finishStoppedToolLoop finalizes a turn after an early loop stop. An emergency
 // stop short-circuits to finishStoppedTurn (no completion at all), a user
-// cancel to finishCancelledTurn (one wrap-up, because the user is waiting for a
-// reply); the two model-behavior stops run the wrap-up round described below.
+// cancel or an output-limit stop to finishAnsweredStop (one wrap-up that never
+// fails the turn); the two model-behavior stops run the wrap-up round described
+// below.
 //
 // Fallback ordering: wrap-up text → accumulated intermediate content → error
 // (which routes to persistInterruptedProgress upstream, i.e. exactly the
@@ -2843,8 +2905,8 @@ func (e *Engine) finishStoppedToolLoop(ctx context.Context, convID string, out t
 		resp, llmMessages := e.finishStoppedTurn(convID, out, totalUsage, totalCost)
 		return resp, llmMessages, nil
 	}
-	if stopReason == stopCancelled {
-		resp, llmMessages := e.finishCancelledTurn(ctx, convID, out, totalUsage, totalCost, run, onEvent)
+	if stopReason == stopCancelled || stopReason == stopOutputLimit {
+		resp, llmMessages := e.finishAnsweredStop(ctx, convID, out, totalUsage, totalCost, run, onEvent)
 		return resp, llmMessages, nil
 	}
 	if len(out.toolRecords) == 0 {
@@ -2907,21 +2969,23 @@ func (e *Engine) finishStoppedTurn(convID string, out toolLoopOutcome, totalUsag
 	return resp, out.llmMessages
 }
 
-// finishCancelledTurn finalizes a turn a user cancelled. It stops at the same
-// boundary as the emergency exit but does answer: whoever pressed stop is still
-// waiting, so one tools-stripped wrap-up summarizes what already ran. Where
-// there is nothing to summarize — no executed calls — or the wrap-up itself
-// fails or comes back empty, it falls back to the emergency exit's marker-only
-// response: a reply the user can read beats an error, and a cancel must never
-// be the thing that fails a turn.
-func (e *Engine) finishCancelledTurn(ctx context.Context, convID string, out toolLoopOutcome, totalUsage *llm.TokenUsage, totalCost *float64, run turnRun, onEvent ChatEventFunc) (*llm.ChatResponse, []llm.Message) {
-	if len(out.toolRecords) == 0 {
+// finishAnsweredStop finalizes a turn that a user cancelled (stopCancelled) or
+// that hit the output-token limit (stopOutputLimit). It stops at the same
+// boundary as the emergency exit but does answer: one tools-stripped wrap-up
+// summarizes what already ran. A cancel with no executed calls skips the
+// wrap-up; a length stop runs it anyway, since the model can still answer
+// without the call it could not finish. If the wrap-up fails or comes back
+// empty, it falls back to the emergency exit's marker-only response: neither
+// stop may be the thing that fails a turn.
+func (e *Engine) finishAnsweredStop(ctx context.Context, convID string, out toolLoopOutcome, totalUsage *llm.TokenUsage, totalCost *float64, run turnRun, onEvent ChatEventFunc) (*llm.ChatResponse, []llm.Message) {
+	reason := out.stopReason
+	if reason == stopCancelled && len(out.toolRecords) == 0 {
 		return e.finishStoppedTurn(convID, out, totalUsage, totalCost)
 	}
-	resp, llmMessages, err := e.wrapUpToolLoop(ctx, convID, stopCancelled, out.llmMessages, out.toolRounds, run, onEvent)
+	resp, llmMessages, err := e.wrapUpToolLoop(ctx, convID, reason, out.llmMessages, out.toolRounds, run, onEvent)
 	if err != nil {
-		e.logger.Warn("wrap-up after cancel failed, answering with what the turn already produced",
-			"conversation", convID, "error", err)
+		e.logger.Warn("wrap-up failed, answering with what the turn already produced",
+			"conversation", convID, "reason", reason.slug(), "error", err)
 		return e.finishStoppedTurn(convID, out, totalUsage, totalCost)
 	}
 	totalUsage.Add(resp.TokensUsed)
@@ -2929,11 +2993,11 @@ func (e *Engine) finishCancelledTurn(ctx context.Context, convID string, out too
 	if strings.TrimSpace(resp.Content) == "" {
 		return e.finishStoppedTurn(convID, out, totalUsage, totalCost)
 	}
-	resp.Content += fmt.Sprintf("\n\n[engine: turn ended early — %s]", stopCancelled)
+	resp.Content += fmt.Sprintf("\n\n[engine: turn ended early — %s]", reason)
 	resp.TokensUsed = *totalUsage
 	resp.BilledUSD = *totalCost
-	e.logger.Warn("turn cancelled at step boundary",
-		"conversation", convID, "tool_rounds", out.toolRounds, "tool_calls", len(out.toolRecords))
+	e.logger.Warn("turn ended early with a wrap-up",
+		"conversation", convID, "reason", reason.slug(), "tool_rounds", out.toolRounds, "tool_calls", len(out.toolRecords))
 	return resp, llmMessages
 }
 
@@ -2950,12 +3014,7 @@ func (e *Engine) wrapUpToolLoop(ctx context.Context, convID string, reason loopS
 	if onEvent != nil {
 		onEvent(ChatEvent{Type: "thinking", Round: toolRounds, Text: fmt.Sprintf("Wrapping up (tool loop stopped: %s)...", reason)})
 	}
-	llmMessages = append(llmMessages, llm.Message{
-		Role: "user",
-		Content: fmt.Sprintf("[engine: tool loop stopped (%s). Tools are no longer available this turn. "+
-			"Summarize the outcome for the user from the tool results above — what you found, what you did, "+
-			"and anything that still needs attention. Do not mention the loop stop unless it affected the result.]", reason),
-	})
+	llmMessages = append(llmMessages, llm.Message{Role: "user", Content: wrapUpInstruction(reason)})
 	resp, err := run.router.CompleteFinal(ctx, convID, llmMessages)
 	if err != nil {
 		e.emitLLMAudit(ctx, convID, nil, err.Error(), llmAuditOpts{wrapUp: true})
@@ -2963,6 +3022,21 @@ func (e *Engine) wrapUpToolLoop(ctx context.Context, convID string, reason loopS
 	}
 	e.emitLLMAudit(ctx, convID, resp, "", llmAuditOpts{wrapUp: true})
 	return resp, llmMessages, nil
+}
+
+// wrapUpInstruction is the user message that asks for the wrap-up. An
+// output-limit stop gets its own text: no call of the cut-off response ran,
+// possibly none at all, so a "summarize what you found" prompt would invite a
+// made-up result.
+func wrapUpInstruction(reason loopStopReason) string {
+	if reason == stopOutputLimit {
+		return "[engine: your last response hit the output-token limit and was cut off, so its tool call did not run. " +
+			"Tools are no longer available this turn. Briefly tell the user what was done and what was not, " +
+			"using only the tool results above if there are any. Do not guess the result of a call that did not run.]"
+	}
+	return fmt.Sprintf("[engine: tool loop stopped (%s). Tools are no longer available this turn. "+
+		"Summarize the outcome for the user from the tool results above — what you found, what you did, "+
+		"and anything that still needs attention. Do not mention the loop stop unless it affected the result.]", reason)
 }
 
 // recoverEmptyToolResponse attempts to recover when the LLM returns empty

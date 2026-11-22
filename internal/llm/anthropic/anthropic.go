@@ -533,13 +533,15 @@ func convertMessage(m llm.Message) (apiMessage, error) {
 }
 
 // normalizeStopReason maps Anthropic stop reasons to the canonical values
-// expected by the engine's tool-call loop ("tool_calls", "stop").
+// expected by the engine's tool-call loop ("tool_calls", "stop", "length").
 func normalizeStopReason(reason string) string {
 	switch reason {
 	case "tool_use":
 		return "tool_calls"
 	case "end_turn":
 		return "stop"
+	case "max_tokens":
+		return "length"
 	default:
 		return reason
 	}
