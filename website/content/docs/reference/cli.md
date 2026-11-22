@@ -175,7 +175,7 @@ pamela  log:       720h  214   40
 Dry run: nothing was written.
 ```
 
-`ALREADY EXPIRED` counts keys whose new expiry is in the past. Those keys disappear from reads as soon as the backfill runs, and the next cleanup deletes them, so this cannot be undone. Without `--dry-run` the command prints the same table, warns how many keys will disappear when any are already past their new expiry, and asks for confirmation before writing. `--yes` skips only the question; the warning still prints. If stdin closes with no answer, as in a cron job, it writes nothing; a piped `y` or `yes` counts as confirmation. Running it again prints `No keys need a TTL.` It is safe to run while `denkeeper serve` is up: the backfill takes the database write lock before it reads, so a server write in the meantime waits for it instead of failing it.
+`ALREADY EXPIRED` counts keys whose new expiry is in the past. Those keys disappear from reads as soon as the backfill runs, and the next cleanup deletes them, so this cannot be undone. Without `--dry-run` the command prints the same table, warns how many keys will disappear when any are already past their new expiry, and asks for confirmation before writing. `--yes` skips only the question; the warning still prints. If stdin closes with no answer, as in a cron job, it writes nothing; a piped `y` or `yes` counts as confirmation. Running it again prints `No keys need a TTL.` It is safe to run while `denkeeper serve` is up: the backfill takes the database write lock before it reads, so a server write in the meantime waits for it, for up to 5 seconds, instead of failing it. The lock is held for the whole write pass, which takes well under a second even for tens of thousands of keys.
 
 | Flag | Description |
 |---|---|
