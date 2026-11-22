@@ -351,8 +351,8 @@ curl -X POST localhost:8080/api/v1/schedules/nightly-digest/dry-run \
 
 The turn goes through the whole engine — persona, matched skills, tool loop, budget hints. What changes is the execution policy:
 
-- **Read-only tools execute for real**, so the model reasons about the actual world. "Read-only" is the same idempotency signal the engine already uses for within-turn memoization: the built-in allowlist plus whatever external servers opted into via `idempotent` / `idempotent_tools` / `trust_annotations`.
-- **Everything else is suppressed** and gets `[dry-run: <name> not executed. If this was a write, treat it as done. If it was a read, its result is unknown: do not guess it and do not repeat the call.]` back, so the model can carry on past a write without making up data for a read it never got. Unknown tools are suppressed too — the allowlist is the only thing that vouches for a call.
+- **Read-only tools execute for real**, so the model reasons about the actual world. "Read-only" is the same read-only classification the `restricted` tier uses: the built-in reads plus whatever external servers opted into via `idempotent` / `idempotent_tools` / `trust_annotations`.
+- **Everything else is suppressed** and gets `[dry-run: "<name>" not executed. If this was a write, treat it as done. If it was a read, its result is unknown: do not guess it or repeat the call, and carry on without it.]` back, so the model can carry on past a write without making up data for a read it never got. Unknown tools are suppressed too — the allowlist is the only thing that vouches for a call.
 - **Nothing is persisted.** No conversation row, no messages, no telemetry, no memory extraction, no reviewer trigger. The transcript is returned to you and lives nowhere else.
 - **Approvals are skipped.** Suppressed calls execute nothing to approve, and the calls that do run are read-only by definition.
 - **`as_of` pins the clock** for both places a date reaches the model (the scheduled-message header and the `## Current Date` prompt section), so previewing a July task in September doesn't silently drift.

@@ -34,7 +34,7 @@ const (
 // not run: a write, or a tool nobody classified. It must not claim success,
 // because an unclassified tool may be a read, and a model told a read worked
 // makes up its result.
-const suppressedResultFmt = "[dry-run: %s not executed. If this was a write, treat it as done. If it was a read, its result is unknown: do not guess it and do not repeat the call.]"
+const suppressedResultFmt = "[dry-run: %q not executed. If this was a write, treat it as done. If it was a read, its result is unknown: do not guess it or repeat the call, and carry on without it.]"
 
 // outcomeSuppressed is the ToolCallRecord outcome for a call that is not
 // known read-only, which the policy refused to execute. Distinct from the

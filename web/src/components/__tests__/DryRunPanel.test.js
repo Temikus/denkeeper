@@ -44,7 +44,7 @@ function makeTranscript(overrides = {}) {
       {
         tool: 'kv_set', server: 'config', round: 2, outcome: 'suppressed', suppressed: true,
         duration_ms: 0, arguments: '{"key":"log:heartbeat:2026-07-06"}',
-        result: '[dry-run: kv_set not executed. If this was a write, treat it as done. If it was a read, its result is unknown: do not guess it and do not repeat the call.]',
+        result: '[dry-run: "kv_set" not executed. If this was a write, treat it as done. If it was a read, its result is unknown: do not guess it or repeat the call, and carry on without it.]',
       },
     ],
     ...overrides,
@@ -101,9 +101,9 @@ describe('DryRunPanel', () => {
     await clickRun()
 
     const row = await screen.findByText('kv_set')
-    expect(screen.queryByText(/kv_set not executed\. If this was a write/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/"kv_set" not executed\. If this was a write/)).not.toBeInTheDocument()
     await fireEvent.click(row.closest('button'))
-    expect(screen.getByText(/kv_set not executed\. If this was a write/)).toBeInTheDocument()
+    expect(screen.getByText(/"kv_set" not executed\. If this was a write/)).toBeInTheDocument()
   })
 
   test('surfaces an error inline with a retry', async () => {

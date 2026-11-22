@@ -391,10 +391,10 @@ func assertNeutralStub(t *testing.T, got, tool string) {
 func TestSuppressedToolResult_TellsTheModelBothHalves(t *testing.T) {
 	got := suppressedToolResult("search_emails")
 	for _, want := range []string{
-		"search_emails not executed",
+		`"search_emails" not executed`,
 		"If this was a write, treat it as done.",
 		"If it was a read, its result is unknown",
-		"do not guess it and do not repeat the call",
+		"do not guess it or repeat the call, and carry on without it",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("stub = %q, want it to contain %q", got, want)
