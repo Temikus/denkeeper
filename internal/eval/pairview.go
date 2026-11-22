@@ -168,6 +168,7 @@ func (s *Store) loadPairView(ctx context.Context, runID int64) (verdictInput, []
 	if err != nil {
 		return in, nil, err
 	}
+	retimeTasks(tasks, run.AsOf)
 	return in, tasks, nil
 }
 

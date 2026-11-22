@@ -193,6 +193,7 @@ func (s *Store) loadSummary(ctx context.Context, runID int64) (verdictInput, *Ru
 	if in.tasks, err = s.RunTasks(ctx, run); err != nil {
 		return in, nil, nil, err
 	}
+	retimeTasks(in.tasks, run.AsOf)
 	if in.samples, err = s.ListSamples(ctx, runID); err != nil {
 		return in, nil, nil, err
 	}

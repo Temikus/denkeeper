@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"fmt"
+	"regexp"
 	"time"
 )
 
@@ -37,6 +38,50 @@ func FormatScheduledTextWithPrev(name, skill string, fireTime, prevRun time.Time
 		return head + "]"
 	}
 	return fmt.Sprintf("%s | last run %s (%s ago)]", head, prevRun.In(loc).Format(time.RFC3339), humanAgo(fireTime.Sub(prevRun)))
+}
+
+// scheduledHeader matches a header FormatScheduledTextWithPrev wrote, at the
+// start of the text. The name is lazy but must be followed by a timestamp,
+// zone and ISO week, so a name containing " | " still parses.
+var scheduledHeader = regexp.MustCompile(
+	`^\[(Scheduled: |Scheduled trigger: )(.+?) \| (\S+) (\S+) \| \d{4}-W\d{2}(?: \| last run (\S+) \(\d+[mhd] ago\))?\]`)
+
+// RetimeScheduledText re-renders a scheduled header as if it fired at
+// fireTime, in the zone the header names. A last-run segment keeps its gap to
+// the fire time. Text after the header is kept. Anything it cannot parse is
+// returned unchanged with false.
+func RetimeScheduledText(text string, fireTime time.Time) (string, bool) {
+	m := scheduledHeader.FindStringSubmatchIndex(text)
+	if m == nil {
+		return text, false
+	}
+	group := func(i int) string {
+		if m[2*i] < 0 {
+			return ""
+		}
+		return text[m[2*i]:m[2*i+1]]
+	}
+	oldFire, err := time.Parse(time.RFC3339, group(3))
+	if err != nil {
+		return text, false
+	}
+	loc, err := time.LoadLocation(group(4))
+	if err != nil {
+		return text, false
+	}
+	var prev time.Time
+	if last := group(5); last != "" {
+		oldPrev, err := time.Parse(time.RFC3339, last)
+		if err != nil {
+			return text, false
+		}
+		prev = fireTime.Add(-oldFire.Sub(oldPrev))
+	}
+	name, skill := group(2), ""
+	if group(1) == "Scheduled: " {
+		name, skill = "", name
+	}
+	return FormatScheduledTextWithPrev(name, skill, fireTime, prev, loc) + text[m[1]:], true
 }
 
 // humanAgo renders a duration at the coarsest unit that still reads as
