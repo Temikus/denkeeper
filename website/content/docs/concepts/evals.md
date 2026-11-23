@@ -160,7 +160,7 @@ upgrade: judge win-rate 62% over 45 judged pair(s) meets the 55% threshold, and 
 
 `GET /api/v1/eval/runs/{id}/pairs` is the operator's unblinded view of the same evidence: which variant produced each side, every verdict with its dimensions and notes, and each pair's resolved outcome. It is REST-only on purpose — the judge's MCP surface must not be able to look up which variant produced which response while it can still judge.
 
-Over MCP, `eval_samples` returns a run's samples with the variant behind each one. It is refused until the run is terminal and every judgment item has a judge verdict, and from then on the run takes no more verdicts, so the MCP judge tools never show which variant is which while the run can still take verdicts. The REST `/pairs` and `/samples` views are unblinded and need only `eval:read`, so give a judge MCP access only. To judge a finished run again, for example under an edited rubric, start a new run.
+Over MCP, `eval_samples` returns a run's samples with the variant behind each one. It is refused until the run is terminal and every judgment item has a judge verdict, and from then on the run takes no more verdicts, so the MCP judge tools never show which variant is which while the run can still take verdicts. The REST `/pairs` and `/samples` views are unblinded and accept the same `eval:read` key, so connect the judge through MCP only: keep the key in the MCP client's config, and don't give the judge the key itself or a way to call the REST API. To judge a finished run again, for example under an edited rubric, start a new run.
 
 ## In the dashboard
 
