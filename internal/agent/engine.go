@@ -3376,7 +3376,10 @@ func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int
 	e.logger.Info("executing tool", "tool", tc.Function.Name, "round", round)
 	toolCtx, toolCancel := context.WithTimeout(ctx, toolExecTimeout)
 	defer toolCancel()
-	result, execErr := e.tools.Execute(toolCtx, tc)
+	// Only the structured value's size is used here: it goes to the audit
+	// detail, never the value itself.
+	res, execErr := e.tools.ExecuteResult(toolCtx, tc)
+	result := res.Text
 	toolDur := time.Since(toolStart)
 	record.DurationMs = toolDur.Milliseconds()
 
@@ -3404,7 +3407,7 @@ func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int
 			"duration_ms", toolDur.Milliseconds(), "result_len", len(result))
 	}
 
-	e.auditToolExecution(ctx, tc, round, convID, record.ServerName, result, execErr, toolDur)
+	e.auditToolExecution(ctx, tc, round, convID, record.ServerName, result, len(res.Structured), execErr, toolDur)
 
 	if onEvent != nil {
 		evt := ChatEvent{Type: "tool_end", Tool: tc.Function.Name, ToolID: tc.ID, Round: round, Duration: toolDur.Milliseconds()}
@@ -3419,14 +3422,18 @@ func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int
 
 // auditToolExecution records one executed tool call. The result body is capped
 // at 64 KB so a chatty tool cannot bloat the audit DB; a failed call stores the
-// error instead of a result.
-func (e *Engine) auditToolExecution(ctx context.Context, tc llm.ToolCall, round int, convID, serverName, result string, execErr error, dur time.Duration) {
+// error instead of a result. structuredBytes is the size of the call's MCP
+// structured content, recorded only when non-zero; the value is never stored.
+func (e *Engine) auditToolExecution(ctx context.Context, tc llm.ToolCall, round int, convID, serverName, result string, structuredBytes int, execErr error, dur time.Duration) {
 	status := audit.StatusOK
 	detail := map[string]any{
 		"tool":      tc.Function.Name,
 		"server":    serverName,
 		"round":     round,
 		"arguments": tc.Function.Arguments,
+	}
+	if structuredBytes > 0 {
+		detail["structured_bytes"] = structuredBytes
 	}
 	if execErr != nil {
 		status = audit.StatusError
