@@ -59,6 +59,14 @@ A skill with a `schedule:` trigger and no matching `[[schedules]]` entry will ne
 - **`max_tool_rounds`** — caps how many tool-call rounds this skill's turn may use, on top of the agent's own round limit. It can only lower the effective budget, never raise it, and only applies when this skill is the one driving the turn (a schedule naming it, or the sole matching `command:` trigger) — an ambient skill matching every message does not cap unrelated turns.
 - **`max_output_tokens`** — caps output tokens per completion for turns this skill drives. It shares its name and unit with the agent's [`max_output_tokens`](/docs/reference/config/), and follows the same rule as `max_tool_rounds` (applies only when this skill drives the turn). 0 or omitted means no skill cap. When a cap is set, on the agent or in [`[llm]`](/docs/reference/config/#llm), the skill's value can only lower it, never raise it. When neither the agent nor `[llm]` sets `max_output_tokens`, the skill's value is sent as is, even above the provider default (4096 on Anthropic), and a value above the model's own output limit makes every request fail. A cap that cuts off a tool call, or a reply with no text, ends the turn early with the `output_limit` wrap-up instead of running the half-written call; a text reply cut off by the cap is sent as far as it got, and its `llm` audit event carries `output_limit: true`.
 
+## Skill index
+
+Every turn, the system prompt lists all of the agent's skills under `## Available Skills`, one line each: the name, how the skill is triggered (its commands, the schedules that run it, or "always on"), and the first line of its `description`. So when you ask "what does /briefing do?", the agent knows `briefing` exists even though the message did not trigger it, and reads the skill with `skill_get` before describing it.
+
+A skill's instructions still load only on a turn that triggers it. The first line of `description` is what the agent sees on every turn, so keep it to one short line (longer text is cut at 120 characters). A skill whose `requires.tools` are missing is still listed. The list is capped at 8,000 bytes: past that, descriptions are left out, then the last skills by name.
+
+The index is on by default. Turn it off for the whole instance with `[skills] index = false`, or for one agent with `skill_index = false` in its `[[agents]]` entry; see the [configuration reference](/docs/reference/config/).
+
 ## Directory structure
 
 ```

@@ -285,7 +285,7 @@ When triggered, compile a briefing with:
 3. Any pending reminders
 ```
 
-Place skill files in `~/.denkeeper/skills/` (configurable via `[agent] skills_dir`). Subdirectories with a `SKILL.md` file are also supported. Skills with `triggers` are only injected when matched; skills without triggers are always included. A `schedule:<name>` trigger added at runtime must name an existing `[[schedules]]` entry; triggers a skill already carries are exempt.
+Place skill files in `~/.denkeeper/skills/` (configurable via `[agent] skills_dir`). Subdirectories with a `SKILL.md` file are also supported. Skills with `triggers` are only injected when matched; skills without triggers are always included. Every skill's name, triggers and description are listed in the prompt on each turn, so the agent knows about skills a message did not trigger. A `schedule:<name>` trigger added at runtime must name an existing `[[schedules]]` entry; triggers a skill already carries are exempt.
 
 Agent-specific skills in `<persona_dir>/skills/` override global skills of the same name.
 
