@@ -286,7 +286,7 @@ func TestEvalVerdict_RejectsBadWinnersAndDimensions(t *testing.T) {
 }
 
 func TestEvalSummaryAndRunStatus(t *testing.T) {
-	s, _, runID := evalServer(t)
+	s, store, runID := evalServer(t)
 
 	res, _, _ := s.handleEvalRunStatus(evalReadCtx(), nil, evalRunInput{RunID: runID})
 	if res.IsError {
@@ -300,6 +300,8 @@ func TestEvalSummaryAndRunStatus(t *testing.T) {
 		t.Errorf("status = %+v, want terminal with 1 pair and 2 pending items", status)
 	}
 
+	// The full summary opens once every item has a judge verdict.
+	judgeEvalRun(t, store, runID)
 	res, _, _ = s.handleEvalSummary(evalReadCtx(), nil, evalRunInput{RunID: runID})
 	if res.IsError {
 		t.Fatalf("eval_summary: %s", toolResultText(res))
@@ -585,56 +587,106 @@ func TestEvalTools_NoIdentityWhileItemsPending(t *testing.T) {
 	}
 
 	// eval_summary names the variants by design, so it is checked for the
-	// thing that maps a response to one: per-task variant means.
+	// things that tie a response to one; see TestEvalSummary_WithheldWhileItemsPending.
 	res, _, _ = s.handleEvalSummary(ctx, nil, evalRunInput{RunID: runID})
-	if !strings.Contains(toolResultText(res), `"per_task":[]`) {
-		t.Errorf("eval_summary carries per-task data while items are pending: %s", toolResultText(res))
+	assertSummaryWithheld(t, toolResultText(res))
+}
+
+// withheldSummaryKeys are the eval_summary keys that can tie a response to its
+// variant on a one-task run. None may appear while the run takes verdicts.
+var withheldSummaryKeys = []string{
+	`"per_task"`, `"variants"`, `"mean_rounds"`, `"mean_cost_per_task"`, `"mean_latency_ms"`,
+	`"total_cost"`, `"cost_spent"`, `"gates"`, `"delta"`, `"categories"`, `"verdicts"`, `"verdict"`,
+	`"reason"`, `"divergence"`, `"wins"`, `"losses"`, `"ties"`, `"win_rate"`,
+}
+
+func assertSummaryWithheld(t *testing.T, out string) {
+	t.Helper()
+	for _, key := range withheldSummaryKeys {
+		if strings.Contains(out, key) {
+			t.Errorf("eval_summary carries %s while items are pending: %s", key, out)
+		}
 	}
 }
 
-// While a run can still take verdicts, eval_summary carries no per-task
-// variant means: with k=1 a judge could match a response's rounds on
-// eval_get_pair to the variant that had them.
-func TestEvalSummary_PerTaskHiddenWhileItemsPending(t *testing.T) {
+// The evalServer fixture is a one-task, k=1 run: the case where any
+// per-variant figure ties a response on eval_get_pair to its variant.
+func TestEvalSummary_WithheldWhileItemsPending(t *testing.T) {
 	s, _, runID := evalServer(t)
 
 	res, _, _ := s.handleEvalSummary(evalReadCtx(), nil, evalRunInput{RunID: runID})
 	if res.IsError {
 		t.Fatalf("eval_summary: %s", toolResultText(res))
 	}
-	var got struct {
-		PerTask     []json.RawMessage     `json:"per_task"`
-		PerTaskNote string                `json:"per_task_note"`
-		Verdicts    []eval.VariantVerdict `json:"verdicts"`
-	}
-	if err := json.Unmarshal([]byte(toolResultText(res)), &got); err != nil {
+	out := toolResultText(res)
+	assertSummaryWithheld(t, out)
+
+	var got evalSummaryClosed
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if got.PerTask == nil || len(got.PerTask) != 0 {
-		t.Errorf("per_task = %v, want an empty array while items are pending", got.PerTask)
+	if !strings.Contains(got.WithheldNote, "2 judgment items pending") ||
+		!strings.Contains(got.WithheldNote, "per-variant breakdown and verdict") {
+		t.Errorf("withheld_note = %q, want it to say why", got.WithheldNote)
 	}
-	if !strings.Contains(got.PerTaskNote, "2 judgment items pending") {
-		t.Errorf("per_task_note = %q, want it to say why", got.PerTaskNote)
+	if got.RunID != runID || got.Completeness.Pairs != 1 || got.Completeness.SamplesOK != 2 {
+		t.Errorf("closed summary = %+v, want the run's completeness", got)
 	}
-	if len(got.Verdicts) != 1 {
-		t.Errorf("verdicts = %d, want the aggregate verdict kept", len(got.Verdicts))
+	if len(got.Judgments) != 1 || got.Judgments[0].Variant != "candidate" || got.Judgments[0].Pairs != 1 {
+		t.Errorf("judgments = %+v, want one candidate block", got.Judgments)
 	}
 }
 
-func TestEvalSummary_PerTaskReturnedWhenFullyJudged(t *testing.T) {
+// Calibration reads the agreement figure mid-run: the operator marks an item,
+// the judge rules on it, and the other item is still pending.
+func TestEvalSummary_AgreementVisibleMidCalibration(t *testing.T) {
+	s, store, runID := evalServer(t)
+	items, err := store.ListItems(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("ListItems: %v", err)
+	}
+	for _, ident := range []string{eval.JudgeOperator, "judge-key"} {
+		if _, err := store.RecordVerdict(context.Background(), eval.Verdict{
+			ItemID: items[0].ID, Winner: eval.WinnerA, JudgeIdent: ident,
+		}); err != nil {
+			t.Fatalf("RecordVerdict(%s): %v", ident, err)
+		}
+	}
+
+	res, _, _ := s.handleEvalSummary(evalReadCtx(), nil, evalRunInput{RunID: runID})
+	out := toolResultText(res)
+	assertSummaryWithheld(t, out)
+	var got evalSummaryClosed
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got.Judgments) != 1 {
+		t.Fatalf("judgments = %+v, want one", got.Judgments)
+	}
+	agr := got.Judgments[0].OperatorAgreement
+	if agr == nil || agr.Items != 1 || agr.Agreed != 1 || agr.Rate != 1 {
+		t.Errorf("operator_agreement = %+v, want 1 of 1 mid-calibration", agr)
+	}
+	if !strings.Contains(got.WithheldNote, "1 judgment item pending") {
+		t.Errorf("withheld_note = %q, want one pending item", got.WithheldNote)
+	}
+}
+
+func TestEvalSummary_EverythingReturnedWhenFullyJudged(t *testing.T) {
 	s, store, runID := evalServer(t)
 	judgeEvalRun(t, store, runID)
 
 	res, _, _ := s.handleEvalSummary(evalReadCtx(), nil, evalRunInput{RunID: runID})
-	var got struct {
-		PerTask     []eval.TaskMetrics `json:"per_task"`
-		PerTaskNote *string            `json:"per_task_note"`
+	out := toolResultText(res)
+	if strings.Contains(out, "withheld_note") || strings.Contains(out, `"judgments"`) {
+		t.Errorf("fully judged summary still carries the closed shape: %s", out)
 	}
-	if err := json.Unmarshal([]byte(toolResultText(res)), &got); err != nil {
+	var got eval.Summary
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if len(got.PerTask) != 1 || got.PerTaskNote != nil {
-		t.Errorf("per_task = %+v note = %v, want the task and no note", got.PerTask, got.PerTaskNote)
+	if len(got.PerTask) != 1 || len(got.Variants) != 2 || len(got.Verdicts) != 1 || len(got.Verdicts[0].Gates) == 0 {
+		t.Errorf("summary = %+v, want per_task, variants, verdict and gates", got)
 	}
 }
 

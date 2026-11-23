@@ -17,7 +17,8 @@ import (
 //
 // Blinding is server-side. eval_get_pair builds its payload from scratch in the
 // eval package. Anything that maps a response to its variant (eval_samples,
-// and eval_summary's per_task) passes identityRefusal, which opens only once
+// and all of eval_summary but completeness and the calibration figures)
+// passes identityRefusal, which opens only once
 // the run has no pending item: exactly when RecordVerdict stops taking judge
 // verdicts. REST /samples and /pairs stay ungated on purpose (operator view).
 
@@ -110,8 +111,10 @@ func (s *Server) registerEvalTools() {
 			"table with deltas and pass/fail, the judge win-rate over pairs both " +
 			"presentation orders agreed on, the operator-judge agreement figure, a " +
 			"per-category breakdown, and the verdict with its plain-language reason. " +
-			"'per_task' stays empty, with 'per_task_note' saying why, until the run is finished " +
-			"and every judgment item has a judge verdict. Requires 'eval:read' scope.",
+			"Until the run is finished and every judgment item has a judge verdict, it returns " +
+			"only completeness and, per candidate, the pair counts and the operator-judge " +
+			"agreement figure, with 'withheld_note' saying why the rest is held back. " +
+			"Requires 'eval:read' scope.",
 	}, s.handleEvalSummary)
 
 	mcp.AddTool(s.mcpServer, &mcp.Tool{
@@ -279,23 +282,63 @@ func (s *Server) handleEvalSummary(ctx context.Context, _ *mcp.CallToolRequest, 
 		return toolError("summarizing run: " + err.Error()), nil, nil
 	}
 	refusal, err := identityRefusal(ctx, store, input.RunID,
-		"per_task pairs each variant with its per-task means, which match a response's rounds on eval_get_pair")
+		"the per-variant breakdown and verdict can tie a response on eval_get_pair to its variant")
 	if err != nil {
 		return toolError("summarizing run: " + err.Error()), nil, nil
 	}
-	out := evalSummaryResult{Summary: summary}
+	var out any = summary
 	if refusal != "" {
-		summary.PerTask = []eval.TaskMetrics{}
-		out.PerTaskNote = refusal
+		out = closedSummary(summary, refusal)
 	}
 	r, jsonErr := toolJSON(out)
 	return r, nil, jsonErr
 }
 
-// evalSummaryResult is the summary plus, while per_task is withheld, why.
-type evalSummaryResult struct {
-	*eval.Summary
-	PerTaskNote string `json:"per_task_note,omitempty"`
+// evalSummaryClosed is eval_summary while identityRefusal is closed. It is
+// built field by field, not filtered from eval.Summary, so a field added to
+// the summary later stays hidden until the gate opens.
+type evalSummaryClosed struct {
+	RunID        int64             `json:"run_id"`
+	Status       string            `json:"status"`
+	BaseAgent    string            `json:"base_agent"`
+	TaskSet      string            `json:"task_set"`
+	K            int               `json:"k"`
+	Completeness eval.Completeness `json:"completeness"`
+	Judgments    []closedJudgment  `json:"judgments"`
+	WithheldNote string            `json:"withheld_note"`
+}
+
+// closedJudgment is the part of a candidate's judgment calibration reads.
+// Wins, losses, ties and win rate are left out: the tally moves when a pair
+// is fully judged, which tells the judge which side it preferred while it can
+// still re-judge that pair.
+type closedJudgment struct {
+	VariantID         int64           `json:"variant_id"`
+	Variant           string          `json:"variant"`
+	Baseline          string          `json:"baseline"`
+	Pairs             int             `json:"pairs"`
+	JudgedPairs       int             `json:"judged_pairs"`
+	OperatorAgreement *eval.Agreement `json:"operator_agreement,omitempty"`
+	RubricVersions    []string        `json:"rubric_versions,omitempty"`
+	JudgeIdents       []string        `json:"judge_idents,omitempty"`
+}
+
+func closedSummary(s *eval.Summary, refusal string) evalSummaryClosed {
+	out := evalSummaryClosed{
+		RunID: s.RunID, Status: s.Status, BaseAgent: s.BaseAgent, TaskSet: s.TaskSet, K: s.K,
+		Completeness: s.Completeness,
+		Judgments:    make([]closedJudgment, 0, len(s.Verdicts)),
+		WithheldNote: refusal,
+	}
+	for _, v := range s.Verdicts {
+		j := v.Judgment
+		out.Judgments = append(out.Judgments, closedJudgment{
+			VariantID: v.VariantID, Variant: v.Variant, Baseline: v.Baseline,
+			Pairs: j.Pairs, JudgedPairs: j.JudgedPairs, OperatorAgreement: j.OperatorAgreement,
+			RubricVersions: j.RubricVersions, JudgeIdents: j.JudgeIdents,
+		})
+	}
+	return out
 }
 
 // evalSummaryOpts mirrors the REST handler's: a nil config leaves the fields

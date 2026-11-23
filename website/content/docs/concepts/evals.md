@@ -116,7 +116,7 @@ When a run reaches a terminal state it **pairs itself**: for each (task, k) it p
 
 Blinding is total and the payload is **built rather than filtered** — withheld: variant name, model, provider, serving upstream, cost, latency, token usage, tool-call duration (a consistently slower side is an identity hint), and the sample's conversation id. Filtering fails open the day a column is added; construction fails closed.
 
-The judge is Claude Code over Denkeeper's [MCP server](/docs/guides/mcp-server/), working the queue with `eval_pending` → `eval_get_pair` → `eval_verdict`, then reading `eval_summary` (its per-task numbers appear once every item has a judge verdict, so a summary read mid-calibration shows none). Give it a key scoped to `eval:read,eval:write` and nothing more: that key can judge a run but cannot start one, which is the right shape given runs spend real tokens.
+The judge is Claude Code over Denkeeper's [MCP server](/docs/guides/mcp-server/), working the queue with `eval_pending` → `eval_get_pair` → `eval_verdict`, then reading `eval_summary`. Over MCP, the per-variant breakdown and verdict appear only once every item has a judge verdict; before that `eval_summary` reports completeness and the agreement figure, so calibration still works mid-run. Give it a key scoped to `eval:read,eval:write` and nothing more: that key can judge a run but cannot start one, which is the right shape given runs spend real tokens.
 
 ```bash
 denkeeper keys create judge --scopes eval:read,eval:write
