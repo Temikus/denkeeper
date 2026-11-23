@@ -107,7 +107,7 @@ func (s *Server) registerEvalTools() {
 
 	mcp.AddTool(s.mcpServer, &mcp.Tool{
 		Name: "eval_summary",
-		Description: "Unblind and aggregate one run: per-variant objective metrics, the gate " +
+		Description: "Aggregate one run (unblinded once judging is done): per-variant objective metrics, the gate " +
 			"table with deltas and pass/fail, the judge win-rate over pairs both " +
 			"presentation orders agreed on, the operator-judge agreement figure, a " +
 			"per-category breakdown, and the verdict with its plain-language reason. " +

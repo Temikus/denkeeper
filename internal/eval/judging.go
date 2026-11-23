@@ -289,8 +289,8 @@ func checkVerdictWindow(ctx context.Context, tx *sqlx.Tx, v Verdict) error {
 	}
 	if v.JudgeIdent == JudgeOperator {
 		if item.Status == ItemJudged {
-			return fmt.Errorf("item %d already has a judge verdict; mark calibration items before they are judged; "+
-				"draw pending items with eval_pending 'sample_n' and mark those: %w", v.ItemID, ErrMarkNotBlind)
+			return fmt.Errorf("item %d already has a judge verdict, so a mark on it would not be blind. "+
+				"Draw pending items with eval_pending 'sample_n' and mark those before they are judged: %w", v.ItemID, ErrMarkNotBlind)
 		}
 		return nil
 	}

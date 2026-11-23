@@ -553,7 +553,7 @@ func TestEvalVerdict_OperatorMarkOnJudgedItemIsRefused(t *testing.T) {
 		ItemID: items[0].ID, Winner: "b", JudgeIdent: eval.JudgeOperator,
 	})
 	if !res.IsError || !strings.Contains(toolResultText(res), "already has a judge verdict") ||
-		!strings.Contains(toolResultText(res), "; draw pending items with eval_pending 'sample_n' and mark those") {
+		!strings.Contains(toolResultText(res), "so a mark on it would not be blind. Draw pending items with eval_pending 'sample_n' and mark those before they are judged") {
 		t.Errorf("operator mark on a judged item = %q, want refused", toolResultText(res))
 	}
 }
