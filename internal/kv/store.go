@@ -67,9 +67,10 @@ type Store interface {
 	Delete(ctx context.Context, agent, key string) error
 	List(ctx context.Context, agent, prefix string) ([]Entry, error)
 	SetNX(ctx context.Context, agent, key, value string, ttl time.Duration) (bool, error)
-	// SetWriter records which skill last wrote key. Set and SetNX reset it to
-	// "", so call it after the write, passing the value written: it stamps
-	// only while key still holds that value. A missing key is not an error.
+	// SetWriter records which skill last wrote key. Set and a SetNX that
+	// acquires the key reset it to ""; a refused SetNX leaves it alone. Call
+	// it after the write, passing the value written: it stamps only while key
+	// still holds that value. A missing key is not an error.
 	SetWriter(ctx context.Context, agent, key, value, skill string) error
 	Cleanup(ctx context.Context) error
 	Close() error
