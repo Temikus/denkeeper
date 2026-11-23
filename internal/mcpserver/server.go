@@ -202,6 +202,7 @@ func (s *Server) registerTools() {
 	s.registerApprovalTools()
 	s.registerToolMgmtTools()
 	s.registerAuditTools()
+	s.registerOpsTools()
 	s.registerDeciderTools()
 	s.registerEvalTools()
 	s.registerTaskTools()

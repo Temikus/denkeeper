@@ -86,6 +86,12 @@ func (s *Server) registerTools() {
 	if s.deps.AuditStore != nil && s.deps.AgentName != "" {
 		s.registerAuditTools()
 	}
+
+	// Own health report. The agent is AgentName, so without one there is
+	// nothing to scope to.
+	if s.deps.OpsReport != nil && s.deps.AgentName != "" {
+		s.registerOpsTools()
+	}
 }
 
 // registerSkillTools registers the skill_* tools, each gated on the deps its

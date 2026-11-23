@@ -37,6 +37,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/llm/pricing"
 	"github.com/Temikus/denkeeper/internal/mcpserver"
 	"github.com/Temikus/denkeeper/internal/onboarding/chatapp"
+	"github.com/Temikus/denkeeper/internal/opsreport"
 	dkotel "github.com/Temikus/denkeeper/internal/otel"
 	"github.com/Temikus/denkeeper/internal/persona"
 	"github.com/Temikus/denkeeper/internal/plugin"
@@ -289,6 +290,15 @@ func auditReader(st *audit.SQLiteStore) audit.Store {
 		return nil
 	}
 	return st
+}
+
+// opsScheduleSource boxes the scheduler for opsreport.New, which needs a nil
+// interface rather than a nil pointer to leave schedules out.
+func opsScheduleSource(s *scheduler.Scheduler) opsreport.ScheduleSource {
+	if s == nil {
+		return nil
+	}
+	return s
 }
 
 // closeStores closes all persistence stores in reverse order.
@@ -929,6 +939,7 @@ func connectConfigMCP(ctx context.Context, agentName, skillsDir string, e *agent
 		ActiveChannelsForChannel: abc.dispatcher.ActiveChannelsForChannel,
 		Auditor:                  abc.auditor,
 		AuditStore:               abc.auditStore,
+		OpsReport:                opsreport.New(abc.memory, abc.kvStore, opsScheduleSource(abc.sched), abc.auditStore),
 		IsSkillPinned:            buildIsSkillPinned(agentName, abc.memory),
 		BumpSkillView:            buildSkillBump(abc.memory, abc.logger, "view"),
 		BumpSkillPatch:           buildSkillBump(abc.memory, abc.logger, "patch"),

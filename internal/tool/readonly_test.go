@@ -146,3 +146,17 @@ func TestIsReadOnly_ParentDelegation(t *testing.T) {
 		t.Error("IsReadOnly via parent delegation = false, want true")
 	}
 }
+
+// ops_report only reads, so restricted-tier and dry-run turns may run it,
+// but two calls in one turn can see different numbers, so it is not cached.
+func TestIsReadOnly_OpsReportReadOnlyNotIdempotent(t *testing.T) {
+	m := NewManager(testLogger())
+	m.toolMap["ops_report"] = &serverConn{name: "config-default"}
+
+	if !m.IsReadOnly("ops_report") {
+		t.Error("IsReadOnly(ops_report) = false, want true")
+	}
+	if m.IsIdempotent("ops_report") {
+		t.Error("IsIdempotent(ops_report) = true, want false")
+	}
+}
