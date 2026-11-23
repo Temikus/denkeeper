@@ -467,6 +467,36 @@ func TestRender_YAMLPriorWithoutFrontmatterWritesFreshBlock(t *testing.T) {
 	}
 }
 
+// The closing +++ must be a line of its own, as YAML's --- is. Before, the
+// first +++ anywhere ended the block, so a description holding one, written by
+// an approved edit, failed to parse on the next load and the skill vanished.
+func TestTOML_DescriptionWithPlusesRoundTrips(t *testing.T) {
+	for _, desc := range []string{"Ship it +++ fast", "line one\n+++\nline two", "+++"} {
+		created := RenderNew(Fields{Name: "demo", Description: desc}, "body")
+		got := mustParse(t, created)
+		if got.Description != desc || got.Body != "body" {
+			t.Errorf("RenderNew(%q) reparsed as description %q, body %q", desc, got.Description, got.Body)
+		}
+
+		edited := renderOK(t, mustParse(t, "+++\nname = \"demo\"\nlicense = \"MIT\"\n+++\n\nbody"),
+			Fields{Name: "demo", Description: desc}, "body")
+		got = mustParse(t, edited)
+		if got.Description != desc || !strings.Contains(got.Frontmatter, "license") {
+			t.Errorf("Render(%q) reparsed as description %q, frontmatter:\n%s", desc, got.Description, got.Frontmatter)
+		}
+	}
+}
+
+func TestTOML_ClosingDelimiterIsALineOfItsOwn(t *testing.T) {
+	got := mustParse(t, "+++\nname = \"demo\"\ndescription = \"a +++ b\"\n+++\n\n+++ is fine in the body too")
+	if got.Description != "a +++ b" || got.Body != "+++ is fine in the body too" {
+		t.Errorf("parsed description %q, body %q", got.Description, got.Body)
+	}
+	if _, err := ParseFile("x.md", []byte("+++\nname = \"demo\"\n+++ trailing\nbody")); err == nil {
+		t.Error("a +++ line with trailing text closed the block")
+	}
+}
+
 func TestRender_EmptyNameIsAnError(t *testing.T) {
 	prior := mustParse(t, "---\nname: demo\n---\nbody")
 	if _, err := Render(*prior, Fields{}, "body"); err == nil {

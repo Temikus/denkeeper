@@ -613,17 +613,22 @@ func MergeSkillFields(name string, existing skill.Skill, desc, ver *string, trig
 		Name: name, Description: description, Version: version, Triggers: trig,
 		MaxToolRounds: rounds, MaxOutputTokens: outTokens, RequiresTools: reqTools,
 	}, b)
-	return payload, explainRenderError(err)
+	return payload, explainRenderError(err, existing)
 }
 
 // explainRenderError says what a reader can do when the unknown-key guard in
-// skill.Render refuses a rewrite. Other errors pass through unchanged.
-func explainRenderError(err error) error {
-	if errors.Is(err, skill.ErrUnknownKeysChanged) {
-		return fmt.Errorf("the edit was not saved: denkeeper could not rewrite this skill's frontmatter "+
-			"without changing keys it does not read. Edit the file by hand (%w)", err)
+// skill.Render refuses a rewrite, naming the file when the skill knows it (only
+// a directory-form skill records its path). Other errors pass through unchanged.
+func explainRenderError(err error, existing skill.Skill) error {
+	if !errors.Is(err, skill.ErrUnknownKeysChanged) {
+		return err
 	}
-	return err
+	where := "the skill's file in the agent's skills directory"
+	if existing.Dir != "" {
+		where = filepath.Join(existing.Dir, "SKILL.md")
+	}
+	return fmt.Errorf("the edit was not saved: denkeeper could not rewrite this skill's frontmatter "+
+		"without changing keys it does not read. Edit %s by hand (%w)", where, err)
 }
 
 func (s *Server) handleSkillUpdate(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {

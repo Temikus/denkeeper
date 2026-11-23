@@ -106,39 +106,40 @@ type splitResult struct {
 	blockStart int
 }
 
-// splitFrontmatter finds the dialect, the block and the trimmed body.
+// splitFrontmatter finds the dialect, the block and the trimmed body. Both
+// delimiters must be lines of their own, so a +++ or --- inside a value or the
+// body never ends the block.
 func splitFrontmatter(path, text string) (splitResult, error) {
-	if strings.HasPrefix(text, "+++") {
-		rest := text[3:]
-		idx := strings.Index(rest, "+++")
-		if idx == -1 {
-			return splitResult{}, fmt.Errorf("skill %q: missing closing +++ delimiter", path)
-		}
-		return splitResult{dialect: DialectTOML, block: strings.Trim(rest[:idx], "\r\n"), body: strings.TrimSpace(rest[idx+3:])}, nil
-	}
 	firstLine, rest, _ := strings.Cut(text, "\n")
-	if !isYAMLDelimiter(firstLine) {
+	var dialect Dialect
+	switch {
+	case isDelimiterLine(firstLine, "+++"):
+		dialect = DialectTOML
+	case isDelimiterLine(firstLine, "---"):
+		dialect = DialectYAML
+	default:
 		return splitResult{}, fmt.Errorf("skill %q: missing opening frontmatter delimiter (+++ or ---)", path)
 	}
-	block, body, lead, ok := splitYAML(rest)
+	delim := dialect.delimiter()
+	block, body, lead, ok := splitBlock(rest, delim)
 	if !ok {
-		return splitResult{}, fmt.Errorf("skill %q: missing closing --- delimiter", path)
+		return splitResult{}, fmt.Errorf("skill %q: missing closing %s delimiter", path, delim)
 	}
-	return splitResult{dialect: DialectYAML, block: block, body: body, blockStart: len(firstLine) + 1 + lead}, nil
+	return splitResult{dialect: dialect, block: block, body: body, blockStart: len(firstLine) + 1 + lead}, nil
 }
 
-func isYAMLDelimiter(line string) bool {
-	return strings.TrimRight(line, " \t\r") == "---"
+func isDelimiterLine(line, delim string) bool {
+	return strings.TrimRight(line, " \t\r") == delim
 }
 
-// splitYAML ends the block at the first line that is exactly ---. Later ---
-// lines belong to the body, so a markdown rule there is safe. lead is how
-// many CR/LF bytes were trimmed from the front of the block.
-func splitYAML(rest string) (block, body string, lead int, ok bool) {
+// splitBlock ends the block at the first line that is exactly delim. Later
+// delim lines belong to the body, so a markdown rule there is safe. lead is
+// how many CR/LF bytes were trimmed from the front of the block.
+func splitBlock(rest, delim string) (block, body string, lead int, ok bool) {
 	pos := 0
 	for pos <= len(rest) {
 		line, after, more := strings.Cut(rest[pos:], "\n")
-		if isYAMLDelimiter(line) {
+		if isDelimiterLine(line, delim) {
 			raw := rest[:pos]
 			lead = len(raw) - len(strings.TrimLeft(raw, "\r\n"))
 			return strings.Trim(raw, "\r\n"), strings.TrimSpace(after), lead, true

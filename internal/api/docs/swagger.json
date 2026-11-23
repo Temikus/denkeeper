@@ -7416,6 +7416,15 @@
                             }
                         }
                     },
+                    "422": {
+                        "description": "The frontmatter cannot be rewritten without changing keys denkeeper does not read; edit the file by hand",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "500": {
                         "description": "Update failed",
                         "schema": {

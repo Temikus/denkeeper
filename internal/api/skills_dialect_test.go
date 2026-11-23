@@ -2,6 +2,8 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +14,19 @@ import (
 
 	"github.com/Temikus/denkeeper/internal/skill"
 )
+
+// The unknown-key refusal is the caller's file, not a server fault. No known
+// input reaches the guard, so the mapping is tested on the wrapped error the
+// handler sees.
+func TestSkillRenderStatus_UnknownKeysIs422(t *testing.T) {
+	refused := fmt.Errorf("building skill: the edit was not saved (%w)", skill.ErrUnknownKeysChanged)
+	if got := skillRenderStatus(refused); got != http.StatusUnprocessableEntity {
+		t.Errorf("unknown-key refusal status = %d, want 422", got)
+	}
+	if got := skillRenderStatus(errors.New("skill: rewriting frontmatter: encode failed")); got != http.StatusInternalServerError {
+		t.Errorf("other render error status = %d, want 500", got)
+	}
+}
 
 const apiYAMLSkill = "---\n" +
 	"name: kelos\n" +

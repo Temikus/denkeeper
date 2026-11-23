@@ -54,8 +54,8 @@ metadata:
 
 - Both forms use the same keys: `name`, `description`, `version`, `triggers`, `requires.tools`, `max_tool_rounds` and `max_output_tokens`. Denkeeper ignores other keys, such as `license` and `metadata` above, but keeps them when the skill is edited.
 - A skill keeps the form it was written in. New skills are written as TOML.
-- Anchors, aliases, merge keys, explicit tags (such as `!!binary`) and duplicate keys are refused. A refused file is skipped, and the server log has a warning that names the file and the reason, with the line.
-- Any `.md` file in a skills directory that starts with `---` and has a `name` key loads as a skill.
+- Anchors, aliases, merge keys, explicit tags (such as `!!binary`) and duplicate keys are refused. A refused file is skipped, and the server log has a warning that names the file and the reason, with the line where there is one.
+- Every top-level `.md` file in a skills directory, and every `SKILL.md` one folder down, loads as a skill when it starts with `---` or `+++` and has a `name` key. Check a downloaded skill for those before copying it in, because a skill without triggers is ambient.
 - A skill with no `triggers` is ambient in either form, so its body goes into every prompt. Most skills.sh skills have no triggers: add a `command:` trigger to use one only on demand.
 
 ### What an edit keeps

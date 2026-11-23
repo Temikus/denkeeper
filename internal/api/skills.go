@@ -244,6 +244,7 @@ type skillUpdateInput struct {
 // @Failure 400 {object} map[string]string "Invalid input"
 // @Failure 404 {object} map[string]string "Agent or skill not found"
 // @Failure 409 {object} map[string]string "New name conflicts with existing skill"
+// @Failure 422 {object} map[string]string "The frontmatter cannot be rewritten without changing keys denkeeper does not read; edit the file by hand"
 // @Failure 500 {object} map[string]string "Update failed"
 // @Failure 503 {object} map[string]string "Skill management unavailable"
 // @Router /skills/{agent}/{name} [put]
@@ -318,18 +319,26 @@ func (s *Server) handleUpdateSkill(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, skillWriteResponse{Name: newName, Agent: agentName, Status: "updated", Warnings: warnings})
 }
 
-// buildSkillUpdate renders and lints an edit. A render failure is a 500, a
-// lint refusal a 400.
+// buildSkillUpdate renders and lints an edit. The unknown-key refusal is a
+// 422 (the request is fine, this file cannot take it); any other render
+// failure is a 500; a lint refusal is a 400.
 func (s *Server) buildSkillUpdate(newName string, existing skill.Skill, input skillUpdateInput) (string, []string, int, error) {
 	payload, err := configmcp.MergeSkillFields(newName, existing, input.Description, input.Version, input.Triggers, input.Body, input.MaxToolRounds, input.MaxOutputTokens, input.RequiresTools)
 	if err != nil {
-		return "", nil, http.StatusInternalServerError, fmt.Errorf("building skill: %w", err)
+		return "", nil, skillRenderStatus(err), fmt.Errorf("building skill: %w", err)
 	}
 	warnings, err := configmcp.LintSkillWrite(s.scheduleLookup(), &existing, payload)
 	if err != nil {
 		return "", nil, http.StatusBadRequest, err
 	}
 	return payload, warnings, http.StatusOK, nil
+}
+
+func skillRenderStatus(err error) int {
+	if errors.Is(err, skill.ErrUnknownKeysChanged) {
+		return http.StatusUnprocessableEntity
+	}
+	return http.StatusInternalServerError
 }
 
 // scheduleLookup keeps a nil *Scheduler from becoming a non-nil interface.
