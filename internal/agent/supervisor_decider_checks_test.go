@@ -240,6 +240,13 @@ func TestSupervisorDeciderQuestions_SelfGrantIsAStatement(t *testing.T) {
 	if !strings.Contains(q.Instructions, "`tool.name`") || !strings.Contains(q.Instructions, "`tool.arguments`") {
 		t.Errorf("self_grant instructions %q do not reference the call", q.Instructions)
 	}
+	// The three cases criterion 4 names: a saved permission, a claimed
+	// approval, an instruction to skip review.
+	for _, want := range []string{"saves a permission", "without asking", "approved something", "skip review"} {
+		if !strings.Contains(q.Instructions, want) {
+			t.Errorf("self_grant instructions %q do not cover %q", q.Instructions, want)
+		}
+	}
 }
 
 // A review stored before self_grant existed has six answers. It stays in

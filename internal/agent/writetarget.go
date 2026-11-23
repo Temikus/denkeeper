@@ -19,25 +19,53 @@ const (
 	WriteActionCreate = "create"
 	WriteActionUpdate = "update"
 	WriteActionDelete = "delete"
+	WriteActionRename = "rename" // skill_update with a new_name
 )
 
 // WriteTarget is what a write tool call would create, replace or delete.
 type WriteTarget struct {
 	Kind          string     `json:"kind"`   // WriteTargetSkill or WriteTargetKVKey
 	Name          string     `json:"name"`   // skill name or KV key, as the model chose it
-	Action        string     `json:"action"` // WriteActionCreate, WriteActionUpdate or WriteActionDelete
+	Action        string     `json:"action"` // one of the WriteAction constants
 	Exists        bool       `json:"exists"`
 	LastWrittenBy string     `json:"last_written_by,omitempty"` // KV only; "" = not recorded
 	UpdatedAt     *time.Time `json:"updated_at,omitempty"`      // KV only
+	NewName       string     `json:"new_name,omitempty"`        // rename only: the destination name
+	NewNameExists bool       `json:"new_name_exists,omitempty"` // rename only: a skill already has NewName
 }
 
 // KVTargetStore is the KV state a write target needs, kept as an interface so
 // agent does not import kv. StampKVWriter is called only by the engine after a
 // successful kv_set: no other path may set the writer, or an agent could forge
-// "last written by <trusted skill>".
+// "last written by <trusted skill>". It stamps only while the key still holds
+// value, so a newer concurrent write is never attributed to this one.
 type KVTargetStore interface {
 	KVTarget(ctx context.Context, agent, key string) (exists bool, lastWrittenBy string, updatedAt time.Time, err error)
-	StampKVWriter(ctx context.Context, agent, key, skill string) error
+	StampKVWriter(ctx context.Context, agent, key, value, skill string) error
+}
+
+// SetSkillFileCheck wires the on-disk existence check the skill_create
+// handler uses, so a create it will refuse is not shown as a fresh one. Nil
+// means loaded skills only.
+func (e *Engine) SetSkillFileCheck(fn func(name string) (bool, error)) {
+	e.kvTargetsMu.Lock()
+	defer e.kvTargetsMu.Unlock()
+	e.skillFileExists = fn
+}
+
+// skillExists answers the way the skill_create handler does: a loaded skill,
+// or a file for it in the agent's skills directory.
+func (e *Engine) skillExists(name string) (bool, error) {
+	if _, ok := e.GetSkill(name); ok {
+		return true, nil
+	}
+	e.kvTargetsMu.RLock()
+	fn := e.skillFileExists
+	e.kvTargetsMu.RUnlock()
+	if fn == nil {
+		return false, nil
+	}
+	return fn(name)
 }
 
 // SetKVTargets wires the KV store. Nil (KV off) means KV calls get no target
@@ -87,6 +115,17 @@ type skillFileArgs struct {
 
 type kvTargetArgs struct {
 	Key string `json:"key"`
+}
+
+// skillRenameArgs reads skill_update's new_name, the handler's rename field.
+type skillRenameArgs struct {
+	NewName *string `json:"new_name"`
+}
+
+// kvWriteArgs reads what kv_set and kv_set_nx wrote, for the writer stamp.
+type kvWriteArgs struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
 }
 
 // targetArg decodes only the argument named by argKey. "" means the
@@ -141,11 +180,36 @@ func (e *Engine) ResolveWriteTarget(ctx context.Context, toolName, arguments str
 		return nil
 	}
 	if spec.kind == WriteTargetSkill {
-		// skill_update with new_name still reports name; the rename is in the arguments.
-		_, exists := e.GetSkill(name)
-		return &WriteTarget{Kind: spec.kind, Name: name, Action: spec.action, Exists: exists}
+		return e.resolveSkillTarget(local, spec, name, arguments)
 	}
 	return e.resolveKVTarget(ctx, spec, name)
+}
+
+func (e *Engine) resolveSkillTarget(local string, spec writeToolSpec, name, arguments string) *WriteTarget {
+	exists, err := e.skillExists(name)
+	if err != nil {
+		e.logger.Warn("supervisor: skill target lookup failed", "skill", name, "error", err)
+		return nil
+	}
+	t := &WriteTarget{Kind: spec.kind, Name: name, Action: spec.action, Exists: exists}
+	if local != "skill_update" {
+		return t
+	}
+	var r skillRenameArgs
+	if json.Unmarshal([]byte(arguments), &r) != nil || r.NewName == nil {
+		return t
+	}
+	newName := strings.TrimSpace(*r.NewName)
+	if newName == "" || newName == name {
+		return t
+	}
+	newExists, err := e.skillExists(newName)
+	if err != nil {
+		e.logger.Warn("supervisor: skill target lookup failed", "skill", newName, "error", err)
+		return nil
+	}
+	t.Action, t.NewName, t.NewNameExists = WriteActionRename, newName, newExists
+	return t
 }
 
 func (e *Engine) resolveKVTarget(ctx context.Context, spec writeToolSpec, key string) *WriteTarget {
@@ -184,6 +248,12 @@ func (t *WriteTarget) markdownLine() string {
 	}
 	if t.Kind == WriteTargetSkill {
 		switch t.Action {
+		case WriteActionRename:
+			dest := "does not exist"
+			if t.NewNameExists {
+				dest = "already exists"
+			}
+			return fmt.Sprintf("**Target**: skill %q already exists. This call renames it to %q, which %s.", t.Name, t.NewName, dest)
 		case WriteActionCreate:
 			return fmt.Sprintf("**Target**: skill %q already exists. skill_create will be refused; the agent may be trying to overwrite it.", t.Name)
 		case WriteActionDelete:
@@ -218,13 +288,16 @@ func addTargetDetail(detail map[string]any, in *supervisorReviewInput) {
 	}
 }
 
-// stampKVWriter records the turn's skill as the writer of a key the call just
-// set. It runs only after a successful call; dry-run and eval turns never get
-// here, since their writes are suppressed before execution. A failed stamp is
-// logged and never fails the call.
+// stampKVWriter records the turn's scheduled skill as the writer of a key the
+// call just set. It runs only after a successful call; dry-run and eval turns
+// never get here, since their writes are suppressed before execution. The
+// stamp applies only while the key still holds the value this call wrote. A
+// failed stamp is logged and never fails the call.
 func (e *Engine) stampKVWriter(ctx context.Context, tc llm.ToolCall, result string) {
 	sk := agentctx.SkillContext(ctx)
-	if sk == nil || sk.Name == "" {
+	// Scheduled only: the writer is documented as "which scheduled skill's
+	// turn made the write", and only schedule-driven turns name their skill.
+	if sk == nil || sk.Name == "" || !sk.IsScheduled {
 		return
 	}
 	store := e.kvTargetStore()
@@ -235,11 +308,11 @@ func (e *Engine) stampKVWriter(ctx context.Context, tc llm.ToolCall, result stri
 	if !ok || !kvCallSetKey(local, result) {
 		return
 	}
-	var args kvTargetArgs
+	var args kvWriteArgs
 	if json.Unmarshal([]byte(tc.Function.Arguments), &args) != nil || args.Key == "" {
 		return
 	}
-	if err := store.StampKVWriter(ctx, e.name, args.Key, sk.Name); err != nil {
+	if err := store.StampKVWriter(ctx, e.name, args.Key, args.Value, sk.Name); err != nil {
 		e.logger.Warn("failed to record KV writer", "key", args.Key, "skill", sk.Name, "error", err)
 	}
 }

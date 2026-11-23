@@ -68,8 +68,9 @@ type Store interface {
 	List(ctx context.Context, agent, prefix string) ([]Entry, error)
 	SetNX(ctx context.Context, agent, key, value string, ttl time.Duration) (bool, error)
 	// SetWriter records which skill last wrote key. Set and SetNX reset it to
-	// "", so call it after the write. A missing key is not an error.
-	SetWriter(ctx context.Context, agent, key, skill string) error
+	// "", so call it after the write, passing the value written: it stamps
+	// only while key still holds that value. A missing key is not an error.
+	SetWriter(ctx context.Context, agent, key, value, skill string) error
 	Cleanup(ctx context.Context) error
 	Close() error
 }
@@ -286,11 +287,15 @@ func (s *SQLiteStore) SetNX(ctx context.Context, agent, key, value string, ttl t
 
 // SetWriter records skill as the last writer of a non-expired key. Only the
 // written_by column changes, so updated_at keeps the time of the value write.
-func (s *SQLiteStore) SetWriter(ctx context.Context, agent, key, skill string) error {
+//
+// The value condition keeps a concurrent write from being attributed to this
+// one: if another Set replaced the value after ours, its row keeps "".
+func (s *SQLiteStore) SetWriter(ctx context.Context, agent, key, value, skill string) error {
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE kv SET written_by = ?
-		 WHERE agent_name = ? AND key = ? AND (expires_at IS NULL OR expires_at > datetime('now'))`,
-		skill, agent, key,
+		 WHERE agent_name = ? AND key = ? AND value = ?
+		   AND (expires_at IS NULL OR expires_at > datetime('now'))`,
+		skill, agent, key, value,
 	)
 	if err != nil {
 		return fmt.Errorf("kv set writer %q: %w", key, err)

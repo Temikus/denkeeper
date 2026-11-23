@@ -29,8 +29,8 @@ func (a kvTargets) KVTarget(ctx context.Context, agent, key string) (bool, strin
 	return ok, e.WrittenBy, e.UpdatedAt, err
 }
 
-func (a kvTargets) StampKVWriter(ctx context.Context, agent, key, skill string) error {
-	return a.s.SetWriter(ctx, agent, key, skill)
+func (a kvTargets) StampKVWriter(ctx context.Context, agent, key, value, skill string) error {
+	return a.s.SetWriter(ctx, agent, key, value, skill)
 }
 
 type failingKVTargets struct{}
@@ -39,7 +39,7 @@ func (failingKVTargets) KVTarget(context.Context, string, string) (bool, string,
 	return false, "", time.Time{}, errors.New("database is locked")
 }
 
-func (failingKVTargets) StampKVWriter(context.Context, string, string, string) error {
+func (failingKVTargets) StampKVWriter(context.Context, string, string, string, string) error {
 	return errors.New("database is locked")
 }
 
@@ -137,7 +137,7 @@ func (f *targetFixture) seedKey(t *testing.T, key, writer string) {
 		t.Fatalf("Set: %v", err)
 	}
 	if writer != "" {
-		if err := f.kv.SetWriter(ctx, "default", key, writer); err != nil {
+		if err := f.kv.SetWriter(ctx, "default", key, "v", writer); err != nil {
 			t.Fatalf("SetWriter: %v", err)
 		}
 	}
@@ -482,5 +482,73 @@ func TestKVCallSetKey(t *testing.T) {
 	}
 	if kvCallSetKey("kv_delete", "ok") || kvCallSetKey("kv_get", "ok") {
 		t.Error("kv_delete and kv_get are not writes of a value")
+	}
+}
+
+// A skill context that is not a scheduled run (a dry-run "message" preview
+// sets SkillName without IsScheduled) must not stamp.
+func TestKVWriterStamp_NonScheduledSkillContextDoesNotStamp(t *testing.T) {
+	f := newTargetFixture(t, kvCallTurn("kv_set", `{"key":"digest:today","value":"v"}`))
+	msg := skillTurnMessage("stamp-unscheduled")
+	msg.IsScheduled = false
+	runTurn(t, f.engine, msg)
+
+	if got := f.writer(t, "digest:today"); got != "" {
+		t.Errorf("written_by = %q for a non-scheduled skill context, want empty", got)
+	}
+}
+
+// skill_create's handler refuses a name that exists on disk even when it is
+// not loaded; the target must say so.
+func TestResolveWriteTarget_SkillCreateSeesSkillOnDisk(t *testing.T) {
+	f := newTargetFixture(t, nil)
+	f.engine.SetSkillFileCheck(func(name string) (bool, error) { return name == "on-disk", nil })
+
+	got := f.engine.ResolveWriteTarget(context.Background(), "skill_create", `{"name":"on-disk","body":"x"}`)
+	if got == nil || !got.Exists || got.Action != WriteActionCreate {
+		t.Fatalf("target = %+v, want an existing skill with action create", got)
+	}
+	if !strings.Contains(got.markdownLine(), "skill_create will be refused") {
+		t.Errorf("target line = %q", got.markdownLine())
+	}
+	if got := f.engine.ResolveWriteTarget(context.Background(), "skill_create", `{"name":"fresh","body":"x"}`); got == nil || got.Exists {
+		t.Errorf("fresh target = %+v, want a missing skill", got)
+	}
+}
+
+func TestResolveWriteTarget_SkillFileCheckErrorGivesNoTarget(t *testing.T) {
+	f := newTargetFixture(t, nil)
+	f.engine.SetSkillFileCheck(func(string) (bool, error) { return false, errors.New("permission denied") })
+	if got := f.engine.ResolveWriteTarget(context.Background(), "skill_create", `{"name":"x","body":"x"}`); got != nil {
+		t.Errorf("target = %+v, want nil after a lookup error", got)
+	}
+}
+
+func TestResolveWriteTarget_SkillUpdateRenameShowsBothNames(t *testing.T) {
+	f := newTargetFixture(t, nil)
+	f.engine.SetSkillFileCheck(func(name string) (bool, error) { return name == "taken", nil })
+	ctx := context.Background()
+
+	got := f.engine.ResolveWriteTarget(ctx, "skill_update", `{"name":"daily-digest","new_name":"weekly"}`)
+	if got == nil || got.Action != WriteActionRename || got.Name != targetSkill || got.NewName != "weekly" || got.NewNameExists {
+		t.Fatalf("target = %+v, want a rename of daily-digest to a free name", got)
+	}
+	want := `**Target**: skill "daily-digest" already exists. This call renames it to "weekly", which does not exist.`
+	if got.markdownLine() != want {
+		t.Errorf("target line = %q, want %q", got.markdownLine(), want)
+	}
+
+	taken := f.engine.ResolveWriteTarget(ctx, "skill_update", `{"name":"daily-digest","new_name":"taken"}`)
+	if taken == nil || !taken.NewNameExists || !strings.HasSuffix(taken.markdownLine(), `renames it to "taken", which already exists.`) {
+		t.Errorf("rename onto an existing name = %+v", taken)
+	}
+
+	same := f.engine.ResolveWriteTarget(ctx, "skill_update", `{"name":"daily-digest","new_name":"daily-digest"}`)
+	if same == nil || same.Action != WriteActionUpdate || same.NewName != "" {
+		t.Errorf("new_name equal to name = %+v, want a plain update", same)
+	}
+	state, _ := json.Marshal(got)
+	if !strings.Contains(string(state), `"new_name":"weekly"`) {
+		t.Errorf("decider/audit JSON lacks new_name: %s", state)
 	}
 }

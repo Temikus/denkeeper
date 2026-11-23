@@ -622,7 +622,7 @@ func TestSetWriter_RecordsSkill(t *testing.T) {
 	if err := s.Set(ctx, "agent1", "k", "v", 0); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
-	if err := s.SetWriter(ctx, "agent1", "k", "daily-digest"); err != nil {
+	if err := s.SetWriter(ctx, "agent1", "k", "v", "daily-digest"); err != nil {
 		t.Fatalf("SetWriter: %v", err)
 	}
 	if e := mustGetEntry(t, s, "agent1", "k"); e.WrittenBy != "daily-digest" {
@@ -636,7 +636,7 @@ func TestSetWriter_ClearedBySet(t *testing.T) {
 	if err := s.Set(ctx, "agent1", "k", "v1", 0); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
-	if err := s.SetWriter(ctx, "agent1", "k", "daily-digest"); err != nil {
+	if err := s.SetWriter(ctx, "agent1", "k", "v1", "daily-digest"); err != nil {
 		t.Fatalf("SetWriter: %v", err)
 	}
 	if err := s.Set(ctx, "agent1", "k", "v2", 0); err != nil {
@@ -657,7 +657,7 @@ func TestSetWriter_ClearedBySetNXOnExpiredKey(t *testing.T) {
 	if err := s.Set(ctx, "agent1", "k", "v1", 0); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
-	if err := s.SetWriter(ctx, "agent1", "k", "daily-digest"); err != nil {
+	if err := s.SetWriter(ctx, "agent1", "k", "v1", "daily-digest"); err != nil {
 		t.Fatalf("SetWriter: %v", err)
 	}
 	// Expire the row so SetNX reuses the slot.
@@ -674,10 +674,29 @@ func TestSetWriter_ClearedBySetNXOnExpiredKey(t *testing.T) {
 	}
 }
 
+// A Set that lands between a write and its stamp must not be attributed to
+// the earlier writer's skill.
+func TestSetWriter_SkipsWhenValueChangedSinceTheWrite(t *testing.T) {
+	s := mustStore(t)
+	ctx := context.Background()
+	if err := s.Set(ctx, "agent1", "k", "from-skill", 0); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := s.Set(ctx, "agent1", "k", "from-operator", 0); err != nil {
+		t.Fatalf("intervening Set: %v", err)
+	}
+	if err := s.SetWriter(ctx, "agent1", "k", "from-skill", "daily-digest"); err != nil {
+		t.Fatalf("SetWriter: %v", err)
+	}
+	if e := mustGetEntry(t, s, "agent1", "k"); e.WrittenBy != "" || e.Value != "from-operator" {
+		t.Errorf("entry = %+v, want the operator's value with no writer", e)
+	}
+}
+
 func TestSetWriter_MissingKeyIsNoop(t *testing.T) {
 	s := mustStore(t)
 	ctx := context.Background()
-	if err := s.SetWriter(ctx, "agent1", "missing", "daily-digest"); err != nil {
+	if err := s.SetWriter(ctx, "agent1", "missing", "x", "daily-digest"); err != nil {
 		t.Fatalf("SetWriter on a missing key: %v", err)
 	}
 	if _, ok, err := s.GetEntry(ctx, "agent1", "missing"); err != nil || ok {
@@ -693,7 +712,7 @@ func TestSetWriter_OtherAgentUntouched(t *testing.T) {
 			t.Fatalf("Set(%s): %v", agent, err)
 		}
 	}
-	if err := s.SetWriter(ctx, "agent1", "k", "daily-digest"); err != nil {
+	if err := s.SetWriter(ctx, "agent1", "k", "v", "daily-digest"); err != nil {
 		t.Fatalf("SetWriter: %v", err)
 	}
 	if e := mustGetEntry(t, s, "agent2", "k"); e.WrittenBy != "" {
@@ -733,7 +752,7 @@ INSERT INTO kv (agent_name, key, value) VALUES ('agent1', 'legacy', 'kept');`); 
 	if e.Value != "kept" || e.WrittenBy != "" {
 		t.Errorf("legacy entry = %+v, want value kept and empty WrittenBy", e)
 	}
-	if err := s.SetWriter(context.Background(), "agent1", "legacy", "daily-digest"); err != nil {
+	if err := s.SetWriter(context.Background(), "agent1", "legacy", "kept", "daily-digest"); err != nil {
 		t.Fatalf("SetWriter after migration: %v", err)
 	}
 	if e := mustGetEntry(t, s, "agent1", "legacy"); e.WrittenBy != "daily-digest" {
@@ -750,7 +769,7 @@ func TestNewSQLiteStore_OpenTwice(t *testing.T) {
 	if err := first.Set(context.Background(), "agent1", "k", "v", 0); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
-	if err := first.SetWriter(context.Background(), "agent1", "k", "daily-digest"); err != nil {
+	if err := first.SetWriter(context.Background(), "agent1", "k", "v", "daily-digest"); err != nil {
 		t.Fatalf("SetWriter: %v", err)
 	}
 	_ = first.Close()

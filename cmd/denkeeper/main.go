@@ -1434,8 +1434,8 @@ func (a kvTargetAdapter) KVTarget(ctx context.Context, agentName, key string) (b
 	return ok, e.WrittenBy, e.UpdatedAt, nil
 }
 
-func (a kvTargetAdapter) StampKVWriter(ctx context.Context, agentName, key, skill string) error {
-	return a.store.SetWriter(ctx, agentName, key, skill)
+func (a kvTargetAdapter) StampKVWriter(ctx context.Context, agentName, key, value, skill string) error {
+	return a.store.SetWriter(ctx, agentName, key, value, skill)
 }
 
 // kvTargetsFor returns nil when KV is off, so the engine gets no KV targets.
@@ -1532,6 +1532,12 @@ func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc ag
 	if t := kvTargetsFor(abc.kvStore); t != nil {
 		e.SetKVTargets(t)
 	}
+	// Same check skill_create's handler makes, so a review never shows a
+	// create the handler will refuse as a fresh one.
+	skillsDir := sr.agentSkillsDir
+	e.SetSkillFileCheck(func(name string) (bool, error) {
+		return configmcp.SkillFileExists(skillsDir, name)
+	})
 
 	if err := connectConfigMCP(ctx, ac.Name, sr.agentSkillsDir, e, agentRouter, agentToolMgr, abc); err != nil {
 		return nil, nil, err

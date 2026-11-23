@@ -344,6 +344,9 @@ type Engine struct {
 	// reviews and records the writer after kv_set. Nil when KV is off.
 	kvTargetsMu sync.RWMutex
 	kvTargets   KVTargetStore
+	// skillFileExists is the on-disk check skill_create uses; nil = loaded
+	// skills only. Guarded by kvTargetsMu.
+	skillFileExists func(name string) (bool, error)
 
 	// maxContextMessages limits conversation history sent to the LLM.
 	maxContextMessages int

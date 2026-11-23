@@ -362,7 +362,7 @@ func TestKVTargetAdapter_ReadsAndStampsTheWriter(t *testing.T) {
 	if err := store.Set(ctx, "pamela", "digest", "v", 0); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
-	if err := targets.StampKVWriter(ctx, "pamela", "digest", "daily-digest"); err != nil {
+	if err := targets.StampKVWriter(ctx, "pamela", "digest", "v", "daily-digest"); err != nil {
 		t.Fatalf("StampKVWriter: %v", err)
 	}
 	exists, writer, updatedAt, err := targets.KVTarget(ctx, "pamela", "digest")
