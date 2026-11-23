@@ -212,6 +212,12 @@ func TestApplySkillCreate_ExtensionlessFileIsNotALeftoverFolder(t *testing.T) {
 	if err := configmcp.ApplySkillCreate(dir, func(skill.Skill) {}, ioTestLogger(), payload, 0); err != nil {
 		t.Errorf("create beside a plain file = %v", err)
 	}
+	if data, err := os.ReadFile(filepath.Join(dir, "kelos.md")); err != nil || strings.TrimRight(string(data), "\n") != strings.TrimRight(payload, "\n") {
+		t.Errorf("kelos.md = %q, %v; want the new skill", data, err)
+	}
+	if data, _ := os.ReadFile(filepath.Join(dir, "kelos")); string(data) != "notes" {
+		t.Errorf("plain file kelos changed: %q", data)
+	}
 }
 
 func TestRemoveSkillFile_RemovesADirectorySkillsSKILLmd(t *testing.T) {
