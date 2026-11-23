@@ -992,6 +992,7 @@ var builtinReadOnlyTools = map[string]bool{
 // toolClass is everything a classification decision reads about one tool,
 // snapshotted under the manager lock.
 type toolClass struct {
+	server    string // owning server's name
 	local     string // server-local name, which the allowlists are keyed by
 	inProcess bool   // registered as an in-process session, not an external server
 	optedIn   bool   // [tools.*] idempotent / idempotent_tools names it
@@ -1010,15 +1011,21 @@ func (m *Manager) classify(toolName string) (toolClass, *Manager, error) {
 	if err != nil {
 		return toolClass{}, parent, err
 	}
+	return classOf(sc, local), parent, nil
+}
+
+// classOf snapshots a resolved tool's classification. The caller holds m.mu.
+func classOf(sc *serverConn, local string) toolClass {
 	return toolClass{
-		local: local,
+		server: sc.name,
+		local:  local,
 		// In-process sessions (RegisterSession) have no transport and no
 		// command; external servers always set one of them.
 		inProcess: sc.transport == "" && sc.command == "",
 		optedIn:   sc.cfg.IsIdempotentTool(local),
 		trusted:   sc.cfg.TrustAnnotations,
 		hinted:    sc.readOnlyHinted[local],
-	}, parent, nil
+	}
 }
 
 // declaredReadOnly reports whether an external server's operator or the server
@@ -1119,6 +1126,11 @@ func (m *Manager) ToolDescription(toolName string) string {
 type Result struct {
 	Text       string
 	Structured json.RawMessage
+	// Provenance is the server that took the call, classified under the same
+	// lock that admitted it, so it holds even if the server is replaced or
+	// drains straight after. Set on error results too; zero when the name
+	// did not resolve.
+	Provenance Provenance
 }
 
 // Execute runs a single tool call and returns the text result. It is
@@ -1135,7 +1147,7 @@ func (m *Manager) Execute(ctx context.Context, call llm.ToolCall) (string, error
 // servers share it) is resolved to its owning server; the server-local name is
 // what goes on the wire. A bare name that two servers claim is never guessed
 // at — it returns ErrAmbiguousTool naming the alternatives.
-func (m *Manager) ExecuteResult(ctx context.Context, call llm.ToolCall) (Result, error) {
+func (m *Manager) ExecuteResult(ctx context.Context, call llm.ToolCall) (res Result, err error) {
 	// Admission to the in-flight set is taken under the same read lock that
 	// resolves the server and snapshots its session: teardown phase 1 flips the
 	// conn to draining under the write lock, so an admission decided after the
@@ -1152,6 +1164,9 @@ func (m *Manager) ExecuteResult(ctx context.Context, call llm.ToolCall) (Result,
 	if resolveErr == nil {
 		serverName, session, disabled = sc.name, sc.session, sc.disabledSet[local]
 		admitted = sc.enterCall()
+		// Every return below carries the provenance of this resolution.
+		prov := classOf(sc, local).provenance()
+		defer func() { res.Provenance = prov }()
 	}
 	m.mu.RUnlock()
 
@@ -1221,7 +1236,7 @@ func (m *Manager) ExecuteResult(ctx context.Context, call llm.ToolCall) (Result,
 		return Result{}, err
 	}
 
-	res := Result{
+	res = Result{
 		Text:       joinTextContent(result.Content),
 		Structured: m.encodeStructured(call.Function.Name, result.StructuredContent),
 	}

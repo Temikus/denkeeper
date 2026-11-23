@@ -349,6 +349,10 @@ type Engine struct {
 	// skills only. Guarded by kvTargetsMu.
 	skillFileExists func(name string) (bool, error)
 
+	// untrustedID makes the per-call id on an untrusted-output wrapper. Nil
+	// means crypto/rand; tests set a fixed one. Set before the engine runs.
+	untrustedID func() string
+
 	// maxContextMessages limits conversation history sent to the LLM.
 	maxContextMessages int
 
@@ -1348,6 +1352,7 @@ Prefer KV over persona memory for anything structured or dated. Persona memory i
 	// is the most stable appended block (it changes only when an operator edits
 	// it), so it belongs as early as possible in the prompt-cache prefix.
 	base += e.buildToolGuidanceSection()
+	base += e.untrustedOutputNote()
 	base += e.buildSkillIndexSection()
 
 	// Inject session context so the agent knows its current delivery channel.
@@ -3428,7 +3433,9 @@ func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int
 		onEvent(evt)
 	}
 	record.Result = result
-	return result, record, false
+	// Last step before the wire: record.Result stays raw, and any future
+	// wire-side cap must cut before this wrap, not after.
+	return e.frameToolResult(res.Provenance, result), record, false
 }
 
 // auditToolExecution records one executed tool call. The result body is capped

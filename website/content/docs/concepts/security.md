@@ -17,6 +17,7 @@ Every capability in Denkeeper is opt-in. The agent starts with zero permissions 
 | Threat | Mitigation |
 |---|---|
 | Prompt injection via incoming messages | Tiered permissions limit what the agent can do; supervised mode requires approval for sensitive actions |
+| Prompt injection via tool output (web pages, external MCP servers) | Results from web, browser and external tools are wrapped in `<untrusted_tool_output>` tags, and the system prompt says text inside them is data, not instructions; see [Untrusted tool output](/docs/concepts/tools/#untrusted-tool-output). Framing only: tiers and approval still bound what an injected instruction can do |
 | Unauthorized access to the bot | Telegram: `allowed_users` allowlist. Discord: `allowed_users` allowlist. API: scoped bearer tokens |
 | Tool abuse | Permission tiers control tool access; restricted mode limits to read-only tools |
 | Cost runaway | Per-session budget caps, global cost tracking, automatic fallback to cheaper models |
