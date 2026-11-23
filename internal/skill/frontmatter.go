@@ -121,7 +121,11 @@ func splitFrontmatter(path, text string) (splitResult, error) {
 		return splitResult{}, fmt.Errorf("skill %q: missing opening frontmatter delimiter (+++ or ---)", path)
 	}
 	delim := dialect.delimiter()
-	block, body, lead, ok := splitBlock(rest, delim)
+	var fits func(string) bool
+	if dialect == DialectTOML {
+		fits = tomlParses
+	}
+	block, body, lead, ok := splitBlock(rest, delim, fits)
 	if !ok {
 		return splitResult{}, fmt.Errorf("skill %q: missing closing %s delimiter", path, delim)
 	}
@@ -135,21 +139,37 @@ func isDelimiterLine(line, delim string) bool {
 // splitBlock ends the block at the first line that is exactly delim. Later
 // delim lines belong to the body, so a markdown rule there is safe. lead is
 // how many CR/LF bytes were trimmed from the front of the block.
-func splitBlock(rest, delim string) (block, body string, lead int, ok bool) {
+//
+// fits, when set, picks among delim lines: the block ends at the first one
+// whose block fits, so a TOML multiline string holding a line that is exactly
+// +++ does not end it early. With none fitting, the first delim line wins and
+// the decoder reports the error.
+func splitBlock(rest, delim string, fits func(block string) bool) (block, body string, lead int, ok bool) {
 	pos := 0
 	for pos <= len(rest) {
 		line, after, more := strings.Cut(rest[pos:], "\n")
 		if isDelimiterLine(line, delim) {
 			raw := rest[:pos]
-			lead = len(raw) - len(strings.TrimLeft(raw, "\r\n"))
-			return strings.Trim(raw, "\r\n"), strings.TrimSpace(after), lead, true
+			b, bd := strings.Trim(raw, "\r\n"), strings.TrimSpace(after)
+			l := len(raw) - len(strings.TrimLeft(raw, "\r\n"))
+			if fits == nil || fits(b) {
+				return b, bd, l, true
+			}
+			if !ok {
+				block, body, lead, ok = b, bd, l, true
+			}
 		}
 		if !more {
-			return "", "", 0, false
+			break
 		}
 		pos += len(line) + 1
 	}
-	return "", "", 0, false
+	return block, body, lead, ok
+}
+
+func tomlParses(block string) bool {
+	var m map[string]any
+	return toml.Unmarshal([]byte(block), &m) == nil
 }
 
 // --- Decoding ---

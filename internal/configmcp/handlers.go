@@ -582,6 +582,13 @@ func (s *Server) handleSkillGet(_ context.Context, req *mcp.CallToolRequest) (*m
 // skill already carries rather than silently clearing them. A non-nil but empty
 // slice clears, matching triggers.
 func MergeSkillFields(name string, existing skill.Skill, desc, ver *string, triggers []string, body *string, maxToolRounds, maxOutputTokens *int, requiresTools []string) (string, error) {
+	// Writes find a skill's file by name (skillFileRel), so a folder named
+	// otherwise would get a second, flat copy instead of the edit.
+	if existing.Dir != "" && filepath.Base(existing.Dir) != existing.Name {
+		folder := filepath.Base(existing.Dir)
+		return "", fmt.Errorf("skill %q keeps its files in the %s folder, which is not named after it, so this edit "+
+			"cannot reach them. Edit %s in the skills directory: %w", existing.Name, folder, path.Join(folder, "SKILL.md"), ErrSkillNotEditable)
+	}
 	description := existing.Description
 	if desc != nil {
 		description = *desc
@@ -1925,13 +1932,38 @@ func checkSkillPayloadSize(payload string, maxBytes int) error {
 	return nil
 }
 
-// writeSkillFileAtomic writes payload to "<name>.md" within root via a
-// randomized temp-file + rename, so a partial write never replaces a good file
-// and two concurrent writers to the same skill name cannot share (and corrupt)
-// one temp file. Both operations are confined to root and reject names that
-// escape it.
+// skillFileRel is where name's skill file lives under root: "<name>.md" when
+// that exists, else "<name>/SKILL.md" when a "<name>" folder exists (a
+// directory-form skill, which skill_write_file creates under the skill's
+// name), else "<name>.md". Write, read and remove all resolve through it, so
+// the undo journal's prior bytes and a revert land on the same file.
+func skillFileRel(root *os.Root, name string) (string, error) {
+	flat := name + ".md"
+	if _, err := root.Lstat(flat); err == nil {
+		return flat, nil
+	} else if !os.IsNotExist(err) {
+		return "", fmt.Errorf("checking skill file %s: %w", flat, err)
+	}
+	fi, err := root.Lstat(name)
+	if err == nil && fi.IsDir() {
+		return name + "/SKILL.md", nil
+	}
+	if err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("checking skill folder %s: %w", name, err)
+	}
+	return flat, nil
+}
+
+// writeSkillFileAtomic writes payload to name's skill file within root
+// (skillFileRel) via a randomized temp-file + rename, so a partial write never
+// replaces a good file and two concurrent writers to the same skill name
+// cannot share (and corrupt) one temp file. Both operations are confined to
+// root and reject names that escape it.
 func writeSkillFileAtomic(root *os.Root, name, payload string) error {
-	final := name + ".md"
+	final, err := skillFileRel(root, name)
+	if err != nil {
+		return err
+	}
 
 	// Unique temp name within root, created O_EXCL so it can never collide with
 	// a concurrent writer's temp file. Loader ignores it (not a *.md file).
@@ -1970,8 +2002,9 @@ func writeSkillFileAtomic(root *os.Root, name, payload string) error {
 	return nil
 }
 
-// ReadSkillFile returns the raw on-disk bytes of "<name>.md" from the agent's
-// skills directory, read through an os.Root so the read is confined to that
+// ReadSkillFile returns the raw on-disk bytes of name's skill file
+// (skillFileRel: "<name>.md" or "<name>/SKILL.md") from the agent's skills
+// directory, read through an os.Root so the read is confined to that
 // directory and cannot escape it via traversal or symlink — the same hard
 // boundary the write and remove helpers above sit behind.
 //
@@ -1995,7 +2028,11 @@ func ReadSkillFile(agentSkillsDir, name string) (string, bool, error) {
 	}
 	defer func() { _ = root.Close() }()
 
-	f, err := root.Open(name + ".md")
+	rel, err := skillFileRel(root, name)
+	if err != nil {
+		return "", false, err
+	}
+	f, err := root.Open(rel)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return "", false, nil
@@ -2145,13 +2182,24 @@ func ApplySkillRename(agentSkillsDir string, removeSkill func(string) bool, appe
 	}
 	defer func() { _ = root.Close() }()
 
+	// A directory skill would have to move its folder and sub-files, which a
+	// revert cannot undo, so it is refused before anything is written.
+	oldRel, err := skillFileRel(root, oldName)
+	if err != nil {
+		return err
+	}
+	if oldRel != oldName+".md" {
+		return fmt.Errorf("skill %q keeps its files in the %s folder: rename its folder by hand, then "+
+			"change name in its SKILL.md (%w)", oldName, oldName, ErrSkillNotEditable)
+	}
+
 	// Write new file first (crash-safe: worst case both files exist).
 	if err := writeSkillFileAtomic(root, s.Name, payload); err != nil {
 		return err
 	}
 
 	// Remove old file (confined to root).
-	if err := root.Remove(oldName + ".md"); err != nil && !os.IsNotExist(err) {
+	if err := root.Remove(oldRel); err != nil && !os.IsNotExist(err) {
 		logger.Info("old skill file removal failed (new file written successfully)", "old", oldName, "new", s.Name, "error", err)
 	}
 
@@ -2162,10 +2210,13 @@ func ApplySkillRename(agentSkillsDir string, removeSkill func(string) bool, appe
 	return nil
 }
 
-// RemoveSkillFile deletes "<name>.md" from the agent's skills directory through
-// an os.Root, so the removal is confined to that directory and cannot escape it
-// via traversal or symlink. A missing file or missing directory is not an
-// error. Callers handle the in-memory removal separately.
+// RemoveSkillFile deletes name's skill file (skillFileRel) from the agent's
+// skills directory through an os.Root, so the removal is confined to that
+// directory and cannot escape it via traversal or symlink. For a
+// directory-form skill only SKILL.md goes: the loader then skips the folder,
+// and its other files stay for a revert to come back to. A missing file or
+// missing directory is not an error. Callers handle the in-memory removal
+// separately.
 func RemoveSkillFile(agentSkillsDir, name string) error {
 	if err := ValidateSkillName(name); err != nil {
 		return err
@@ -2179,7 +2230,11 @@ func RemoveSkillFile(agentSkillsDir, name string) error {
 	}
 	defer func() { _ = root.Close() }()
 
-	if err := root.Remove(name + ".md"); err != nil && !os.IsNotExist(err) {
+	rel, err := skillFileRel(root, name)
+	if err != nil {
+		return err
+	}
+	if err := root.Remove(rel); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("removing skill file: %w", err)
 	}
 	return nil

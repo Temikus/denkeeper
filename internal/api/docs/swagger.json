@@ -7417,7 +7417,7 @@
                         }
                     },
                     "422": {
-                        "description": "The frontmatter cannot be rewritten without changing keys denkeeper does not read; edit the file by hand",
+                        "description": "The skill's file cannot take this edit (unknown frontmatter keys would change, or a directory skill's folder is not named after it or is being renamed); edit it by hand",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {

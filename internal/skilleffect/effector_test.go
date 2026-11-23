@@ -674,6 +674,41 @@ func yamlEdit(t *testing.T, sa *fakeSkills, newName, desc string) string {
 	return payload
 }
 
+// A directory skill's journal entry holds its SKILL.md bytes, and the revert
+// writes them back there, not to a flat <name>.md.
+func TestEffector_Revert_DirectorySkillUpdateRestoresSKILLmd(t *testing.T) {
+	store := newStore(t)
+	sa := newFakeSkills(t)
+	e := newEffector(t, store)
+	path := filepath.Join(sa.dir, "kelos", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(effectorYAMLSkill+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := skill.ParseFile(path, []byte(effectorYAMLSkill))
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed.Dir = filepath.Dir(path)
+	sa.AppendSkill(*parsed)
+
+	if err := e.Update(context.Background(), sa, "t1", "kelos", yamlEdit(t, sa, "kelos", "Changed."), agent.SkillActorUser, 0); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if rev := latest(t, store, "kelos"); rev == nil || rev.PriorPayload == nil || *rev.PriorPayload != effectorYAMLSkill+"\n" {
+		t.Fatalf("journaled prior = %+v, want the SKILL.md bytes", rev)
+	}
+	if _, err := e.Revert(context.Background(), sa, "kelos", 0); err != nil {
+		t.Fatalf("revert: %v", err)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != effectorYAMLSkill+"\n" {
+		t.Errorf("SKILL.md after revert = %q, %v", got, err)
+	}
+	mustNotExist(t, sa, "kelos")
+}
+
 func TestEffector_Revert_YAMLUpdateRestoresExactBytes(t *testing.T) {
 	store := newStore(t)
 	sa := newFakeSkills(t)

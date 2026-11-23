@@ -60,6 +60,36 @@ func TestSkillUpdate_YAMLKeepsDialectAndUnknownKeys(t *testing.T) {
 	}
 }
 
+func TestSkillUpdate_DirectorySkillWritesItsSKILLmd(t *testing.T) {
+	dir := t.TempDir()
+	s, e := skillServer(t, dir)
+	if err := os.MkdirAll(filepath.Join(dir, "kelos"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "kelos", "SKILL.md")
+	if err := os.WriteFile(path, []byte(mcpYAMLSkill), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	skills, err := skill.LoadDir(dir, testLogger())
+	if err != nil || len(skills) != 1 {
+		t.Fatalf("LoadDir = %+v, %v", skills, err)
+	}
+	e.AppendSkill(skills[0])
+
+	ver := "2.0"
+	res, _, err := s.handleSkillUpdate(writeScope(t), nil, skillUpdateInput{Agent: "test-agent", Name: "kelos", Version: &ver})
+	if err != nil || res.IsError {
+		t.Fatalf("skill_update: %v %s", err, toolResultText(res))
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || !strings.Contains(string(data), `version: "2.0"`) {
+		t.Errorf("SKILL.md = %q, %v; want the new version", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "kelos.md")); !os.IsNotExist(err) {
+		t.Errorf("a flat kelos.md was written: %v", err)
+	}
+}
+
 func TestSkillGet_NoFrontmatterOrDialectKey(t *testing.T) {
 	s, _ := yamlSkillMCP(t)
 	ctx := withScopes(context.Background(), []string{"skills:read"})

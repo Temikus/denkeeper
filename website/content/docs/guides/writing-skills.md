@@ -75,7 +75,7 @@ triggers:
 ...
 ```
 
-The fields are the same. Keys Denkeeper does not read are kept when the skill is edited, and the skill stays YAML. New skills are written as TOML. A YAML skill with no `triggers` is ambient, so its body goes into every prompt. Some YAML features are refused; see [YAML frontmatter](/docs/concepts/skills/#yaml-frontmatter) for the rules and for what an edit keeps.
+The fields are the same. Keys Denkeeper does not read are kept when the skill is edited, and the skill stays YAML. New skills are written as TOML. A YAML skill with no `triggers` is ambient, so its body goes into every prompt, except while a tool it lists under `requires.tools` is unavailable. Some YAML features are refused; see [YAML frontmatter](/docs/concepts/skills/#yaml-frontmatter) for the rules and for what an edit keeps.
 
 ## Trigger types
 

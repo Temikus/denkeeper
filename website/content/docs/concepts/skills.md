@@ -55,14 +55,14 @@ metadata:
 - Both forms use the same keys: `name`, `description`, `version`, `triggers`, `requires.tools`, `max_tool_rounds` and `max_output_tokens`. Denkeeper ignores other keys, such as `license` and `metadata` above, but keeps them when the skill is edited.
 - A skill keeps the form it was written in. New skills are written as TOML.
 - Anchors, aliases, merge keys, explicit tags (such as `!!binary`) and duplicate keys are refused. A refused file is skipped, and the server log has a warning that names the file and the reason, with the line where there is one.
-- Every top-level `.md` file in a skills directory, and every `SKILL.md` one folder down, loads as a skill when it starts with `---` or `+++` and has a `name` key. Check a downloaded skill's triggers before copying it in: one with no triggers is ambient, so its body goes into every prompt.
-- A skill with no `triggers` is ambient in either form, so its body goes into every prompt. Most skills.sh skills have no triggers: add a `command:` trigger to use one only on demand.
+- Every top-level `.md` file in a skills directory, and every `SKILL.md` one folder down, loads as a skill when it starts with `---` or `+++` and has a `name` key. Check a downloaded skill's triggers before copying it in: one with no triggers is ambient, so its body goes into every prompt while the tools it lists under `requires.tools` are available.
+- A skill with no `triggers` is ambient in either form, so its body goes into every prompt, except while a tool it lists under `requires.tools` is unavailable. Most skills.sh skills have no triggers: add a `command:` trigger to use one only on demand.
 
 ### What an edit keeps
 
-An edit that changes no frontmatter field, such as a body edit, writes the frontmatter back byte for byte. An edit that changes a field rewrites the block:
+An edit that changes no frontmatter field, such as a body edit, writes the frontmatter back byte for byte, except that blank lines just inside the delimiters are dropped. An edit that changes a field rewrites the block:
 
-- **YAML** keeps keys, their order, comments and quoting, but not exact formatting. Blank lines and indentation can change, and a folded `description` can be rewrapped onto one line. A newly set field goes at the end.
+- **YAML** keeps keys, their order and comments, and the quoting of every value it does not change; a changed value is written fresh in YAML's default style. It does not keep exact formatting. Blank lines and indentation can change, and a folded `description` can be rewrapped onto one line. A newly set field goes at the end.
 - **TOML** keeps every key and value, but not comments or key order.
 
 If a rewrite would change a key Denkeeper does not read, the edit is refused and the file is left as it was. Edit that file by hand.

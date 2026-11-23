@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/Temikus/denkeeper/internal/configmcp"
 	"github.com/Temikus/denkeeper/internal/skill"
@@ -60,9 +61,10 @@ func FuzzApplySkillCreate_NeverEscapes(f *testing.F) {
 		}
 
 		payload := configmcp.BuildSkillPayload(name, "desc", "1.0.0", nil, "body", 0, 0, nil)
-		if yamlDialect {
-			// A JSON string is a valid YAML double-quoted scalar, so any name
-			// reaches the parser intact.
+		// A JSON string is a valid YAML double-quoted scalar, but json.Marshal
+		// replaces invalid UTF-8 with U+FFFD, so such names stay on the TOML
+		// path, where they reach the parser unchanged.
+		if yamlDialect && utf8.ValidString(name) {
 			quoted, _ := json.Marshal(name)
 			payload = "---\nname: " + string(quoted) + "\ndescription: desc\n---\n\nbody"
 		}

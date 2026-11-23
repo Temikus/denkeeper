@@ -487,6 +487,23 @@ func TestTOML_DescriptionWithPlusesRoundTrips(t *testing.T) {
 	}
 }
 
+// A hand-written multiline string may hold a line that is exactly +++. The
+// block ends at the first such line that leaves valid TOML before it, so the
+// skill loads instead of vanishing. The writers never produce this shape:
+// go-toml escapes newlines in a basic string.
+func TestTOML_PlusesLineInsideMultilineStringLoads(t *testing.T) {
+	file := "+++\nname = \"demo\"\ndescription = \"\"\"\nline one\n+++\nline two\"\"\"\n+++\n\nbody"
+	got := mustParse(t, file)
+	if got.Description != "line one\n+++\nline two" || got.Body != "body" {
+		t.Errorf("description %q, body %q", got.Description, got.Body)
+	}
+	// An edit of it writes the value escaped, so it reloads the same.
+	edited := mustParse(t, renderOK(t, got, Fields{Name: "demo", Description: got.Description, Version: "2"}, "body"))
+	if edited.Description != got.Description || edited.Version != "2" {
+		t.Errorf("after edit: description %q, version %q", edited.Description, edited.Version)
+	}
+}
+
 func TestTOML_ClosingDelimiterIsALineOfItsOwn(t *testing.T) {
 	got := mustParse(t, "+++\nname = \"demo\"\ndescription = \"a +++ b\"\n+++\n\n+++ is fine in the body too")
 	if got.Description != "a +++ b" || got.Body != "+++ is fine in the body too" {

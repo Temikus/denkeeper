@@ -244,7 +244,7 @@ type skillUpdateInput struct {
 // @Failure 400 {object} map[string]string "Invalid input"
 // @Failure 404 {object} map[string]string "Agent or skill not found"
 // @Failure 409 {object} map[string]string "New name conflicts with existing skill"
-// @Failure 422 {object} map[string]string "The frontmatter cannot be rewritten without changing keys denkeeper does not read; edit the file by hand"
+// @Failure 422 {object} map[string]string "The skill's file cannot take this edit (unknown frontmatter keys would change, or a directory skill's folder is not named after it or is being renamed); edit it by hand"
 // @Failure 500 {object} map[string]string "Update failed"
 // @Failure 503 {object} map[string]string "Skill management unavailable"
 // @Router /skills/{agent}/{name} [put]
@@ -304,7 +304,7 @@ func (s *Server) handleUpdateSkill(w http.ResponseWriter, r *http.Request) {
 	writer := s.skillWriter(agentName, e)
 	if isRename {
 		if err := writer.Rename(r.Context(), skillName, payload); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("renaming skill: %v", err)})
+			writeJSON(w, skillRenderStatus(err), map[string]string{"error": fmt.Sprintf("renaming skill: %v", err)})
 			return
 		}
 		s.logger.Info("skill renamed via API", "agent", agentName, "old", skillName, "new", newName)
@@ -334,8 +334,10 @@ func (s *Server) buildSkillUpdate(newName string, existing skill.Skill, input sk
 	return payload, warnings, http.StatusOK, nil
 }
 
+// skillRenderStatus is 422 when the edit cannot be written to this skill's
+// file and the person must edit it by hand, else 500.
 func skillRenderStatus(err error) int {
-	if errors.Is(err, skill.ErrUnknownKeysChanged) {
+	if errors.Is(err, skill.ErrUnknownKeysChanged) || errors.Is(err, configmcp.ErrSkillNotEditable) {
 		return http.StatusUnprocessableEntity
 	}
 	return http.StatusInternalServerError

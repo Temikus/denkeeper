@@ -116,10 +116,21 @@ func TestMergeSkillFields_TOMLUnknownKeyKeptOnVersionChange(t *testing.T) {
 // from what each write parses to, as the engine does.
 func yamlSkillServer(t *testing.T) (call func(string, map[string]any) (string, bool), dir string, mem map[string]skill.Skill) {
 	t.Helper()
+	return memSkillServer(t, func(skillsDir string) []skill.Skill {
+		return []skill.Skill{writeSkill(t, skillsDir, "kelos", yamlSkillFile)}
+	})
+}
+
+// memSkillServer serves the skills seed returns from real files, refreshing
+// memory from what each write parses to, as the engine does.
+func memSkillServer(t *testing.T, seed func(skillsDir string) []skill.Skill) (call func(string, map[string]any) (string, bool), dir string, mem map[string]skill.Skill) {
+	t.Helper()
 	var mu sync.RWMutex
 	mem = map[string]skill.Skill{}
 	session, deps := newTestServer(t, func(d *configmcp.Deps) {
-		mem["kelos"] = writeSkill(t, d.AgentSkillsDir, "kelos", yamlSkillFile)
+		for _, s := range seed(d.AgentSkillsDir) {
+			mem[s.Name] = s
+		}
 		d.GetSkill = func(name string) (skill.Skill, bool) {
 			mu.RLock()
 			defer mu.RUnlock()

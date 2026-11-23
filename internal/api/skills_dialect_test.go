@@ -131,3 +131,52 @@ func TestGetSkill_YAMLReturnsUsualFields(t *testing.T) {
 		t.Errorf("name/description = %s/%s", got["name"], got["description"])
 	}
 }
+
+// dirSkillAPI loads kelos/SKILL.md (a directory skill) into the default agent
+// with skill.LoadDir, so it carries its Dir.
+func dirSkillAPI(t *testing.T) (*Server, string) {
+	t.Helper()
+	deps := testDepsWithSkillsDir(t)
+	e := deps.Dispatcher.Agent("default")
+	if err := os.MkdirAll(filepath.Join(e.SkillsDir(), "kelos"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(e.SkillsDir(), "kelos", "SKILL.md")
+	if err := os.WriteFile(path, []byte(apiYAMLSkill), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	skills, err := skill.LoadDir(e.SkillsDir(), testLogger())
+	if err != nil || len(skills) != 1 {
+		t.Fatalf("LoadDir = %+v, %v", skills, err)
+	}
+	e.AppendSkill(skills[0])
+	return New(testConfig(allScopesKey()), deps, testLogger()), path
+}
+
+func TestUpdateSkill_DirectorySkillWritesItsSKILLmd(t *testing.T) {
+	srv, path := dirSkillAPI(t)
+	putYAMLSkill(t, srv, `{"body":"New body."}`)
+
+	if got := readFile(t, path); !strings.HasSuffix(got, "\n\nNew body.\n") {
+		t.Errorf("SKILL.md =\n%s", got)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(filepath.Dir(path)), "kelos.md")); !os.IsNotExist(err) {
+		t.Errorf("a flat kelos.md was written: %v", err)
+	}
+}
+
+func TestUpdateSkill_DirectorySkillRenameIs422(t *testing.T) {
+	srv, path := dirSkillAPI(t)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/skills/default/kelos", strings.NewReader(`{"name":"kelos-two"}`))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "rename its folder by hand") {
+		t.Fatalf("rename: status = %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if got := readFile(t, path); got != apiYAMLSkill {
+		t.Errorf("SKILL.md changed after a refused rename:\n%s", got)
+	}
+}
