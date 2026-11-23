@@ -103,7 +103,7 @@ type Spend struct {
 	PreviousCostUSD float64  `json:"previous_cost_usd"`
 	PreviousTurns   int      `json:"previous_turns"`
 	ChangeUSD       float64  `json:"change_usd"`
-	ChangePct       *float64 `json:"change_pct,omitempty"` // nil when the previous window had no spend
+	ChangePct       *float64 `json:"change_pct"` // null when the previous window had no spend, so "not computable" differs from a missing field
 }
 
 // Skill is one skill's runs, per-run cost and tool outcomes.

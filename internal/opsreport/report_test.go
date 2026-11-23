@@ -276,8 +276,8 @@ func TestBuild_NoChangePctWithoutPreviousSpend(t *testing.T) {
 	s := newStores(t)
 	s.addTurn(t, turn{agent: "pamela", conv: "c1", cost: 0.5})
 	rep := s.build(t, "pamela", 7)
-	if rep.Spend.ChangePct != nil || strings.Contains(mustJSON(t, rep), "change_pct") {
-		t.Fatalf("change_pct present: %+v", rep.Spend)
+	if rep.Spend.ChangePct != nil || !strings.Contains(mustJSON(t, rep), `"change_pct":null`) {
+		t.Fatalf("change_pct = %v, want null in the JSON: %s", rep.Spend.ChangePct, mustJSON(t, rep))
 	}
 	if rep.Spend.ChangeUSD != 0.5 {
 		t.Fatalf("change_usd = %v", rep.Spend.ChangeUSD)
