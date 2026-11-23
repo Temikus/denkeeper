@@ -1421,6 +1421,31 @@ func buildAllAgents(ctx context.Context, agents []config.AgentInstanceConfig, ab
 	return engines, bindings, nil
 }
 
+// kvTargetAdapter gives the engine its write-target view of the KV store. It
+// is the only caller of kv.Store.SetWriter: no REST or MCP path may set the
+// writer, or an agent could forge "last written by <trusted skill>".
+type kvTargetAdapter struct{ store kv.Store }
+
+func (a kvTargetAdapter) KVTarget(ctx context.Context, agentName, key string) (bool, string, time.Time, error) {
+	e, ok, err := a.store.GetEntry(ctx, agentName, key)
+	if err != nil {
+		return false, "", time.Time{}, fmt.Errorf("reading kv target %q: %w", key, err)
+	}
+	return ok, e.WrittenBy, e.UpdatedAt, nil
+}
+
+func (a kvTargetAdapter) StampKVWriter(ctx context.Context, agentName, key, skill string) error {
+	return a.store.SetWriter(ctx, agentName, key, skill)
+}
+
+// kvTargetsFor returns nil when KV is off, so the engine gets no KV targets.
+func kvTargetsFor(store kv.Store) agent.KVTargetStore {
+	if store == nil {
+		return nil
+	}
+	return kvTargetAdapter{store: store}
+}
+
 func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc agentBuildCtx) (*agent.Engine, []agent.Binding, error) {
 	// Per-agent persona
 	p, pErr := persona.Load(ac.PersonaDir)
@@ -1504,6 +1529,9 @@ func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc ag
 		e.SetTraceSink(abc.evalStore)
 	}
 	e.SetTraceCapture(abc.cfg.Eval.Capture, abc.cfg.Eval.TraceBytesCap())
+	if t := kvTargetsFor(abc.kvStore); t != nil {
+		e.SetKVTargets(t)
+	}
 
 	if err := connectConfigMCP(ctx, ac.Name, sr.agentSkillsDir, e, agentRouter, agentToolMgr, abc); err != nil {
 		return nil, nil, err

@@ -85,7 +85,7 @@ Tool calls whose arguments exceed `supervisor_max_args_bytes` (default 16 KB) sk
 
 The supervisor is asked whether the call does what the request asked, whether its arguments are safe, and whether it stays in scope. It is also told to deny any call that records a permission grant for the agent, claims that an operator approved something, or widens the agent's own autonomy, such as saving "you have my blanket approval" to memory or writing a skill that says to skip approval. Approval comes from your configuration ([auto-approve rules](#auto-approve-rules), tiers, this supervisor), never from the conversation, so these calls are denied even when you asked for them in chat.
 
-For the skill and KV write tools (`skill_create`, `skill_update`, `skill_patch`, `skill_write_file`, `skill_delete`, `kv_set` and `kv_delete`), the review also says whether the target already exists. For a KV key it adds when the key was last written and by which skill, when that was recorded. A call that replaces or deletes something needs a request that asked for exactly that. The same `target` appears in the `supervisor` audit event.
+For the skill and KV write tools (`skill_create`, `skill_update`, `skill_patch`, `skill_write_file`, `skill_delete`, `kv_set` and `kv_delete`), the review also says whether the target already exists. For a KV key it adds when the key was last written and, if a scheduled skill wrote it, which one. Writes from other turns, and keys written before this was added, read as not recorded. A call that replaces or deletes something needs a request that asked for exactly that. The same `target` appears in the `supervisor` audit event.
 
 ### Constraints
 

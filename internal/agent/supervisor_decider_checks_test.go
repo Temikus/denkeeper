@@ -198,3 +198,97 @@ func TestGatherSupervisorInput_DeciderSeesMoreSkillBody(t *testing.T) {
 		t.Error("supervisor prompt grew past its own excerpt cap")
 	}
 }
+
+// no_self_grant is uncalibrated, so a hazard there hands the call on: it never
+// approves and never denies.
+func TestDecideSupervisorOutcome_SelfGrantEscalatesNeverDenies(t *testing.T) {
+	a := allAnswers(0.99)
+	a[deciderQSelfGrant] = llm.Answer{Noul: 0.99}
+	got, reason := decideSupervisorOutcome(a, 0.95, 0.05)
+	if got != supervisorEscalate || reason != "decider: uncertain on no_self_grant (p=0.01)" {
+		t.Errorf("= %s %q, want ESCALATE naming no_self_grant", got, reason)
+	}
+}
+
+func TestDecideSupervisorOutcome_AllSevenSafeApproves(t *testing.T) {
+	a := allAnswers(0.99)
+	if len(a) != 7 {
+		t.Fatalf("allAnswers has %d answers, want 7", len(a))
+	}
+	if got, reason := decideSupervisorOutcome(a, 0.95, 0.05); got != supervisorApprove {
+		t.Errorf("= %s %q, want APPROVE", got, reason)
+	}
+}
+
+func TestDecideSupervisorOutcome_MissingSelfGrantEscalates(t *testing.T) {
+	a := allAnswers(0.99)
+	delete(a, deciderQSelfGrant)
+	got, reason := decideSupervisorOutcome(a, 0.95, 0.05)
+	if got != supervisorEscalate || reason != "decider: no answer for self_grant" {
+		t.Errorf("= %s %q, want ESCALATE naming self_grant", got, reason)
+	}
+}
+
+func TestSupervisorDeciderQuestions_SelfGrantIsAStatement(t *testing.T) {
+	q, ok := supervisorDeciderQuestions(nil)[deciderQSelfGrant]
+	if !ok {
+		t.Fatal("no self_grant question")
+	}
+	if q.Type != llm.QuestionNoul || len(q.Choices) != 0 {
+		t.Errorf("self_grant = %+v, want a noul statement with no choices", q)
+	}
+	if !strings.Contains(q.Instructions, "`tool.name`") || !strings.Contains(q.Instructions, "`tool.arguments`") {
+		t.Errorf("self_grant instructions %q do not reference the call", q.Instructions)
+	}
+}
+
+// A review stored before self_grant existed has six answers. It stays in
+// calibration, scored on the checks it has.
+func TestShadowReviewFrom_SixAnswerReviewIsScored(t *testing.T) {
+	answers := allScores(0.99)
+	delete(answers, deciderQSelfGrant)
+	events := []audit.Event{shadowEvent(t, 0, "c1", "echo", `{}`, answers)}
+	reviews, _ := PairShadowReviews(events, "jev")
+	if len(reviews) != 1 {
+		t.Fatalf("got %d reviews, want 1", len(reviews))
+	}
+	r := reviews[0]
+	if r.MinScore == nil || r.MinDenyScore == nil || r.Lowest == "" {
+		t.Fatalf("review = %+v, want a MinScore and MinDenyScore", r)
+	}
+	if _, ok := r.Scores[deciderCheckNoSelfGrant]; ok {
+		t.Errorf("no_self_grant scored without an answer: %v", r.Scores)
+	}
+}
+
+func TestShadowReviewFrom_SevenAnswerReviewScoresSelfGrant(t *testing.T) {
+	answers := allScores(0.99)
+	answers[deciderQSelfGrant] = DeciderAnswerForScore(deciderQSelfGrant, 0.2)
+	events := []audit.Event{shadowEvent(t, 0, "c1", "echo", `{}`, answers)}
+	reviews, _ := PairShadowReviews(events, "jev")
+	if len(reviews) != 1 {
+		t.Fatalf("got %d reviews, want 1", len(reviews))
+	}
+	r := reviews[0]
+	if got := r.Scores[deciderCheckNoSelfGrant]; got != 0.2 {
+		t.Errorf("no_self_grant = %v, want 0.2", got)
+	}
+	if r.Lowest != deciderCheckNoSelfGrant || *r.MinScore != 0.2 {
+		t.Errorf("lowest = %q at %v, want no_self_grant at 0.2", r.Lowest, *r.MinScore)
+	}
+	// Escalate-only: it does not pull the deny score down.
+	if *r.MinDenyScore != 0.99 {
+		t.Errorf("min_deny_score = %v, want 0.99", *r.MinDenyScore)
+	}
+}
+
+// Any other missing answer still leaves the review unscored.
+func TestShadowReviewFrom_OtherMissingAnswerStaysUnscored(t *testing.T) {
+	answers := allScores(0.99)
+	delete(answers, deciderQSelfGrant)
+	delete(answers, deciderQSecrets)
+	reviews, _ := PairShadowReviews([]audit.Event{shadowEvent(t, 0, "c1", "echo", `{}`, answers)}, "jev")
+	if len(reviews) != 1 || reviews[0].MinScore != nil {
+		t.Errorf("reviews = %+v, want one review with no MinScore", reviews)
+	}
+}

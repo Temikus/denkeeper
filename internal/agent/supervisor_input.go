@@ -27,6 +27,7 @@ type supervisorReviewInput struct {
 	hasUserRequest  bool
 	userRequest     string // last user message in recent, truncated
 	recent          []StoredMessage
+	target          *WriteTarget // nil unless the call is a skill or KV write tool
 }
 
 const (
@@ -54,6 +55,7 @@ func (e *Engine) gatherSupervisorInput(ctx context.Context, tc llm.ToolCall, con
 		}
 		in.toolGuidance = e.tools.GuidanceForTool(in.tool)
 	}
+	in.target = e.ResolveWriteTarget(ctx, in.tool, in.arguments)
 
 	recent, err := e.memory.GetMessages(ctx, convID, e.SupervisorContextMessages())
 	if err != nil {
@@ -94,6 +96,10 @@ func (in *supervisorReviewInput) markdown() string {
 		fmt.Fprintf(&b, "**Operator guidance for this tool's server** (arguments must conform):\n%s\n", in.toolGuidance)
 	}
 	fmt.Fprintf(&b, "**Arguments**:\n```json\n%s\n```\n\n", in.arguments)
+	if in.target != nil {
+		b.WriteString(in.target.markdownLine())
+		b.WriteString("\n\n")
+	}
 
 	if in.skill != nil {
 		writeSupervisorSkillContext(&b, in.skill, in.bodyExcerptLen)
@@ -110,7 +116,7 @@ func (in *supervisorReviewInput) markdown() string {
 		b.WriteString("\n")
 	}
 
-	writeSupervisorEvalCriteria(&b, in.skill)
+	writeSupervisorEvalCriteria(&b, in.skill, in.target != nil)
 	return b.String()
 }
 
@@ -122,6 +128,7 @@ type deciderState struct {
 	UserRequest    string           `json:"user_request,omitempty"`
 	Skill          *deciderSkill    `json:"skill,omitempty"`
 	RecentMessages []deciderMessage `json:"recent_messages,omitempty"`
+	Target         *WriteTarget     `json:"target,omitempty"` // absent for every call that is not a write tool
 }
 
 type deciderStateTool struct {
@@ -154,6 +161,7 @@ func (in *supervisorReviewInput) deciderState() deciderState {
 			Arguments:   rawJSONOrString(in.arguments),
 		},
 		UserRequest: in.userRequest,
+		Target:      in.target,
 	}
 	if sk := in.skill; sk != nil {
 		s.Skill = &deciderSkill{

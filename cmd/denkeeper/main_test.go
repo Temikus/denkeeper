@@ -18,6 +18,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/approval"
 	"github.com/Temikus/denkeeper/internal/config"
+	"github.com/Temikus/denkeeper/internal/kv"
 	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/netguard"
 	"github.com/Temikus/denkeeper/internal/scheduler"
@@ -337,6 +338,37 @@ func TestKVCleanupDuration_Invalid(t *testing.T) {
 func TestKVCleanupDuration_Zero(t *testing.T) {
 	if got := kvCleanupDuration("0s"); got.String() != "1h0m0s" {
 		t.Errorf("kvCleanupDuration(0s) = %v, want 1h (fallback for non-positive)", got)
+	}
+}
+
+func TestKVTargetsFor_NilStoreGivesNoTargets(t *testing.T) {
+	if got := kvTargetsFor(nil); got != nil {
+		t.Errorf("kvTargetsFor(nil) = %v, want nil", got)
+	}
+}
+
+func TestKVTargetAdapter_ReadsAndStampsTheWriter(t *testing.T) {
+	store, err := kv.NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("kv store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	targets := kvTargetsFor(store)
+
+	if exists, _, _, err := targets.KVTarget(ctx, "pamela", "missing"); err != nil || exists {
+		t.Fatalf("missing key: exists=%v err=%v", exists, err)
+	}
+	if err := store.Set(ctx, "pamela", "digest", "v", 0); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := targets.StampKVWriter(ctx, "pamela", "digest", "daily-digest"); err != nil {
+		t.Fatalf("StampKVWriter: %v", err)
+	}
+	exists, writer, updatedAt, err := targets.KVTarget(ctx, "pamela", "digest")
+	if err != nil || !exists || writer != "daily-digest" || updatedAt.IsZero() {
+		t.Errorf("KVTarget = (%v, %q, %v, %v), want an existing key written by daily-digest",
+			exists, writer, updatedAt, err)
 	}
 }
 

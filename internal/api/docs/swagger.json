@@ -9201,7 +9201,7 @@
                     "type": "string"
                 },
                 "min_deny_score": {
-                    "description": "lowest check that can deny (no_leak only escalates); nil when an answer is missing",
+                    "description": "lowest check that can deny (no_leak and no_self_grant only escalate); nil when an answer is missing",
                     "type": "number"
                 },
                 "min_score": {
