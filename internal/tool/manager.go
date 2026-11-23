@@ -991,6 +991,7 @@ var builtinReadOnlyTools = map[string]bool{
 // toolClass is everything a classification decision reads about one tool,
 // snapshotted under the manager lock.
 type toolClass struct {
+	server    string // owning server's name
 	local     string // server-local name, which the allowlists are keyed by
 	inProcess bool   // registered as an in-process session, not an external server
 	optedIn   bool   // [tools.*] idempotent / idempotent_tools names it
@@ -1010,7 +1011,8 @@ func (m *Manager) classify(toolName string) (toolClass, *Manager, error) {
 		return toolClass{}, parent, err
 	}
 	return toolClass{
-		local: local,
+		server: sc.name,
+		local:  local,
 		// In-process sessions (RegisterSession) have no transport and no
 		// command; external servers always set one of them.
 		inProcess: sc.transport == "" && sc.command == "",

@@ -47,6 +47,12 @@ Models occasionally repeat a tool call with byte-identical arguments in the same
 
 The built-in `web_fetch`, `web_search`, `kv_get`, and `kv_list` tools are always cache-eligible. External MCP servers opt in via `idempotent = true` (whole server) or `idempotent_tools = ["lookup", ...]` (mixed read/write servers) on their `[tools.*]` entry. Server-supplied MCP annotations are never trusted by default, but `trust_annotations = true` extends eligibility to tools the server marks with `readOnlyHint` — an explicit per-server statement that you trust its self-description. Cached calls appear in telemetry with a `cached` outcome and in the audit log as `cache_hit` events.
 
+### Untrusted tool output
+
+Results from `web_fetch`, `web_search`, the browser and every external MCP server reach the model wrapped in `<untrusted_tool_output source="<server>">` tags, errors included. An agent that has any of these tools also gets a short system-prompt section saying that text inside the tags is data, never instructions. Results from config, KV, script and decide tools are sent unchanged, and so are the audit log, dry-run transcripts and eval traces, which keep each tool's raw output.
+
+This is framing, not a guarantee: it gives the model and its reviewers a clear signal, but a model can still be talked into following injected text. Keep supervised mode and the read-only tier for agents that browse untrusted content.
+
 ## Tool calls and permissions
 
 Tool execution respects the agent's permission tier:

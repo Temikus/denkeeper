@@ -1347,6 +1347,7 @@ Prefer KV over persona memory for anything structured or dated. Persona memory i
 	// is the most stable appended block (it changes only when an operator edits
 	// it), so it belongs as early as possible in the prompt-cache prefix.
 	base += e.buildToolGuidanceSection()
+	base += e.untrustedOutputNote()
 
 	// Inject session context so the agent knows its current delivery channel.
 	if msg.Adapter != "" && msg.ExternalID != "" {
@@ -3380,6 +3381,8 @@ func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int
 		onEvent(ChatEvent{Type: "tool_start", Tool: tc.Function.Name, ToolID: tc.ID, Round: round})
 	}
 
+	// Read before Execute: a draining server leaves the index mid-call.
+	prov := e.tools.Provenance(tc.Function.Name)
 	toolStart := time.Now()
 	e.logger.Info("executing tool", "tool", tc.Function.Name, "round", round)
 	toolCtx, toolCancel := context.WithTimeout(ctx, toolExecTimeout)
@@ -3426,7 +3429,9 @@ func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int
 		onEvent(evt)
 	}
 	record.Result = result
-	return result, record, false
+	// Last step before the wire: record.Result stays raw, and any future
+	// wire-side cap must cut before this wrap, not after.
+	return frameToolResult(prov, result), record, false
 }
 
 // auditToolExecution records one executed tool call. The result body is capped
