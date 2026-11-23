@@ -487,20 +487,19 @@ func TestTOML_DescriptionWithPlusesRoundTrips(t *testing.T) {
 	}
 }
 
-// A hand-written multiline string may hold a line that is exactly +++. The
-// block ends at the first such line that leaves valid TOML before it, so the
-// skill loads instead of vanishing. The writers never produce this shape:
-// go-toml escapes newlines in a basic string.
-func TestTOML_PlusesLineInsideMultilineStringLoads(t *testing.T) {
+// A hand-written multiline string holding a line that is exactly +++ ends the
+// block there, so the file is refused. A later +++ is never tried: that would
+// let a file hide keys other TOML readers show as body. The writers never
+// produce this shape: go-toml escapes newlines in a basic string.
+func TestTOML_PlusesLineInsideMultilineStringIsRefused(t *testing.T) {
 	file := "+++\nname = \"demo\"\ndescription = \"\"\"\nline one\n+++\nline two\"\"\"\n+++\n\nbody"
-	got := mustParse(t, file)
-	if got.Description != "line one\n+++\nline two" || got.Body != "body" {
-		t.Errorf("description %q, body %q", got.Description, got.Body)
+	if _, err := ParseFile("x.md", []byte(file)); err == nil || !strings.Contains(err.Error(), "parsing frontmatter") {
+		t.Errorf("ParseFile err = %v, want a frontmatter parse error", err)
 	}
-	// An edit of it writes the value escaped, so it reloads the same.
-	edited := mustParse(t, renderOK(t, got, Fields{Name: "demo", Description: got.Description, Version: "2"}, "body"))
-	if edited.Description != got.Description || edited.Version != "2" {
-		t.Errorf("after edit: description %q, version %q", edited.Description, edited.Version)
+	// What the writers produce for the same value loads.
+	got := mustParse(t, RenderNew(Fields{Name: "demo", Description: "line one\n+++\nline two"}, "body"))
+	if got.Description != "line one\n+++\nline two" {
+		t.Errorf("RenderNew round trip = %q", got.Description)
 	}
 }
 

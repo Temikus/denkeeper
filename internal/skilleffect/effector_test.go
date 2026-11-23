@@ -709,6 +709,48 @@ func TestEffector_Revert_DirectorySkillUpdateRestoresSKILLmd(t *testing.T) {
 	mustNotExist(t, sa, "kelos")
 }
 
+// Deleting a directory skill leaves its folder. A fresh create of the name is
+// refused (it would inherit the old files), but the revert writes SKILL.md
+// back into the folder.
+func TestEffector_Revert_DirectorySkillDeleteRestoresIntoFolder(t *testing.T) {
+	store := newStore(t)
+	sa := newFakeSkills(t)
+	e := newEffector(t, store)
+	path := filepath.Join(sa.dir, "kelos", "SKILL.md")
+	if err := os.MkdirAll(filepath.Join(sa.dir, "kelos", "references"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(effectorYAMLSkill+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := skill.ParseFile(path, []byte(effectorYAMLSkill))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sa.AppendSkill(*parsed)
+
+	if err := e.Delete(context.Background(), sa, "t1", "kelos", agent.SkillActorUser, 0); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("SKILL.md still there after delete: %v", err)
+	}
+	fresh := configmcp.BuildSkillPayload("kelos", "New.", "1", nil, "body", 0, 0, nil)
+	if err := e.Create(context.Background(), sa, "t2", fresh, agent.SkillActorUser, 0); !errors.Is(err, configmcp.ErrSkillExists) {
+		t.Fatalf("create over the leftover folder = %v, want ErrSkillExists", err)
+	}
+
+	if _, err := e.Revert(context.Background(), sa, "kelos", 0); err != nil {
+		t.Fatalf("revert: %v", err)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != effectorYAMLSkill+"\n" {
+		t.Errorf("SKILL.md after revert = %q, %v", got, err)
+	}
+	if sk, ok := sa.GetSkill("kelos"); !ok || sk.Dir != filepath.Join(sa.dir, "kelos") {
+		t.Errorf("restored skill = %+v, want it back in memory with its Dir", sk)
+	}
+}
+
 func TestEffector_Revert_YAMLUpdateRestoresExactBytes(t *testing.T) {
 	store := newStore(t)
 	sa := newFakeSkills(t)

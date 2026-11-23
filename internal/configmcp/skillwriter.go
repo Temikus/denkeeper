@@ -13,7 +13,7 @@ var ErrSkillExists = errors.New("already exists")
 // ErrSkillNotEditable is returned when a directory-form skill cannot be
 // written by name: its folder is not named after it, or the edit is a rename.
 // The file is fine; the person edits it by hand. REST answers 422 for it.
-var ErrSkillNotEditable = errors.New("edit it by hand")
+var ErrSkillNotEditable = errors.New("the skill needs a manual edit")
 
 var (
 	createLocksMu sync.Mutex

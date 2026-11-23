@@ -587,7 +587,7 @@ func MergeSkillFields(name string, existing skill.Skill, desc, ver *string, trig
 	if existing.Dir != "" && filepath.Base(existing.Dir) != existing.Name {
 		folder := filepath.Base(existing.Dir)
 		return "", fmt.Errorf("skill %q keeps its files in the %s folder, which is not named after it, so this edit "+
-			"cannot reach them. Edit %s in the skills directory: %w", existing.Name, folder, path.Join(folder, "SKILL.md"), ErrSkillNotEditable)
+			"cannot reach them. Edit %s in the skills directory (%w)", existing.Name, folder, path.Join(folder, "SKILL.md"), ErrSkillNotEditable)
 	}
 	description := existing.Description
 	if desc != nil {
@@ -2048,41 +2048,78 @@ func ReadSkillFile(agentSkillsDir, name string) (string, bool, error) {
 	return string(data), true, nil
 }
 
-// SkillFileExists reports whether name has a skill file on disk in either form,
-// "<name>.md" or "<name>/SKILL.md", whether or not it loaded. Like ReadSkillFile,
-// an IO failure other than "not found" is an error, not "absent".
-func SkillFileExists(agentSkillsDir, name string) (bool, error) {
+// skillOnDisk says what name has on disk: a skill file in either form, or only
+// a "<name>" folder with no SKILL.md (what deleting a directory skill leaves).
+type skillOnDisk int
+
+const (
+	skillAbsent skillOnDisk = iota
+	skillFilePresent
+	skillFolderOnly
+)
+
+func skillPresence(agentSkillsDir, name string) (skillOnDisk, error) {
 	if err := ValidateSkillName(name); err != nil {
-		return false, err
+		return skillAbsent, err
 	}
 	root, err := os.OpenRoot(agentSkillsDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return false, nil
+			return skillAbsent, nil
 		}
-		return false, fmt.Errorf("opening skills directory: %w", err)
+		return skillAbsent, fmt.Errorf("opening skills directory: %w", err)
 	}
 	defer func() { _ = root.Close() }()
 
 	for _, p := range []string{name + ".md", name + "/SKILL.md"} {
 		if _, err := root.Lstat(p); err == nil {
-			return true, nil
+			return skillFilePresent, nil
 		} else if !os.IsNotExist(err) {
-			return false, fmt.Errorf("checking skill file %s: %w", p, err)
+			return skillAbsent, fmt.Errorf("checking skill file %s: %w", p, err)
 		}
 	}
-	return false, nil
+	if _, err := root.Lstat(name); err == nil {
+		return skillFolderOnly, nil
+	} else if !os.IsNotExist(err) {
+		return skillAbsent, fmt.Errorf("checking skill folder %s: %w", name, err)
+	}
+	return skillAbsent, nil
 }
 
-// RefuseExistingSkill returns an error wrapping ErrSkillExists if name already
-// has a skill file in either form.
+// SkillFileExists reports whether name is taken on disk: a skill file in
+// either form, "<name>.md" or "<name>/SKILL.md", whether or not it loaded, or
+// a "<name>" folder left without its SKILL.md. Like ReadSkillFile, an IO
+// failure other than "not found" is an error, not "absent".
+func SkillFileExists(agentSkillsDir, name string) (bool, error) {
+	p, err := skillPresence(agentSkillsDir, name)
+	return p != skillAbsent, err
+}
+
+// RefuseExistingSkill returns an error wrapping ErrSkillExists if name is
+// taken on disk. A leftover folder is refused too: a new skill written into it
+// would silently take on the old skill's files.
 func RefuseExistingSkill(agentSkillsDir, name string) error {
-	exists, err := SkillFileExists(agentSkillsDir, name)
+	return refuseExisting(agentSkillsDir, name, false)
+}
+
+// RefuseExistingSkillForRestore is RefuseExistingSkill for an undo of a
+// delete: a leftover folder is where the deleted skill's files still are, so
+// only a skill file refuses.
+func RefuseExistingSkillForRestore(agentSkillsDir, name string) error {
+	return refuseExisting(agentSkillsDir, name, true)
+}
+
+func refuseExisting(agentSkillsDir, name string, restoring bool) error {
+	p, err := skillPresence(agentSkillsDir, name)
 	if err != nil {
 		return err
 	}
-	if exists {
+	switch {
+	case p == skillFilePresent:
 		return fmt.Errorf("skill %q %w", name, ErrSkillExists)
+	case p == skillFolderOnly && !restoring:
+		return fmt.Errorf("skill %q %w as a %s folder with no SKILL.md, likely left by a deleted skill; "+
+			"revert the delete, or remove or rename the folder by hand", name, ErrSkillExists, name)
 	}
 	return nil
 }
@@ -2100,10 +2137,21 @@ func SkillPayloadFromFile(content string) string {
 }
 
 // ApplySkillCreate writes the skill file to disk and appends it to the
-// in-memory skill list. It refuses a name that already has a file with
-// ErrSkillExists. Callers hold LockSkillCreate so that check stays true
-// through the write.
+// in-memory skill list. It refuses a name that already has a file, or a
+// leftover folder, with ErrSkillExists. Callers hold LockSkillCreate so that
+// check stays true through the write.
 func ApplySkillCreate(agentSkillsDir string, appendSkill func(skill.Skill), logger skillLogger, payload string, maxBytes int) error {
+	return applySkillCreate(agentSkillsDir, appendSkill, logger, payload, maxBytes, false)
+}
+
+// ApplySkillRestore is ApplySkillCreate for an undo of a delete: it writes
+// into a folder a deleted directory skill left behind, where that skill's
+// other files still are.
+func ApplySkillRestore(agentSkillsDir string, appendSkill func(skill.Skill), logger skillLogger, payload string, maxBytes int) error {
+	return applySkillCreate(agentSkillsDir, appendSkill, logger, payload, maxBytes, true)
+}
+
+func applySkillCreate(agentSkillsDir string, appendSkill func(skill.Skill), logger skillLogger, payload string, maxBytes int, restoring bool) error {
 	if err := checkSkillPayloadSize(payload, maxBytes); err != nil {
 		return err
 	}
@@ -2111,7 +2159,7 @@ func ApplySkillCreate(agentSkillsDir string, appendSkill func(skill.Skill), logg
 	if err != nil {
 		return fmt.Errorf("parsing skill: %w", err)
 	}
-	if err := RefuseExistingSkill(agentSkillsDir, s.Name); err != nil {
+	if err := refuseExisting(agentSkillsDir, s.Name, restoring); err != nil {
 		return err
 	}
 
@@ -2123,6 +2171,11 @@ func ApplySkillCreate(agentSkillsDir string, appendSkill func(skill.Skill), logg
 
 	if err := writeSkillFileAtomic(root, s.Name, payload); err != nil {
 		return err
+	}
+	// Written into a folder (a restore): memory carries it as the loader would.
+	if fi, err := root.Lstat(s.Name); err == nil && fi.IsDir() {
+		s.Dir = filepath.Join(agentSkillsDir, s.Name)
+		s.SubFileNames = skill.ScanSubFiles(s.Dir)
 	}
 
 	appendSkill(*s)
@@ -2190,7 +2243,7 @@ func ApplySkillRename(agentSkillsDir string, removeSkill func(string) bool, appe
 	}
 	if oldRel != oldName+".md" {
 		return fmt.Errorf("skill %q keeps its files in the %s folder: rename its folder by hand, then "+
-			"change name in its SKILL.md (%w)", oldName, oldName, ErrSkillNotEditable)
+			"change the name field in its SKILL.md (%w)", oldName, oldName, ErrSkillNotEditable)
 	}
 
 	// Write new file first (crash-safe: worst case both files exist).

@@ -107,10 +107,16 @@ func (e *Effector) tracking() bool { return e != nil && e.store != nil }
 // aborts the mutation: fail closed.
 func (e *Effector) Create(ctx context.Context, sa SkillAccess, tid, payload, actor string, maxBytes int) error {
 	defer configmcp.LockSkillCreate(sa.SkillsDir())()
+	// An undo of a delete writes back into the folder a directory skill left;
+	// any other create refuses that folder.
+	refuse, apply := configmcp.RefuseExistingSkill, configmcp.ApplySkillCreate
+	if actor == agent.SkillActorRevert {
+		refuse, apply = configmcp.RefuseExistingSkillForRestore, configmcp.ApplySkillRestore
+	}
 	if name, version, ok := e.parseTracked(payload); ok && validName(name) {
 		// Refuse before journaling: a create revision for a write that never
 		// happens would delete the existing skill on revert.
-		if err := configmcp.RefuseExistingSkill(sa.SkillsDir(), name); err != nil {
+		if err := refuse(sa.SkillsDir(), name); err != nil {
 			return err
 		}
 		// prior_payload stays NULL: the prior state of a create is "absent",
@@ -125,7 +131,7 @@ func (e *Effector) Create(ctx context.Context, sa SkillAccess, tid, payload, act
 			return err
 		}
 	}
-	return configmcp.ApplySkillCreate(sa.SkillsDir(), sa.AppendSkill, e.logger, payload, maxBytes)
+	return apply(sa.SkillsDir(), sa.AppendSkill, e.logger, payload, maxBytes)
 }
 
 // Update replaces a skill's file, journaling the bytes it replaces.

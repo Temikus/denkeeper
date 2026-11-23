@@ -1,6 +1,7 @@
 package configmcp_test
 
 import (
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -87,7 +88,7 @@ func TestSkillUpdate_DirectorySkillWritesItsSKILLmd(t *testing.T) {
 func TestSkillUpdate_DirectorySkillRenameIsRefused(t *testing.T) {
 	call, dir, mem := dirSkillServer(t, "kelos")
 	text, isErr := call("skill_update", map[string]any{"name": "kelos", "new_name": "kelos-two"})
-	if !isErr || !strings.Contains(text, "rename its folder by hand") {
+	if !isErr || !strings.Contains(text, "rename its folder by hand, then change the name field in its SKILL.md (the skill needs a manual edit)") {
 		t.Fatalf("rename = %q (error %v), want a refusal", text, isErr)
 	}
 	for _, p := range []string{"kelos-two.md", "kelos-two"} {
@@ -108,7 +109,7 @@ func TestSkillUpdate_DirectorySkillRenameIsRefused(t *testing.T) {
 func TestSkillUpdate_DirectorySkillInOtherFolderIsRefused(t *testing.T) {
 	call, dir, _ := dirSkillServer(t, "kelos-folder")
 	text, isErr := call("skill_update", map[string]any{"name": "kelos", "description": "Changed."})
-	if !isErr || !strings.Contains(text, "kelos-folder/SKILL.md") || strings.Contains(text, dir) {
+	if !isErr || !strings.Contains(text, "Edit kelos-folder/SKILL.md in the skills directory (the skill needs a manual edit)") || strings.Contains(text, dir) {
 		t.Fatalf("update = %q (error %v), want a refusal naming the folder relatively", text, isErr)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "kelos.md")); !os.IsNotExist(err) {
@@ -122,6 +123,28 @@ func TestReadSkillFile_ReadsADirectorySkill(t *testing.T) {
 	got, ok, err := configmcp.ReadSkillFile(dir, "kelos")
 	if err != nil || !ok || got != yamlSkillFile {
 		t.Fatalf("ReadSkillFile = %q, %v, %v; want the SKILL.md bytes", got, ok, err)
+	}
+}
+
+// After a directory skill is deleted its folder stays, so a create of the
+// same name is refused rather than inheriting the old skill's files.
+func TestApplySkillCreate_RefusesALeftoverFolder(t *testing.T) {
+	dir := t.TempDir()
+	seedDirSkill(t, dir, "kelos")
+	if err := configmcp.RemoveSkillFile(dir, "kelos"); err != nil {
+		t.Fatal(err)
+	}
+	if exists, err := configmcp.SkillFileExists(dir, "kelos"); err != nil || !exists {
+		t.Errorf("SkillFileExists = %v, %v; want the leftover folder to count", exists, err)
+	}
+
+	payload := configmcp.BuildSkillPayload("kelos", "New.", "1", nil, "body", 0, 0, nil)
+	err := configmcp.ApplySkillCreate(dir, func(skill.Skill) {}, ioTestLogger(), payload, 0)
+	if !errors.Is(err, configmcp.ErrSkillExists) || !strings.Contains(err.Error(), "folder with no SKILL.md") {
+		t.Fatalf("create = %v, want a refusal naming the leftover folder", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "kelos", "SKILL.md")); !os.IsNotExist(err) {
+		t.Errorf("SKILL.md was written into the leftover folder: %v", err)
 	}
 }
 

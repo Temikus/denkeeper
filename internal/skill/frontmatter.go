@@ -121,11 +121,7 @@ func splitFrontmatter(path, text string) (splitResult, error) {
 		return splitResult{}, fmt.Errorf("skill %q: missing opening frontmatter delimiter (+++ or ---)", path)
 	}
 	delim := dialect.delimiter()
-	var fits func(string) bool
-	if dialect == DialectTOML {
-		fits = tomlParses
-	}
-	block, body, lead, ok := splitBlock(rest, delim, fits)
+	block, body, lead, ok := splitBlock(rest, delim)
 	if !ok {
 		return splitResult{}, fmt.Errorf("skill %q: missing closing %s delimiter", path, delim)
 	}
@@ -140,36 +136,24 @@ func isDelimiterLine(line, delim string) bool {
 // delim lines belong to the body, so a markdown rule there is safe. lead is
 // how many CR/LF bytes were trimmed from the front of the block.
 //
-// fits, when set, picks among delim lines: the block ends at the first one
-// whose block fits, so a TOML multiline string holding a line that is exactly
-// +++ does not end it early. With none fitting, the first delim line wins and
-// the decoder reports the error.
-func splitBlock(rest, delim string, fits func(block string) bool) (block, body string, lead int, ok bool) {
+// The first delim line always wins, even inside a TOML multiline string: the
+// file is then refused. Picking a later line that parses would let a file hide
+// keys that other TOML readers show as body.
+func splitBlock(rest, delim string) (block, body string, lead int, ok bool) {
 	pos := 0
 	for pos <= len(rest) {
 		line, after, more := strings.Cut(rest[pos:], "\n")
 		if isDelimiterLine(line, delim) {
 			raw := rest[:pos]
-			b, bd := strings.Trim(raw, "\r\n"), strings.TrimSpace(after)
-			l := len(raw) - len(strings.TrimLeft(raw, "\r\n"))
-			if fits == nil || fits(b) {
-				return b, bd, l, true
-			}
-			if !ok {
-				block, body, lead, ok = b, bd, l, true
-			}
+			lead = len(raw) - len(strings.TrimLeft(raw, "\r\n"))
+			return strings.Trim(raw, "\r\n"), strings.TrimSpace(after), lead, true
 		}
 		if !more {
-			break
+			return "", "", 0, false
 		}
 		pos += len(line) + 1
 	}
-	return block, body, lead, ok
-}
-
-func tomlParses(block string) bool {
-	var m map[string]any
-	return toml.Unmarshal([]byte(block), &m) == nil
+	return "", "", 0, false
 }
 
 // --- Decoding ---

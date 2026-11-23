@@ -158,6 +158,9 @@ func LoadDir(dir string, logger *slog.Logger) ([]Skill, error) {
 	}
 
 	var skills []Skill
+	// Two files with one name (say kelos.md beside kelos/SKILL.md) both load,
+	// and writes go to the flat one, so the operator is told.
+	pathOf := map[string]string{}
 
 	for _, entry := range entries {
 		var path string
@@ -192,6 +195,11 @@ func LoadDir(dir string, logger *slog.Logger) ([]Skill, error) {
 		if skillDir != "" {
 			s.Dir = skillDir
 			s.SubFileNames = ScanSubFiles(skillDir)
+		}
+		if prev, dup := pathOf[s.Name]; dup {
+			logger.Warn("skill: two files define the same skill name", "name", s.Name, "first", prev, "second", path)
+		} else {
+			pathOf[s.Name] = path
 		}
 
 		skills = append(skills, *s)
