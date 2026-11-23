@@ -91,7 +91,7 @@ The lowest check decides:
 | At or above `supervisor_decider_approve_at` | **Approve** |
 | In between | **Escalate** to the next stage |
 
-`no_leak` and `no_self_grant` are the exceptions: they can stop an approval but never deny. Sending private data out is often exactly what was asked for, such as emailing you your own tasks, so a low `no_leak` on its own goes on to the supervisor or you. `no_self_grant` has not been calibrated yet, so a low score hands the call to the supervisor, which denies permission grants by rule (see [Supervisors](/docs/concepts/supervisors/#what-the-supervisor-checks)). The deny row looks at the other four checks: if one of them, such as `no_secrets`, is at or below `deny_at`, the call is denied whatever `no_leak` or `no_self_grant` say.
+`no_leak` and `no_self_grant` are the exceptions: they can stop an approval but never deny. Sending private data out is often exactly what was asked for, such as emailing you your own tasks, so a low `no_leak` on its own goes on to the supervisor or you. `no_self_grant` has not been calibrated yet, so a low score hands the call on to the supervisor, which denies permission grants by rule (see [Supervisors](/docs/concepts/supervisors/#what-the-supervisor-checks)), or to you when there is no supervisor. The deny row looks at the other four checks: if one of them, such as `no_secrets`, is at or below `deny_at`, the call is denied whatever `no_leak` or `no_self_grant` say.
 
 Thresholds must satisfy `0 < deny_at < approve_at < 1`.
 
