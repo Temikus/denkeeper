@@ -27,12 +27,17 @@ func TestExplainRenderError_FlatSkillNamesTheSkillsDirectory(t *testing.T) {
 	}
 }
 
-func TestExplainRenderError_DirectorySkillNamesItsFile(t *testing.T) {
-	dir := filepath.Join("skills", "kelos")
+// The path is relative to the skills directory: Dir is a server path, and the
+// message reaches REST and MCP callers.
+func TestExplainRenderError_DirectorySkillNamesItsFileRelatively(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "home", "someone", "skills", "kelos")
 	err := explainRenderError(errUnknownKeysGuard, skill.Skill{Name: "kelos", Dir: dir})
-	want := refusalPrefix + filepath.Join(dir, "SKILL.md") + " by hand ("
+	want := refusalPrefix + "kelos/SKILL.md in the skills directory by hand ("
 	if err == nil || !strings.HasPrefix(err.Error(), want) {
 		t.Fatalf("err = %v, want it to start %q", err, want)
+	}
+	if strings.Contains(err.Error(), dir) || strings.Contains(err.Error(), "someone") {
+		t.Errorf("err = %v, leaks the server path %s", err, dir)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -625,7 +626,9 @@ func explainRenderError(err error, existing skill.Skill) error {
 	}
 	where := "the skill's file in the agent's skills directory"
 	if existing.Dir != "" {
-		where = filepath.Join(existing.Dir, "SKILL.md")
+		// Relative to the skills directory: Dir is a server path, and callers
+		// over REST or MCP must not learn the host layout from it.
+		where = path.Join(filepath.Base(existing.Dir), "SKILL.md") + " in the skills directory"
 	}
 	return fmt.Errorf("the edit was not saved: denkeeper could not rewrite this skill's frontmatter "+
 		"without changing keys it does not read. Edit %s by hand (%w)", where, err)
