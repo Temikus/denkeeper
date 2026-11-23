@@ -139,3 +139,26 @@ func TestParseTTL_Overflow(t *testing.T) {
 		t.Fatal("expected an overflow error")
 	}
 }
+
+func TestDefaultTTLFor_LongestPrefixWins(t *testing.T) {
+	defaults := map[string]time.Duration{"log:": 720 * time.Hour, "log:research:": 168 * time.Hour}
+
+	prefix, ttl := DefaultTTLFor(defaults, "log:research:2026-11-22")
+	if prefix != "log:research:" || ttl != 168*time.Hour {
+		t.Errorf("DefaultTTLFor(log:research:…) = %q, %v; want log:research:, 168h", prefix, ttl)
+	}
+	prefix, ttl = DefaultTTLFor(defaults, "log:heartbeat:2026-11-22")
+	if prefix != "log:" || ttl != 720*time.Hour {
+		t.Errorf("DefaultTTLFor(log:heartbeat:…) = %q, %v; want log:, 720h", prefix, ttl)
+	}
+}
+
+func TestDefaultTTLFor_CaseSensitiveAndNoMatch(t *testing.T) {
+	defaults := map[string]time.Duration{"log:": 720 * time.Hour}
+
+	for _, key := range []string{"LOG:x", "pref:theme", "lo"} {
+		if prefix, ttl := DefaultTTLFor(defaults, key); prefix != "" || ttl != 0 {
+			t.Errorf("DefaultTTLFor(%q) = %q, %v; want no match", key, prefix, ttl)
+		}
+	}
+}
