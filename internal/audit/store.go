@@ -115,6 +115,9 @@ func NewInMemoryStore() (*SQLiteStore, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Each pooled connection to ":memory:" is a separate, empty database,
+	// so a second connection would see no audit_events table.
+	db.SetMaxOpenConns(1)
 	if err := initAuditDB(db); err != nil {
 		_ = db.Close()
 		return nil, err
