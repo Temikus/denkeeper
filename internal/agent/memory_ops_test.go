@@ -109,6 +109,21 @@ func TestOpsSpend_SumsAgentRowsInsideWindow(t *testing.T) {
 	}
 }
 
+// created_at has whole-second resolution, so a window ending now must still
+// count a turn stored earlier in the same second.
+func TestOpsSpend_CountsTurnInTheCurrentSecond(t *testing.T) {
+	store := opsStore(t)
+	seedOpsTurn(t, store, opsTurn{agent: "pamela", conv: "c1", model: "m", cost: 0.5})
+	now := time.Now()
+	got, err := store.OpsSpend(context.Background(), "pamela", now.Add(-time.Hour), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Turns != 1 {
+		t.Fatalf("turns = %d, want 1", got.Turns)
+	}
+}
+
 func TestOpsSpend_IgnoresReplyWithoutModel(t *testing.T) {
 	store := opsStore(t)
 	seedOpsTurn(t, store, opsTurn{agent: "pamela", conv: "c1", model: "m", cost: 0.5})

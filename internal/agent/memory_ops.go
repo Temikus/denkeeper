@@ -46,8 +46,19 @@ type OpsSkillUsage struct {
 
 // opsBounds renders a window as SQLite DATETIME text, the layout
 // CURRENT_TIMESTAMP writes, so the comparison is a plain string comparison.
+// Both bounds round up to the next whole second: created_at has whole-second
+// resolution, so a bound cut down would drop rows stored earlier in its own
+// second. Rounding both keeps adjacent windows contiguous.
 func opsBounds(from, to time.Time) (string, string) {
-	return from.UTC().Format(sqliteDatetimeLayout), to.UTC().Format(sqliteDatetimeLayout)
+	return ceilSecond(from).Format(sqliteDatetimeLayout), ceilSecond(to).Format(sqliteDatetimeLayout)
+}
+
+func ceilSecond(t time.Time) time.Time {
+	t = t.UTC()
+	if s := t.Truncate(time.Second); s.Before(t) {
+		return s.Add(time.Second)
+	}
+	return t
 }
 
 // OpsSpend sums the agent's completed-turn spend in [from, to).
