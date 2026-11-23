@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 // testOpts are the shipped defaults, spelled out so a test that moves one
@@ -323,23 +324,28 @@ func TestVerdict_OperatorAgreementIsReported(t *testing.T) {
 	ctx := context.Background()
 	f.cleanRun(t)
 	f.createPairs(t)
-	f.judgeRun(t, func(Pair) int64 { return f.variants[1].ID })
+	cand := f.variants[1].ID
 
 	items, err := f.store.ListItems(ctx, f.run.ID)
 	if err != nil {
 		t.Fatalf("ListItems: %v", err)
 	}
-	judged, err := f.store.ListVerdicts(ctx, f.run.ID)
+	pairs, err := f.store.ListPairs(ctx, f.run.ID)
 	if err != nil {
-		t.Fatalf("ListVerdicts: %v", err)
+		t.Fatalf("ListPairs: %v", err)
 	}
-	byItem := make(map[int64]Verdict, len(judged))
-	for _, v := range judged {
-		byItem[v.ItemID] = v
+	byPair := make(map[int64]Pair, len(pairs))
+	for _, p := range pairs {
+		byPair[p.ID] = p
 	}
-	// Agree on three of four calibration items.
+	// The operator marks first, since a mark on a judged item is refused.
+	// Pick the letter the judge will pick, except on item 0: three of four agree.
 	for i, it := range items {
-		winner := byItem[it.ID].Winner
+		assign, err := DecodeAssignment(byPair[it.PairID].Assignment)
+		if err != nil {
+			t.Fatalf("DecodeAssignment: %v", err)
+		}
+		winner := letterFor(assign, it.PresentationOrder, cand)
 		if i == 0 {
 			winner = WinnerTie
 		}
@@ -349,6 +355,7 @@ func TestVerdict_OperatorAgreementIsReported(t *testing.T) {
 			t.Fatalf("RecordVerdict(operator): %v", err)
 		}
 	}
+	f.judgeRun(t, func(Pair) int64 { return cand })
 
 	vv := f.onlyVerdict(t, f.summarizeWith(t, testOpts()))
 	ag := vv.Judgment.OperatorAgreement
@@ -357,6 +364,52 @@ func TestVerdict_OperatorAgreementIsReported(t *testing.T) {
 	}
 	if ag.Items != 4 || ag.Agreed != 3 || ag.Rate != 0.75 {
 		t.Errorf("agreement = %+v, want 3 of 4 at 0.75", *ag)
+	}
+}
+
+func TestCountAgreement_SkipsMarkRecordedAfterJudge(t *testing.T) {
+	judgedAt := time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
+	items := []JudgmentItem{{ID: 1}, {ID: 2}}
+	judge := map[int64]Verdict{
+		1: {ItemID: 1, Winner: WinnerA, CreatedAt: judgedAt},
+		2: {ItemID: 2, Winner: WinnerA, CreatedAt: judgedAt},
+	}
+	operator := map[int64]Verdict{
+		1: {ItemID: 1, Winner: WinnerA, CreatedAt: judgedAt.Add(-time.Minute)}, // blind: counted
+		2: {ItemID: 2, Winner: WinnerA, CreatedAt: judgedAt.Add(time.Minute)},  // after the judge: skipped
+	}
+
+	total, agreed := countAgreement(items, judge, operator)
+	if total != 1 || agreed != 1 {
+		t.Errorf("countAgreement = (%d, %d), want (1, 1): the late mark must not count", total, agreed)
+	}
+}
+
+// Marks written by the old flow (operator after judge) stay in the table but
+// drop out of the figure. RecordVerdict now refuses them, so insert them by SQL.
+func TestVerdict_LateOperatorMarksAreNotCounted(t *testing.T) {
+	f := newPairFixture(t, 1, []string{CategoryChat})
+	ctx := context.Background()
+	f.cleanRun(t)
+	f.createPairs(t)
+	f.judgeRun(t, func(Pair) int64 { return f.variants[1].ID })
+
+	judged, err := f.store.ListVerdicts(ctx, f.run.ID)
+	if err != nil {
+		t.Fatalf("ListVerdicts: %v", err)
+	}
+	for _, v := range judged {
+		if _, err := f.store.db.ExecContext(ctx,
+			`INSERT INTO eval_verdicts (item_id, winner, dimensions, notes, judge_ident, rubric_version, created_at)
+			 VALUES (?, ?, '{}', '', ?, '', ?)`,
+			v.ItemID, v.Winner, JudgeOperator, v.CreatedAt.Add(time.Hour)); err != nil {
+			t.Fatalf("inserting late operator mark: %v", err)
+		}
+	}
+
+	vv := f.onlyVerdict(t, f.summarizeWith(t, testOpts()))
+	if ag := vv.Judgment.OperatorAgreement; ag != nil {
+		t.Errorf("agreement = %+v, want nil: every mark came after the judge's call", *ag)
 	}
 }
 

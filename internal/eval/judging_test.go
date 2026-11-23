@@ -3,8 +3,10 @@ package eval
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Temikus/denkeeper/internal/agent"
 )
@@ -223,6 +225,184 @@ func TestRecordVerdict_RejectsUnknownWinnerAndItem(t *testing.T) {
 	}
 	if _, err := f.store.RecordVerdict(ctx, Verdict{ItemID: 9999, Winner: WinnerA}); err == nil {
 		t.Error("RecordVerdict accepted an unknown item")
+	}
+}
+
+// judgedFixture is a one-pair run (two items) with pairs created and no
+// verdicts yet.
+func judgedFixture(t *testing.T) (*pairFixture, []JudgmentItem) {
+	t.Helper()
+	f := newPairFixture(t, 1, []string{CategoryChat})
+	f.fillGrid(t)
+	f.createPairs(t)
+	items, err := f.store.ListItems(context.Background(), f.run.ID)
+	if err != nil {
+		t.Fatalf("ListItems: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("got %d items, want 2", len(items))
+	}
+	return f, items
+}
+
+func mustRecord(t *testing.T, s *Store, itemID int64, winner, ident string) {
+	t.Helper()
+	if _, err := s.RecordVerdict(context.Background(), Verdict{
+		ItemID: itemID, Winner: winner, JudgeIdent: ident,
+	}); err != nil {
+		t.Fatalf("RecordVerdict(%d, %s, %s): %v", itemID, winner, ident, err)
+	}
+}
+
+func verdictsBy(t *testing.T, s *Store, runID int64, ident string) []Verdict {
+	t.Helper()
+	all, err := s.ListVerdicts(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("ListVerdicts: %v", err)
+	}
+	var out []Verdict
+	for _, v := range all {
+		if v.JudgeIdent == ident {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func TestRecordVerdict_OperatorMarkOnJudgedItemIsRefused(t *testing.T) {
+	f, items := judgedFixture(t)
+	mustRecord(t, f.store, items[0].ID, WinnerA, "claude-code")
+
+	_, err := f.store.RecordVerdict(context.Background(), Verdict{
+		ItemID: items[0].ID, Winner: WinnerB, JudgeIdent: JudgeOperator,
+	})
+	if !errors.Is(err, ErrMarkNotBlind) {
+		t.Fatalf("err = %v, want ErrMarkNotBlind", err)
+	}
+	if !strings.Contains(err.Error(), "already has a judge verdict") {
+		t.Errorf("err = %q, want it to say the item already has a judge verdict", err)
+	}
+	if ops := verdictsBy(t, f.store, f.run.ID, JudgeOperator); len(ops) != 0 {
+		t.Errorf("stored %d operator rows, want 0", len(ops))
+	}
+}
+
+func TestRecordVerdict_OperatorMayChangeMarkWhilePending(t *testing.T) {
+	f, items := judgedFixture(t)
+	mustRecord(t, f.store, items[0].ID, WinnerA, JudgeOperator)
+	mustRecord(t, f.store, items[0].ID, WinnerB, JudgeOperator)
+
+	ops := verdictsBy(t, f.store, f.run.ID, JudgeOperator)
+	if len(ops) != 1 {
+		t.Fatalf("got %d operator rows, want 1", len(ops))
+	}
+	if ops[0].Winner != WinnerB {
+		t.Errorf("operator winner = %q, want the second call's %q", ops[0].Winner, WinnerB)
+	}
+}
+
+func TestRecordVerdict_FullyJudgedRunTakesNoVerdicts(t *testing.T) {
+	f, items := judgedFixture(t)
+	for _, it := range items {
+		mustRecord(t, f.store, it.ID, WinnerA, "claude-code")
+	}
+
+	_, err := f.store.RecordVerdict(context.Background(), Verdict{
+		ItemID: items[0].ID, Winner: WinnerB, JudgeIdent: "claude-code",
+	})
+	if !errors.Is(err, ErrJudgingClosed) {
+		t.Fatalf("err = %v, want ErrJudgingClosed", err)
+	}
+	if !strings.Contains(err.Error(), "takes no more verdicts") {
+		t.Errorf("err = %q, want it to say the run takes no more verdicts", err)
+	}
+	// A different judge identity is refused too: the run is closed, not the ident.
+	if _, err := f.store.RecordVerdict(context.Background(), Verdict{
+		ItemID: items[1].ID, Winner: WinnerB, JudgeIdent: "another-judge",
+	}); !errors.Is(err, ErrJudgingClosed) {
+		t.Errorf("second judge: err = %v, want ErrJudgingClosed", err)
+	}
+	for _, v := range verdictsBy(t, f.store, f.run.ID, "claude-code") {
+		if v.Winner != WinnerA {
+			t.Errorf("item %d winner = %q, want the stored %q", v.ItemID, v.Winner, WinnerA)
+		}
+	}
+}
+
+// Re-judging stays open while any item of the run is pending, so a retrying
+// headless judge keeps its overwrite.
+func TestRecordVerdict_RejudgeAllowedWhileRunHasPendingItems(t *testing.T) {
+	f, items := judgedFixture(t)
+	mustRecord(t, f.store, items[0].ID, WinnerA, "claude-code")
+	mustRecord(t, f.store, items[0].ID, WinnerB, "claude-code")
+
+	got := verdictsBy(t, f.store, f.run.ID, "claude-code")
+	if len(got) != 1 || got[0].Winner != WinnerB {
+		t.Errorf("verdicts = %+v, want one row with winner %q", got, WinnerB)
+	}
+}
+
+func TestPendingItems_CountsOneRunOnly(t *testing.T) {
+	f, items := judgedFixture(t)
+	ctx := context.Background()
+
+	// A second run in the same store, left unjudged.
+	other, variants, err := f.store.CreateRun(ctx, Run{
+		TaskSetID: f.run.TaskSetID, BaseAgent: "pamela", K: 1, CostCap: 2.0, AsOf: time.Now().UTC(),
+	}, []Variant{{Name: "incumbent"}, {Name: "candidate", Overlay: `{"llm_model":"kimi-k3"}`}})
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	for _, v := range variants {
+		if _, err := f.store.AddSample(ctx, Sample{
+			RunID: other.ID, VariantID: v.ID, TaskID: f.tasks[0].ID, Status: SampleOK, Response: "x",
+		}); err != nil {
+			t.Fatalf("AddSample: %v", err)
+		}
+	}
+	if _, err := f.store.CreatePairs(ctx, other.ID); err != nil {
+		t.Fatalf("CreatePairs: %v", err)
+	}
+
+	for _, it := range items {
+		mustRecord(t, f.store, it.ID, WinnerA, "claude-code")
+	}
+	if n, err := f.store.PendingItems(ctx, f.run.ID); err != nil || n != 0 {
+		t.Errorf("PendingItems(judged run) = %d, %v; want 0", n, err)
+	}
+	if n, err := f.store.PendingItems(ctx, other.ID); err != nil || n != 2 {
+		t.Errorf("PendingItems(other run) = %d, %v; want 2", n, err)
+	}
+}
+
+func TestPendingItems_FallsToZeroOnlyOnLastJudgeVerdict(t *testing.T) {
+	f, items := judgedFixture(t)
+	ctx := context.Background()
+	pending := func() int {
+		t.Helper()
+		n, err := f.store.PendingItems(ctx, f.run.ID)
+		if err != nil {
+			t.Fatalf("PendingItems: %v", err)
+		}
+		return n
+	}
+
+	if n := pending(); n != 2 {
+		t.Fatalf("fresh run: %d pending, want 2", n)
+	}
+	for _, it := range items {
+		mustRecord(t, f.store, it.ID, WinnerA, JudgeOperator)
+	}
+	if n := pending(); n != 2 {
+		t.Errorf("after operator marks: %d pending, want 2", n)
+	}
+	mustRecord(t, f.store, items[0].ID, WinnerA, "claude-code")
+	if n := pending(); n != 1 {
+		t.Errorf("after one judge verdict: %d pending, want 1", n)
+	}
+	mustRecord(t, f.store, items[1].ID, WinnerA, "claude-code")
+	if n := pending(); n != 0 {
+		t.Errorf("after the last judge verdict: %d pending, want 0", n)
 	}
 }
 

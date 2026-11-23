@@ -344,6 +344,11 @@ func countAgreement(items []JudgmentItem, judge, operator map[int64]Verdict) (in
 		if !ok {
 			continue
 		}
+		// A mark recorded after the judge's call was not blind. RecordVerdict
+		// now refuses those; this drops rows written before it did.
+		if op.CreatedAt.After(jv.CreatedAt) {
+			continue
+		}
 		total++
 		if op.Winner == jv.Winner {
 			agreed++

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jmoiron/sqlx"
+
 	"github.com/Temikus/denkeeper/internal/agent"
 )
 
@@ -241,11 +243,74 @@ func (s *Store) getTaskByID(ctx context.Context, id int64) (*Task, error) {
 	return &t, nil
 }
 
+// ErrMarkNotBlind: an operator mark on an item a judge has already called.
+var ErrMarkNotBlind = errors.New("eval: operator mark would not be blind")
+
+// ErrJudgingClosed: a judge verdict on a run with no pending items.
+var ErrJudgingClosed = errors.New("eval: run is fully judged")
+
+// pendingItemsSQL is the one definition of "fully judged": a run with zero
+// rows here. Shared by PendingItems and the RecordVerdict check.
+const pendingItemsSQL = `SELECT COUNT(*) FROM eval_judgment_items i
+	JOIN eval_pairs p ON p.id = i.pair_id
+	WHERE p.run_id = ? AND i.status = ?`
+
+// PendingItems counts a run's judgment items that have no judge verdict yet.
+// A running run has no items, so 0 alone does not mean judging is done.
+func (s *Store) PendingItems(ctx context.Context, runID int64) (int, error) {
+	return countPending(ctx, s.db, runID)
+}
+
+func countPending(ctx context.Context, q sqlx.QueryerContext, runID int64) (int, error) {
+	var n int
+	if err := sqlx.GetContext(ctx, q, &n, pendingItemsSQL, runID, ItemPending); err != nil {
+		return 0, fmt.Errorf("counting pending items of run %d: %w", runID, err)
+	}
+	return n, nil
+}
+
+// checkVerdictWindow enforces the order rules on tx, before the write:
+//   - an operator mark needs an item with no judge verdict yet, so the
+//     operator cannot have read the judge's call (ErrMarkNotBlind);
+//   - a judge verdict needs a run with a pending item. Once none is left,
+//     eval_samples can unblind the run, so no verdict may follow (ErrJudgingClosed).
+//
+// Reads go through tx: the in-memory store has one connection, and a query on
+// s.db inside the open transaction would block forever.
+func checkVerdictWindow(ctx context.Context, tx *sqlx.Tx, v Verdict) error {
+	var item struct {
+		Status string `db:"status"`
+		RunID  int64  `db:"run_id"`
+	}
+	if err := tx.GetContext(ctx, &item,
+		`SELECT i.status, p.run_id FROM eval_judgment_items i
+		 JOIN eval_pairs p ON p.id = i.pair_id WHERE i.id = ?`, v.ItemID); err != nil {
+		return fmt.Errorf("reading judgment item %d: %w", v.ItemID, err)
+	}
+	if v.JudgeIdent == JudgeOperator {
+		if item.Status == ItemJudged {
+			return fmt.Errorf("item %d already has a judge verdict; mark calibration items before they are judged: %w",
+				v.ItemID, ErrMarkNotBlind)
+		}
+		return nil
+	}
+	pending, err := countPending(ctx, tx, item.RunID)
+	if err != nil {
+		return err
+	}
+	if pending == 0 {
+		return fmt.Errorf("run %d takes no more verdicts, its samples can now be read unblinded: %w",
+			item.RunID, ErrJudgingClosed)
+	}
+	return nil
+}
+
 // RecordVerdict writes one judge's call on one item and marks the item judged.
 //
-// The operator's calibration marks deliberately do *not* flip the status: they
-// are recorded against an item the judge has already worked, and an item that
-// only the operator has seen is still outstanding judge work.
+// The operator's calibration marks deliberately do *not* flip the status: an
+// item only the operator has seen is still outstanding judge work. A mark is
+// accepted only before the item's first judge verdict, and a judge verdict
+// only while the run still has a pending item (checkVerdictWindow).
 func (s *Store) RecordVerdict(ctx context.Context, v Verdict) (*Verdict, error) {
 	if !ValidWinner(v.Winner) {
 		return nil, fmt.Errorf("invalid winner %q", v.Winner)
@@ -263,6 +328,10 @@ func (s *Store) RecordVerdict(ctx context.Context, v Verdict) (*Verdict, error) 
 		return nil, fmt.Errorf("recording verdict: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	if err := checkVerdictWindow(ctx, tx, v); err != nil {
+		return nil, err
+	}
 
 	res, err := tx.ExecContext(ctx,
 		`INSERT INTO eval_verdicts
