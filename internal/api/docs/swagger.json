@@ -481,7 +481,7 @@
                         }
                     },
                     "400": {
-                        "description": "Unknown section",
+                        "description": "Unknown section, or the agent has no persona",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -576,7 +576,7 @@
                         }
                     },
                     "400": {
-                        "description": "Unknown section or invalid JSON",
+                        "description": "Unknown section, no persona, or invalid JSON",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
