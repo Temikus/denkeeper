@@ -1903,6 +1903,11 @@ type ChatEvent struct {
 	// "auto_approved"; values are "config" (TOML-declared), "session" or
 	// "permanent". Consumers that only key on ApprovalStatus are unaffected.
 	ApprovalScope string `json:"approval_scope,omitempty"`
+
+	// Shadow is a shadow-mode decider's verdict on the call, set on the
+	// pending and supervisor_* tool_approval events. Display only; adapters
+	// ignore it. nil (omitted) when no shadow decider reviewed the call.
+	Shadow *ShadowVerdict `json:"shadow,omitempty"`
 }
 
 // ChatEventFunc is called for each intermediate pipeline event.
@@ -3589,7 +3594,8 @@ func (e *Engine) resolveSupervisedApproval(ctx context.Context, tc llm.ToolCall,
 	// !ok while enforcing means the decider failed. Shadow errors change nothing.
 	var deciderFailed bool
 	if stage != nil {
-		decision, reason, ok := e.runSupervisorDecider(ctx, stage, in, convID)
+		decision, reason, shadow, ok := e.runSupervisorDecider(ctx, stage, in, convID)
+		onEvent = withShadowVerdict(onEvent, shadow)
 		if ok {
 			if outcome, done := e.resolveDeciderVerdict(stage, decision, reason, sup != nil, tc, round, onEvent); done {
 				return outcome
