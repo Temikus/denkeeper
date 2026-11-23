@@ -69,7 +69,7 @@ session_tier = "autonomous"
 llm_model = "claude-haiku-4-5"
 ```
 
-When a tool call reaches the supervisor, it gets a one-shot LLM call — the tool name and arguments, its description, and the last few conversation messages — and answers with one of:
+When a tool call reaches the supervisor, it gets a one-shot LLM call — the tool name and arguments, its description, and the last few conversation messages — and answers with one of the decisions below. A description written by an external tool server is shown inside `<untrusted_tool_output>` tags and labelled as data, and the conversation is labelled as context only: the supervisor is told not to follow instructions found in either.
 
 | Decision | Result |
 |---|---|

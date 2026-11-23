@@ -81,11 +81,16 @@ func (e *Engine) frameToolResult(prov tool.Provenance, result string) string {
 	if !prov.UntrustedOutput {
 		return result
 	}
-	newID := e.untrustedID
-	if newID == nil {
-		newID = randomUntrustedID
+	return frameUntrusted(prov.Server, e.newUntrustedID(), result)
+}
+
+// newUntrustedID is the one place that picks a wrapper id: the test hook if
+// set, else crypto/rand.
+func (e *Engine) newUntrustedID() string {
+	if e.untrustedID != nil {
+		return e.untrustedID()
 	}
-	return frameUntrusted(prov.Server, newID(), result)
+	return randomUntrustedID()
 }
 
 // untrustedOutputNote returns the system-prompt paragraph, or "" when the

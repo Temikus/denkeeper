@@ -62,7 +62,7 @@ Every call gets the same seven yes/no questions, covering what the supervisor is
 
 Each question asks about one thing, and for every question yes means the hazard is present. Decision models read questions literally, so a bundled or inverted question ("are the arguments free of …") scores badly.
 
-The decider sees what the supervisor sees: the tool name, description and arguments, the user request, skill context, and recent messages. The one difference is the skill body: the supervisor gets `supervisor_body_excerpt_len` characters (500 by default), and the decider gets up to 12,000, so it can check a call against the exact code or arguments a skill prescribes.
+The decider sees what the supervisor sees: the tool name, description and arguments, the user request, skill context, and recent messages. The one difference is the skill body: the supervisor gets `supervisor_body_excerpt_len` characters (500 by default), and the decider gets up to 12,000, so it can check a call against the exact code or arguments a skill prescribes. When an external tool server wrote the description, the decider's state also carries `tool.description_untrusted: true`; the description itself and the questions are unchanged, so earlier calibration still holds.
 
 ## The checks
 
