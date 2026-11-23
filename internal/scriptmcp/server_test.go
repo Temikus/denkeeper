@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -246,9 +247,197 @@ func TestRunJavaScript_OutputTruncated(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("unexpected error: %s", extractText(result))
 	}
-	if got := extractText(result); len(got) != 10 {
-		t.Errorf("output length = %d, want 10", len(got))
+	want := strings.Repeat("y", 10) + truncationMarker(10)
+	if got := extractText(result); got != want {
+		t.Errorf("output = %q, want %q", got, want)
 	}
+}
+
+func TestRunJavaScript_OutputAtCapUnchanged(t *testing.T) {
+	deps := defaultDeps()
+	deps.MaxOutputChars = 10
+	session := newTestServer(t, deps)
+
+	result := callTool(t, session, "run_javascript", map[string]any{
+		"code": `return "yyyyyyyyyy";`,
+	})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", extractText(result))
+	}
+	if got := extractText(result); got != "yyyyyyyyyy" {
+		t.Errorf("output = %q, want 10 bytes with no marker", got)
+	}
+}
+
+func TestRunJavaScript_OutputTruncatedOnRuneBoundary(t *testing.T) {
+	deps := defaultDeps()
+	deps.MaxOutputChars = 10 // falls inside the fourth 3-byte "€"
+	session := newTestServer(t, deps)
+
+	result := callTool(t, session, "run_javascript", map[string]any{
+		"code":  `return input;`,
+		"input": strings.Repeat("€", 100),
+	})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", extractText(result))
+	}
+	got := extractText(result)
+	if !utf8.ValidString(got) {
+		t.Errorf("output is not valid UTF-8: %.200q", got)
+	}
+	if want := strings.Repeat("€", 3) + truncationMarker(10); got != want {
+		t.Errorf("output = %q, want %q", got, want)
+	}
+}
+
+func TestRunJavaScript_ThrowInputCapped(t *testing.T) {
+	deps := defaultDeps()
+	deps.MaxOutputChars = 100
+	session := newTestServer(t, deps)
+
+	result := callTool(t, session, "run_javascript", map[string]any{
+		"code":  `throw input;`,
+		"input": strings.Repeat("x", 5000),
+	})
+	if !result.IsError {
+		t.Fatalf("expected IsError, got %q", extractText(result))
+	}
+	got := extractText(result)
+	if !strings.Contains(got, truncationMarker(100)) {
+		t.Errorf("error text has no truncation marker: %.200q", got)
+	}
+	if limit := len("javascript error: ") + 100 + len(truncationMarker(100)); len(got) > limit {
+		t.Errorf("error text length = %d, want at most %d", len(got), limit)
+	}
+}
+
+func TestRunJavaScript_ThrowMultiByteCappedValidUTF8(t *testing.T) {
+	deps := defaultDeps()
+	deps.MaxOutputChars = 100 // falls inside a 3-byte "€"
+	session := newTestServer(t, deps)
+
+	result := callTool(t, session, "run_javascript", map[string]any{
+		"code":  `throw input;`,
+		"input": strings.Repeat("€", 1000),
+	})
+	if !result.IsError {
+		t.Fatalf("expected IsError, got %q", extractText(result))
+	}
+	got := extractText(result)
+	if !utf8.ValidString(got) {
+		t.Errorf("error text is not valid UTF-8: %.200q", got)
+	}
+	if !strings.Contains(got, truncationMarker(100)) {
+		t.Errorf("error text has no truncation marker: %.200q", got)
+	}
+}
+
+func TestRunJavaScript_ThrowCappedKeepsDecodeHint(t *testing.T) {
+	deps := defaultDeps()
+	deps.MaxOutputChars = 100
+	session := newTestServer(t, deps)
+
+	inner, err := json.Marshal(map[string]string{"a": strings.Repeat("x", 5000)})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	result := callTool(t, session, "run_javascript", map[string]any{
+		"code":  `throw input.a;`,
+		"input": string(inner),
+	})
+	if !result.IsError {
+		t.Fatalf("expected IsError, got %q", extractText(result))
+	}
+	got := extractText(result)
+	marker := strings.Index(got, truncationMarker(100))
+	hint := strings.Index(got, "remove JSON.parse(input)")
+	if marker < 0 || hint < 0 || hint < marker {
+		t.Errorf("want marker then decode hint, got marker at %d, hint at %d: %.200q", marker, hint, got)
+	}
+}
+
+func TestRunJavaScript_ShortErrorUnchanged(t *testing.T) {
+	session := newTestServer(t, defaultDeps())
+
+	result := callTool(t, session, "run_javascript", map[string]any{
+		"code": `throw new Error("boom");`,
+	})
+	if !result.IsError {
+		t.Fatalf("expected IsError, got %q", extractText(result))
+	}
+	got := extractText(result)
+	if !strings.HasPrefix(got, "javascript error: ") || !strings.Contains(got, "boom") {
+		t.Errorf("error text = %q, want the javascript error with boom", got)
+	}
+	if strings.Contains(got, "[truncated") {
+		t.Errorf("short error has a truncation marker: %q", got)
+	}
+}
+
+func TestRunJavaScript_ZeroCapReturnsWholeError(t *testing.T) {
+	deps := defaultDeps()
+	deps.MaxOutputChars = 0
+	session := newTestServer(t, deps)
+
+	long := strings.Repeat("x", 20000)
+	result := callTool(t, session, "run_javascript", map[string]any{
+		"code":  `throw input;`,
+		"input": long,
+	})
+	if !result.IsError {
+		t.Fatalf("expected IsError, got %q", extractText(result))
+	}
+	got := extractText(result)
+	if !strings.Contains(got, long) || strings.Contains(got, "[truncated") {
+		t.Errorf("want the whole thrown string and no marker, got %d bytes", len(got))
+	}
+}
+
+// runFormatProbe runs code that throws or returns a value whose formatting
+// runs script JS after RunString. Before #616 T2 each of these crashed the
+// whole process; now each must come back as an IsError result.
+func runFormatProbe(t *testing.T, code string) string {
+	t.Helper()
+	deps := defaultDeps()
+	deps.Timeout = 200 * time.Millisecond // the looping probes stop here
+	session := newTestServer(t, deps)
+
+	start := time.Now()
+	result := callTool(t, session, "run_javascript", map[string]any{"code": code})
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("call took %v, want it bounded by the timeout", elapsed)
+	}
+	if !result.IsError {
+		t.Fatalf("expected IsError, got %.200q", extractText(result))
+	}
+	return extractText(result)
+}
+
+func TestRunJavaScript_ThrownLoopingToStringReturnsError(t *testing.T) {
+	runFormatProbe(t, `throw {toString: function(){ while(true){} }}`)
+}
+
+func TestRunJavaScript_ThrownThrowingToStringReturnsError(t *testing.T) {
+	runFormatProbe(t, `throw {toString: function(){ throw new Error("x") }}`)
+}
+
+func TestRunJavaScript_ThrowingGetterResultReturnsError(t *testing.T) {
+	runFormatProbe(t, `return {get a(){ throw new Error("boom") }}`)
+}
+
+func TestRunJavaScript_LoopingGetterResultReturnsError(t *testing.T) {
+	runFormatProbe(t, `return {get a(){ while(true){} }}`)
+}
+
+func TestRunJavaScript_CyclicResultReturnsError(t *testing.T) {
+	got := runFormatProbe(t, `var a = {}; a.self = a; return a;`)
+	if !strings.Contains(got, "could not be encoded as JSON") {
+		t.Errorf("error text = %.200q, want the JSON encoding error", got)
+	}
+}
+
+func TestRunJavaScript_DeepNestedResultReturnsError(t *testing.T) {
+	runFormatProbe(t, `var a = []; for (var i = 0; i < 1000000; i++) { a = [a]; } return a;`)
 }
 
 func TestRunJavaScript_DisabledNotRegistered(t *testing.T) {
