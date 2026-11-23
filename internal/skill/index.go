@@ -58,20 +58,22 @@ func BuildIndexSection(skills []Skill, schedules map[string][]string) string {
 	return truncatedIndex(short)
 }
 
-// truncatedIndex keeps lines in sort order while they and a trailer naming
-// the dropped count fit in MaxIndexBytes.
+// truncatedIndex keeps, in sort order, each line that still fits in
+// MaxIndexBytes with a trailer naming the dropped count. A line that does not
+// fit is skipped, not a stop, so one oversized entry hides only itself. The
+// trailer is sized for the most lines that could still be dropped.
 func truncatedIndex(lines []string) string {
 	size := len(indexHeader) + len("\n")
-	kept := 0
-	for kept < len(lines) {
-		next := size + len("\n") + len(lines[kept])
-		if next+len("\n\n")+len(droppedTrailer(len(lines)-kept-1)) > MaxIndexBytes {
-			break
+	kept := make([]string, 0, len(lines))
+	for _, l := range lines {
+		next := size + len("\n") + len(l)
+		if next+len("\n\n")+len(droppedTrailer(len(lines)-len(kept)-1)) > MaxIndexBytes {
+			continue
 		}
 		size = next
-		kept++
+		kept = append(kept, l)
 	}
-	return renderIndex(lines[:kept], droppedTrailer(len(lines)-kept))
+	return renderIndex(kept, droppedTrailer(len(lines)-len(kept)))
 }
 
 func droppedTrailer(n int) string {

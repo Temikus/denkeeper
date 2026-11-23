@@ -132,6 +132,29 @@ func TestBuildIndexSection_LongNameKeptWhole(t *testing.T) {
 	}
 }
 
+// One entry too big for the cap costs only itself, not every entry after it.
+func TestBuildIndexSection_OversizedEntrySkipped(t *testing.T) {
+	huge := "command:" + strings.Repeat("x", 9000)
+	skills := []skill.Skill{
+		skilltest.New("aaa", "d", []string{huge}, ""),
+		skilltest.New("bbb", "d", []string{"command:b"}, ""),
+		skilltest.New("ccc", "d", []string{"command:c"}, ""),
+	}
+	got := skill.BuildIndexSection(skills, nil)
+	if len(got) > skill.MaxIndexBytes {
+		t.Fatalf("len %d over cap %d", len(got), skill.MaxIndexBytes)
+	}
+	if strings.Contains(got, "- aaa") {
+		t.Fatal("oversized entry was kept")
+	}
+	if !strings.Contains(got, "\n- bbb (/b)") || !strings.Contains(got, "\n- ccc (/c)") {
+		t.Fatalf("entries after the oversized one are missing:\n%s", got)
+	}
+	if !strings.HasSuffix(got, "and 1 more skill is not shown, to keep this list short. Call skill_list before saying a skill does not exist.") {
+		t.Fatalf("trailer does not count the one skipped entry:\n%s", got)
+	}
+}
+
 func TestBuildIndexSection_EmptyDescriptionNoColon(t *testing.T) {
 	s := []skill.Skill{skilltest.New("x", "  \n ", []string{"command:x"}, "")}
 	got := skill.BuildIndexSection(s, nil)
