@@ -2,10 +2,15 @@ package audit
 
 import (
 	"context"
+	"encoding/json"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"github.com/jmoiron/sqlx"
 )
 
 func TestInsertAndList(t *testing.T) {
@@ -327,9 +332,10 @@ func TestPruneBefore(t *testing.T) {
 		t.Fatalf("expected 1 pruned, got %d", n)
 	}
 
+	// The recent row plus the prune checkpoint.
 	_, total, _ := store.List(ctx, ListOpts{})
-	if total != 1 {
-		t.Fatalf("expected 1 remaining, got %d", total)
+	if total != 2 {
+		t.Fatalf("expected 2 remaining, got %d", total)
 	}
 }
 
@@ -554,5 +560,368 @@ func TestList_DetailMaxCharsExactLengthUntouched(t *testing.T) {
 	}
 	if events[0].Detail != "0123456789" {
 		t.Errorf("detail at exactly the limit was changed: %q", events[0].Detail)
+	}
+}
+
+// --- prune and the checkpoint row ---
+
+var (
+	pruneOld    = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	pruneCutoff = time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+)
+
+func eventAt(ts time.Time, summary string) Event {
+	return Event{Timestamp: ts, Category: CategoryToolCall, Action: "execute", Summary: summary, Status: StatusOK}
+}
+
+func insertAt(t *testing.T, s *SQLiteStore, events ...Event) {
+	t.Helper()
+	if err := s.InsertBatch(context.Background(), events); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+}
+
+type checkpointDetail struct {
+	PrunedRows        int64  `json:"pruned_rows"`
+	PrunedThroughID   int64  `json:"pruned_through_id"`
+	PrunedThroughHash string `json:"pruned_through_hash"`
+	Cutoff            string `json:"cutoff"`
+}
+
+func checkpoints(t *testing.T, s *SQLiteStore) []checkpointDetail {
+	t.Helper()
+	var details []string
+	if err := s.db.Select(&details, `SELECT detail FROM audit_events WHERE category = ? AND action = ? ORDER BY id`,
+		CategoryAudit, ActionPruneCheckpoint); err != nil {
+		t.Fatal(err)
+	}
+	out := make([]checkpointDetail, len(details))
+	for i, d := range details {
+		var raw map[string]any
+		if err := json.Unmarshal([]byte(d), &raw); err != nil {
+			t.Fatalf("checkpoint detail %q: %v", d, err)
+		}
+		for _, k := range []string{"pruned_rows", "pruned_through_id", "pruned_through_hash", "cutoff"} {
+			if _, ok := raw[k]; !ok {
+				t.Fatalf("checkpoint detail %q lacks %s", d, k)
+			}
+		}
+		_ = json.Unmarshal([]byte(d), &out[i])
+	}
+	return out
+}
+
+func prune(t *testing.T, s *SQLiteStore, cutoff time.Time) int {
+	t.Helper()
+	n, err := s.PruneBefore(context.Background(), cutoff)
+	if err != nil {
+		t.Fatalf("PruneBefore: %v", err)
+	}
+	return n
+}
+
+func TestPruneBefore_WritesCheckpointAndVerifies(t *testing.T) {
+	s := newChainStore(t)
+	insertAt(t, s, eventAt(pruneOld, "old 1"), eventAt(pruneOld.Add(time.Second), "old 2"), eventAt(time.Now().UTC(), "recent"))
+	_, hash2 := storedHash(t, s, 2)
+
+	if n := prune(t, s, pruneCutoff); n != 2 {
+		t.Fatalf("pruned %d, want 2", n)
+	}
+	cps := checkpoints(t, s)
+	if len(cps) != 1 {
+		t.Fatalf("%d checkpoints, want 1", len(cps))
+	}
+	cp := cps[0]
+	if cp.PrunedRows != 2 || cp.PrunedThroughID != 2 || cp.PrunedThroughHash != hash2 || cp.Cutoff != pruneCutoff.Format(time.RFC3339Nano) {
+		t.Fatalf("checkpoint = %+v", cp)
+	}
+	var status, source, summary string
+	if err := s.db.QueryRow(`SELECT status, source, summary FROM audit_events WHERE action = ?`, ActionPruneCheckpoint).Scan(&status, &source, &summary); err != nil {
+		t.Fatal(err)
+	}
+	if status != StatusOK || source != "retention" || summary != "Retention pruned 2 events up to id 2" {
+		t.Fatalf("checkpoint row: %s %s %q", status, source, summary)
+	}
+
+	rep := verifyChain(t, s)
+	requireIntact(t, rep)
+	if rep.Start != ChainStartCheckpoint || rep.CheckpointID != 4 || rep.PrunedThroughID != 2 || rep.FirstID != 3 {
+		t.Fatalf("report = %+v", rep)
+	}
+}
+
+func TestPruneBefore_NothingOldWritesNothing(t *testing.T) {
+	s := newChainStore(t)
+	insertAt(t, s, eventAt(time.Now().UTC(), "recent"))
+	if n := prune(t, s, pruneCutoff); n != 0 {
+		t.Fatalf("pruned %d, want 0", n)
+	}
+	if cps := checkpoints(t, s); len(cps) != 0 {
+		t.Fatalf("%d checkpoints, want 0", len(cps))
+	}
+	if n := prune(t, newChainStore(t), pruneCutoff); n != 0 {
+		t.Fatalf("empty store pruned %d", n)
+	}
+}
+
+func TestPruneBefore_EverythingOldLeavesCheckpointOnly(t *testing.T) {
+	s := newChainStore(t)
+	insertAt(t, s, eventAt(pruneOld, "old 1"), eventAt(pruneOld.Add(time.Second), "old 2"))
+	if n := prune(t, s, pruneCutoff); n != 2 {
+		t.Fatalf("pruned %d, want 2", n)
+	}
+	_, total, _ := s.List(context.Background(), ListOpts{})
+	if total != 1 {
+		t.Fatalf("%d rows left, want only the checkpoint", total)
+	}
+	prev, cpHash := storedHash(t, s, 3)
+	if cp := checkpoints(t, s)[0]; prev != cp.PrunedThroughHash {
+		t.Fatalf("checkpoint prev_hash %q != pruned_through_hash %q", prev, cp.PrunedThroughHash)
+	}
+	requireIntact(t, verifyChain(t, s))
+
+	insertAt(t, s, eventAt(time.Now().UTC(), "later"))
+	if prev4, _ := storedHash(t, s, 4); prev4 != cpHash {
+		t.Fatalf("later row prev_hash %q, want checkpoint hash %q", prev4, cpHash)
+	}
+	requireIntact(t, verifyChain(t, s))
+}
+
+func TestPruneBefore_SecondPruneRemovesFirstCheckpoint(t *testing.T) {
+	s := newChainStore(t)
+	insertAt(t, s, eventAt(pruneOld, "old"), eventAt(pruneCutoff.Add(time.Hour), "middle"))
+	prune(t, s, pruneCutoff) // deletes 1, checkpoint 3
+	insertAt(t, s, eventAt(time.Now().UTC().Add(2*time.Hour), "recent"))
+	// The first checkpoint is stamped now, so a cutoff an hour ahead removes
+	// ids 2 and 3 and keeps 4.
+	prune(t, s, time.Now().UTC().Add(time.Hour))
+
+	if cps := checkpoints(t, s); len(cps) != 1 {
+		t.Fatalf("%d checkpoints, want 1", len(cps))
+	}
+	rep := verifyChain(t, s)
+	requireIntact(t, rep)
+	if rep.Start != ChainStartCheckpoint {
+		t.Fatalf("start = %s", rep.Start)
+	}
+}
+
+func TestPruneBefore_DeletesOnlyAnIDPrefix(t *testing.T) {
+	s := newChainStore(t)
+	insertAt(t, s, eventAt(pruneOld, "old 1"), eventAt(time.Now().UTC(), "recent"), eventAt(pruneOld, "old 3"))
+	if n := prune(t, s, pruneCutoff); n != 1 {
+		t.Fatalf("pruned %d, want only id 1", n)
+	}
+	var ids []int64
+	if err := s.db.Select(&ids, `SELECT id FROM audit_events ORDER BY id`); err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 3 || ids[0] != 2 || ids[1] != 3 {
+		t.Fatalf("ids left = %v, want 2, 3 and the checkpoint", ids)
+	}
+	requireIntact(t, verifyChain(t, s))
+}
+
+func TestPruneBefore_LegacyRowsOnly(t *testing.T) {
+	s := newChainStore(t)
+	rawExec(t, s, `INSERT INTO audit_events (timestamp, category, action, summary) VALUES (?, 'tool_call', 'execute', 'legacy')`,
+		pruneOld.Format(time.RFC3339Nano))
+	insertAt(t, s, eventAt(time.Now().UTC(), "recent"))
+	if n := prune(t, s, pruneCutoff); n != 1 {
+		t.Fatalf("pruned %d, want 1", n)
+	}
+	if cp := checkpoints(t, s)[0]; cp.PrunedThroughHash != "" {
+		t.Fatalf("pruned_through_hash = %q, want empty", cp.PrunedThroughHash)
+	}
+	requireIntact(t, verifyChain(t, s))
+}
+
+// --- concurrency and migration (file stores) ---
+
+func TestChain_ConcurrentInsertAndPrune(t *testing.T) {
+	s := newChainFileStore(t, filepath.Join(t.TempDir(), "audit.db"))
+	ctx := context.Background()
+	start := time.Now().UTC()
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := range 30 {
+			batch := []Event{eventAt(start.Add(time.Duration(i)*time.Millisecond), "a"), eventAt(start, "b")}
+			if err := s.InsertBatch(ctx, batch); err != nil {
+				errs <- err
+				return
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := range 30 {
+			if _, err := s.PruneBefore(ctx, start.Add(time.Duration(i)*time.Millisecond)); err != nil {
+				errs <- err
+				return
+			}
+		}
+	}()
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+	requireIntact(t, verifyChain(t, s))
+}
+
+func TestChain_TwoHandlesOnOneFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.db")
+	a := newChainFileStore(t, path)
+	b := newChainFileStore(t, path)
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for _, s := range []*SQLiteStore{a, b} {
+		wg.Add(1)
+		go func(s *SQLiteStore) {
+			defer wg.Done()
+			for i := range 25 {
+				if err := s.InsertBatch(context.Background(), []Event{chainEvent(i), chainEvent(i + 1)}); err != nil {
+					errs <- err
+					return
+				}
+			}
+		}(s)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+	rep := verifyChain(t, a)
+	requireIntact(t, rep)
+	if rep.Verified != 100 {
+		t.Fatalf("verified %d, want 100", rep.Verified)
+	}
+}
+
+// oldSchema is audit_events as it was before the hash columns.
+const oldSchema = `CREATE TABLE audit_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    category TEXT NOT NULL,
+    action TEXT NOT NULL,
+    agent TEXT NOT NULL DEFAULT '',
+    summary TEXT NOT NULL,
+    detail TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'ok',
+    duration_ms INTEGER DEFAULT 0,
+    source TEXT NOT NULL DEFAULT '',
+    conversation_id TEXT NOT NULL DEFAULT ''
+)`
+
+const oldInsert = `INSERT INTO audit_events (timestamp, category, action, summary) VALUES (?, 'tool_call', 'execute', 'old')`
+
+// createOldSchemaFile writes an audit.db with the old table and two rows, and
+// returns a raw connection to it that the caller may keep open.
+func createOldSchemaFile(t *testing.T) (string, *sqlx.DB) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "audit.db")
+	raw, err := sqlx.Open("sqlite", path+"?_pragma=journal_mode(wal)&_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = raw.Close() })
+	if _, err := raw.Exec(oldSchema); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if _, err := raw.Exec(oldInsert, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return path, raw
+}
+
+func TestMigration_OldSchemaFileOpens(t *testing.T) {
+	path, raw := createOldSchemaFile(t)
+	_ = raw.Close()
+
+	s := newChainFileStore(t, path)
+	_, total, err := s.List(context.Background(), ListOpts{})
+	if err != nil || total != 2 {
+		t.Fatalf("List: total %d, err %v", total, err)
+	}
+	rep := verifyChain(t, s)
+	requireIntact(t, rep)
+	if rep.Start != ChainStartNone || rep.LegacyRows != 2 {
+		t.Fatalf("report = %+v", rep)
+	}
+	_ = s.Close()
+	again, err := NewSQLiteStore(path)
+	if err != nil {
+		t.Fatalf("second open: %v", err)
+	}
+	_ = again.Close()
+}
+
+func TestMigration_LiveOldWriterKeepsWorking(t *testing.T) {
+	path, raw := createOldSchemaFile(t)
+	s := newChainFileStore(t, path)
+	if _, err := raw.Exec(oldInsert, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatalf("old-style insert after migration: %v", err)
+	}
+	_, total, _ := s.List(context.Background(), ListOpts{})
+	if total != 3 {
+		t.Fatalf("total %d, want 3", total)
+	}
+}
+
+func TestOpenSQLiteStoreReadOnly_MissingFile(t *testing.T) {
+	if _, err := OpenSQLiteStoreReadOnly(filepath.Join(t.TempDir(), "nope.db")); err == nil {
+		t.Fatal("expected an error for a missing file")
+	}
+}
+
+func TestOpenSQLiteStoreReadOnly_RefusesWrites(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.db")
+	newChainFileStore(t, path)
+	ro, err := OpenSQLiteStoreReadOnly(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ro.Close() //nolint:errcheck
+	if err := ro.InsertBatch(context.Background(), []Event{chainEvent(1)}); err == nil {
+		t.Fatal("insert through a read-only store succeeded")
+	}
+}
+
+func TestOpenSQLiteStoreReadOnly_VerifiesWhileWriterOpen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.db")
+	w := newChainFileStore(t, path)
+	insertChained(t, w, 1, 3)
+	ro, err := OpenSQLiteStoreReadOnly(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ro.Close() //nolint:errcheck
+	insertChained(t, w, 4, 2)
+	rep := verifyChain(t, ro)
+	requireIntact(t, rep)
+	if rep.Verified != 5 {
+		t.Fatalf("verified %d, want 5", rep.Verified)
+	}
+}
+
+func TestOpenSQLiteStoreReadOnly_OldSchemaIsAllLegacy(t *testing.T) {
+	path, raw := createOldSchemaFile(t)
+	_ = raw.Close()
+	ro, err := OpenSQLiteStoreReadOnly(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ro.Close() //nolint:errcheck
+	rep := verifyChain(t, ro)
+	requireIntact(t, rep)
+	if rep.Start != ChainStartNone || rep.LegacyRows != 2 || rep.Rows != 2 {
+		t.Fatalf("report = %+v", rep)
 	}
 }
