@@ -3,7 +3,7 @@ title: "CLI Reference"
 description: "Denkeeper command-line interface reference."
 slug: "cli"
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-10-02T00:00:00+00:00
+lastmod: 2026-11-23T00:00:00+00:00
 draft: false
 weight: 20
 toc: true
@@ -19,16 +19,17 @@ toc: true
 | `denkeeper sessions` | Inspect and prune conversation sessions |
 | `denkeeper kv` | Maintain the agents' key-value store |
 | `denkeeper decide` | Calibrate decision models against recorded supervisor reviews |
+| `denkeeper audit` | Check the audit log's hash chain |
 | `denkeeper passwd` | Generate a bcrypt hash for dashboard login |
 | `denkeeper plugin` | Ed25519 plugin signing |
 
 ## Flags
 
-`--config` / `-c` is accepted by the commands that read the config file — `serve`, `keys`, `sessions`, `kv`, and `decide`. It is not a root-level flag, so `denkeeper --config ... <command>` will not work; put it after the subcommand instead.
+`--config` / `-c` is accepted by the commands that read the config file — `serve`, `keys`, `sessions`, `kv`, `decide`, and `audit`. It is not a root-level flag, so `denkeeper --config ... <command>` will not work; put it after the subcommand instead.
 
 | Flag | Available on | Description |
 |---|---|---|
-| `--config PATH`, `-c` | `serve`, `keys`, `sessions`, `kv`, `decide` | Path to config file (default: `~/.denkeeper/denkeeper.toml`) |
+| `--config PATH`, `-c` | `serve`, `keys`, `sessions`, `kv`, `decide`, `audit` | Path to config file (default: `~/.denkeeper/denkeeper.toml`) |
 | `--help` | all commands | Print help |
 
 There is no `--version` flag. Use the `denkeeper version` subcommand.
@@ -220,6 +221,51 @@ Two things to know before running it:
 - **Thinner input than a live review:** the audit log does not record the tool description, server guidance, or skill context, and a conversation that was cleared, compacted, or pruned has no user request to recover. Treat replay as indicative. The `source = "decider:<name>"` audit events written by shadow mode are the authoritative comparison.
 
 Only reviews that ended in a supervisor verdict are replayed. Failed reviews and calls that went straight to a human are not in the set.
+
+## `denkeeper audit`
+
+Inspect the audit log (`audit.db`, next to the memory database).
+
+### `denkeeper audit verify`
+
+Walks the audit log in id order and checks every event against its hash and the hash of the event before it. Read-only, and safe while `denkeeper serve` is running.
+
+```bash
+denkeeper audit verify
+denkeeper audit verify --config /etc/denkeeper/denkeeper.toml
+```
+
+An intact log:
+
+```
+Audit log: /home/me/.denkeeper/data/audit.db
+OK: 48211 events verified (ids 1-48211).
+Chain start: event 1 is the first chained event.
+Head: id 48211 hash 9f2c…
+```
+
+A broken one, which names the first event that fails:
+
+```
+Audit log: /home/me/.denkeeper/data/audit.db
+BROKEN at event 20417 (2026-11-20T08:14:03.512Z tool_call/execute): the event does not match its stored hash. It was changed after it was written.
+  expected hash: 5a5e…
+  stored hash:   b8a1…
+Verified before the break: 4075 events (ids 16342-20416).
+Not checked: 27794 events after id 20417.
+```
+
+The other breaks are an event whose `prev_hash` does not match the event before it (events removed, added or reordered), an event with no hash after chained ones, and a first chained event that points at earlier events no prune checkpoint accounts for (events removed outside retention).
+
+Events written before this version have no hash. They are reported as not covered and age out with `[audit] retention_days`. If no event has a hash at all, the output starts `NOT COVERED`: that is either a log no hashing version has written to, or one whose hashes were all removed, and the two look the same.
+
+| Exit code | Meaning |
+|---|---|
+| `0` | The chain verified, or the log has no events |
+| `1` | The chain is broken, or the command failed (for example, no `audit.db`) |
+| `2` | No event has a hash, so nothing was verified |
+
+What the chain cannot catch, and the [Observability](/docs/concepts/observability/#integrity) page explains: removing the newest events, a full rewrite of the file with recomputed hashes, and a forged prune checkpoint. Keep a copy of the `Head` line somewhere other than this machine; a later `Head` that no longer extends it is evidence of a rewrite.
 
 ## `denkeeper passwd`
 
