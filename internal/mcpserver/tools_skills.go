@@ -24,26 +24,28 @@ type skillGetInput struct {
 }
 
 type skillCreateInput struct {
-	Agent         string   `json:"agent" jsonschema:"Agent name"`
-	Name          string   `json:"name" jsonschema:"Skill name"`
-	Description   string   `json:"description,omitempty" jsonschema:"Skill description"`
-	Version       string   `json:"version,omitempty" jsonschema:"Skill version (e.g. 1.0.0)"`
-	Triggers      []string `json:"triggers,omitempty" jsonschema:"Trigger strings, e.g. command:name or schedule:schedule-name; a schedule: trigger must name an existing schedule"`
-	Body          string   `json:"body" jsonschema:"Skill content/instructions"`
-	MaxToolRounds int      `json:"max_tool_rounds,omitempty" jsonschema:"Optional cap on tool-call ROUNDS (not calls) for turns this skill drives; 0 = no cap. Only lowers the agent's budget, never raises it."`
-	RequiresTools []string `json:"requires_tools,omitempty" jsonschema:"Optional tool names this skill depends on (frontmatter [requires] tools)."`
+	Agent           string   `json:"agent" jsonschema:"Agent name"`
+	Name            string   `json:"name" jsonschema:"Skill name"`
+	Description     string   `json:"description,omitempty" jsonschema:"Skill description"`
+	Version         string   `json:"version,omitempty" jsonschema:"Skill version (e.g. 1.0.0)"`
+	Triggers        []string `json:"triggers,omitempty" jsonschema:"Trigger strings, e.g. command:name or schedule:schedule-name; a schedule: trigger must name an existing schedule"`
+	Body            string   `json:"body" jsonschema:"Skill content/instructions"`
+	MaxToolRounds   int      `json:"max_tool_rounds,omitempty" jsonschema:"Optional cap on tool-call ROUNDS (not calls) for turns this skill drives; 0 = no cap. Only lowers the agent's budget, never raises it."`
+	MaxOutputTokens int      `json:"max_output_tokens,omitempty" jsonschema:"Optional cap on output tokens per completion for turns this skill drives; 0 = no skill cap. Lowers a cap set on the agent or in [llm]; sent as is when neither sets one."`
+	RequiresTools   []string `json:"requires_tools,omitempty" jsonschema:"Optional tool names this skill depends on (frontmatter [requires] tools)."`
 }
 
 type skillUpdateInput struct {
-	Agent         string   `json:"agent" jsonschema:"Agent name"`
-	Name          string   `json:"name" jsonschema:"Skill name to update"`
-	NewName       *string  `json:"new_name,omitempty" jsonschema:"New skill name (rename)"`
-	Description   *string  `json:"description,omitempty" jsonschema:"New description"`
-	Version       *string  `json:"version,omitempty" jsonschema:"New version (e.g. 1.0.0)"`
-	Triggers      []string `json:"triggers,omitempty" jsonschema:"New triggers; a newly added schedule: trigger must name an existing schedule"`
-	Body          *string  `json:"body,omitempty" jsonschema:"New content"`
-	MaxToolRounds *int     `json:"max_tool_rounds,omitempty" jsonschema:"New cap on tool-call ROUNDS (not calls); 0 removes the cap. Omit to keep current."`
-	RequiresTools []string `json:"requires_tools,omitempty" jsonschema:"New required tool names; omit to keep current, pass [] to clear."`
+	Agent           string   `json:"agent" jsonschema:"Agent name"`
+	Name            string   `json:"name" jsonschema:"Skill name to update"`
+	NewName         *string  `json:"new_name,omitempty" jsonschema:"New skill name (rename)"`
+	Description     *string  `json:"description,omitempty" jsonschema:"New description"`
+	Version         *string  `json:"version,omitempty" jsonschema:"New version (e.g. 1.0.0)"`
+	Triggers        []string `json:"triggers,omitempty" jsonschema:"New triggers; a newly added schedule: trigger must name an existing schedule"`
+	Body            *string  `json:"body,omitempty" jsonschema:"New content"`
+	MaxToolRounds   *int     `json:"max_tool_rounds,omitempty" jsonschema:"New cap on tool-call ROUNDS (not calls); 0 removes the cap. Omit to keep current."`
+	MaxOutputTokens *int     `json:"max_output_tokens,omitempty" jsonschema:"New cap on output tokens per completion; 0 removes the cap. Omit to keep current. Lowers a cap set on the agent or in [llm]; sent as is when neither sets one."`
+	RequiresTools   []string `json:"requires_tools,omitempty" jsonschema:"New required tool names; omit to keep current, pass [] to clear."`
 }
 
 type skillDeleteInput struct {
@@ -205,7 +207,7 @@ func (s *Server) handleSkillCreate(ctx context.Context, _ *mcp.CallToolRequest, 
 		return toolError(fmt.Sprintf("skill %q already exists", input.Name)), nil, nil
 	}
 
-	payload := configmcp.BuildSkillPayload(input.Name, input.Description, input.Version, input.Triggers, input.Body, input.MaxToolRounds, input.RequiresTools)
+	payload := configmcp.BuildSkillPayload(input.Name, input.Description, input.Version, input.Triggers, input.Body, input.MaxToolRounds, input.MaxOutputTokens, input.RequiresTools)
 	warnings, err := configmcp.LintSkillWrite(s.deps.Scheduler, nil, payload)
 	if err != nil {
 		return toolError(err.Error()), nil, nil
@@ -255,7 +257,7 @@ func (s *Server) handleSkillUpdate(ctx context.Context, _ *mcp.CallToolRequest, 
 		}
 	}
 
-	payload := configmcp.MergeSkillFields(newName, existing, input.Description, input.Version, input.Triggers, input.Body, input.MaxToolRounds, input.RequiresTools)
+	payload := configmcp.MergeSkillFields(newName, existing, input.Description, input.Version, input.Triggers, input.Body, input.MaxToolRounds, input.MaxOutputTokens, input.RequiresTools)
 	warnings, err := configmcp.LintSkillWrite(s.deps.Scheduler, &existing, payload)
 	if err != nil {
 		return toolError(err.Error()), nil, nil

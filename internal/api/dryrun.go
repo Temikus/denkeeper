@@ -84,8 +84,9 @@ type dryRunTranscript struct {
 	Prompt         string    `json:"prompt"`
 	Response       string    `json:"response"`
 	Rounds         int       `json:"rounds"`
-	// StopReason is why the tool loop ended — "repeated_calls", "max_rounds"
-	// or "stop_requested". Omitted when the model finished on its own, so its
+	// StopReason is why the tool loop ended — "repeated_calls", "max_rounds",
+	// "stop_requested", "cancelled" or "output_limit" (the model hit its
+	// output-token limit). Omitted when the model finished on its own, so its
 	// presence alone means the turn was cut short and the response is a
 	// wrap-up rather than a completed answer.
 	StopReason string `json:"stop_reason,omitempty"`
