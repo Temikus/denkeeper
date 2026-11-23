@@ -53,8 +53,8 @@ func TestUntrustedOutput_ExternalEchoIsWrapped(t *testing.T) {
 	chatOnce(t, h, "please call echo")
 
 	msg := toolMessage(t, h.MockLLM.LastRequest())
-	if !strings.HasPrefix(msg, "<untrusted_tool_output source=\"echo-tool\">\n") ||
-		!strings.Contains(msg, "\n</untrusted_tool_output>") {
+	if !strings.HasPrefix(msg, "<untrusted_tool_output source=\"echo-tool\" id=\"") ||
+		!strings.Contains(msg, "\n</untrusted_tool_output id=\"") {
 		t.Errorf("echo tool message = %q, want it wrapped with source echo-tool", msg)
 	}
 	sys := h.MockLLM.LastRequest().Messages[0].Content

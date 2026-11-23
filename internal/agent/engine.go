@@ -348,6 +348,10 @@ type Engine struct {
 	// skills only. Guarded by kvTargetsMu.
 	skillFileExists func(name string) (bool, error)
 
+	// untrustedID makes the per-call id on an untrusted-output wrapper. Nil
+	// means crypto/rand; tests set a fixed one. Set before the engine runs.
+	untrustedID func() string
+
 	// maxContextMessages limits conversation history sent to the LLM.
 	maxContextMessages int
 
@@ -3431,7 +3435,7 @@ func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int
 	record.Result = result
 	// Last step before the wire: record.Result stays raw, and any future
 	// wire-side cap must cut before this wrap, not after.
-	return frameToolResult(prov, result), record, false
+	return e.frameToolResult(prov, result), record, false
 }
 
 // auditToolExecution records one executed tool call. The result body is capped
