@@ -9,6 +9,7 @@ import (
 
 	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/configmcp"
+	"github.com/Temikus/denkeeper/internal/skill"
 	"github.com/Temikus/denkeeper/internal/skilleffect"
 )
 
@@ -293,10 +294,9 @@ func (s *Server) handleUpdateSkill(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	payload := configmcp.MergeSkillFields(newName, existing, input.Description, input.Version, input.Triggers, input.Body, input.MaxToolRounds, input.MaxOutputTokens, input.RequiresTools)
-	warnings, err := configmcp.LintSkillWrite(s.scheduleLookup(), &existing, payload)
+	payload, warnings, status, err := s.buildSkillUpdate(newName, existing, input)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeJSON(w, status, map[string]string{"error": err.Error()})
 		return
 	}
 
@@ -316,6 +316,20 @@ func (s *Server) handleUpdateSkill(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, skillWriteResponse{Name: newName, Agent: agentName, Status: "updated", Warnings: warnings})
+}
+
+// buildSkillUpdate renders and lints an edit. A render failure is a 500, a
+// lint refusal a 400.
+func (s *Server) buildSkillUpdate(newName string, existing skill.Skill, input skillUpdateInput) (string, []string, int, error) {
+	payload, err := configmcp.MergeSkillFields(newName, existing, input.Description, input.Version, input.Triggers, input.Body, input.MaxToolRounds, input.MaxOutputTokens, input.RequiresTools)
+	if err != nil {
+		return "", nil, http.StatusInternalServerError, fmt.Errorf("building skill: %w", err)
+	}
+	warnings, err := configmcp.LintSkillWrite(s.scheduleLookup(), &existing, payload)
+	if err != nil {
+		return "", nil, http.StatusBadRequest, err
+	}
+	return payload, warnings, http.StatusOK, nil
 }
 
 // scheduleLookup keeps a nil *Scheduler from becoming a non-nil interface.

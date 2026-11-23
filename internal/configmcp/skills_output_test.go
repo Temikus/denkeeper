@@ -37,7 +37,7 @@ func TestMergeSkillFields_OmittedOutputCapIsKept(t *testing.T) {
 	existing := skill.Skill{Name: "digest", Version: "1.0.0", MaxOutputTokens: 2048, Body: "old"}
 	newBody := "new"
 
-	s := mustParse(t, configmcp.MergeSkillFields("digest", existing, nil, nil, nil, &newBody, nil, nil, nil))
+	s := mustParse(t, mustMerge(t, "digest", existing, nil, nil, nil, &newBody, nil, nil, nil))
 	if s.MaxOutputTokens != 2048 {
 		t.Errorf("MaxOutputTokens = %d, want 2048 (an omitted cap must be preserved)", s.MaxOutputTokens)
 	}
@@ -47,7 +47,7 @@ func TestMergeSkillFields_SetsOutputCap(t *testing.T) {
 	existing := skill.Skill{Name: "digest", Version: "1.0.0", MaxOutputTokens: 2048, Body: "body"}
 	set := 512
 
-	s := mustParse(t, configmcp.MergeSkillFields("digest", existing, nil, nil, nil, nil, nil, &set, nil))
+	s := mustParse(t, mustMerge(t, "digest", existing, nil, nil, nil, nil, nil, &set, nil))
 	if s.MaxOutputTokens != 512 {
 		t.Errorf("MaxOutputTokens = %d, want 512", s.MaxOutputTokens)
 	}
@@ -57,7 +57,7 @@ func TestMergeSkillFields_ExplicitZeroClearsOutputCap(t *testing.T) {
 	existing := skill.Skill{Name: "digest", Version: "1.0.0", MaxOutputTokens: 2048, Body: "body"}
 	clear := 0
 
-	s := mustParse(t, configmcp.MergeSkillFields("digest", existing, nil, nil, nil, nil, nil, &clear, nil))
+	s := mustParse(t, mustMerge(t, "digest", existing, nil, nil, nil, nil, nil, &clear, nil))
 	if s.MaxOutputTokens != 0 {
 		t.Errorf("MaxOutputTokens = %d, want 0 (an explicit 0 clears the cap)", s.MaxOutputTokens)
 	}

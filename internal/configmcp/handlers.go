@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -573,12 +574,13 @@ func (s *Server) handleSkillGet(_ context.Context, req *mcp.CallToolRequest) (*m
 }
 
 // MergeSkillFields merges optional update fields with existing skill values and
-// returns the payload built with the given name. A nil pointer (or a nil slice)
-// keeps the existing value — notably, an omitted maxToolRounds, maxOutputTokens
-// or requiresTools keeps the caps and the declared tool set the skill already
-// carries rather than silently clearing them. A non-nil but empty slice clears,
-// matching triggers.
-func MergeSkillFields(name string, existing skill.Skill, desc, ver *string, triggers []string, body *string, maxToolRounds, maxOutputTokens *int, requiresTools []string) string {
+// renders the payload with the given name in the skill's own dialect, keeping
+// frontmatter keys Denkeeper does not read (skill.Render). A nil pointer (or a
+// nil slice) keeps the existing value — notably, an omitted maxToolRounds,
+// maxOutputTokens or requiresTools keeps the caps and the declared tool set the
+// skill already carries rather than silently clearing them. A non-nil but empty
+// slice clears, matching triggers.
+func MergeSkillFields(name string, existing skill.Skill, desc, ver *string, triggers []string, body *string, maxToolRounds, maxOutputTokens *int, requiresTools []string) (string, error) {
 	description := existing.Description
 	if desc != nil {
 		description = *desc
@@ -607,7 +609,21 @@ func MergeSkillFields(name string, existing skill.Skill, desc, ver *string, trig
 	if requiresTools != nil {
 		reqTools = requiresTools
 	}
-	return BuildSkillPayload(name, description, version, trig, b, rounds, outTokens, reqTools)
+	payload, err := skill.Render(existing, skill.Fields{
+		Name: name, Description: description, Version: version, Triggers: trig,
+		MaxToolRounds: rounds, MaxOutputTokens: outTokens, RequiresTools: reqTools,
+	}, b)
+	return payload, explainRenderError(err)
+}
+
+// explainRenderError says what a reader can do when the unknown-key guard in
+// skill.Render refuses a rewrite. Other errors pass through unchanged.
+func explainRenderError(err error) error {
+	if errors.Is(err, skill.ErrUnknownKeysChanged) {
+		return fmt.Errorf("the edit was not saved: denkeeper could not rewrite this skill's frontmatter "+
+			"without changing keys it does not read. Edit the file by hand (%w)", err)
+	}
+	return err
 }
 
 func (s *Server) handleSkillUpdate(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -650,7 +666,10 @@ func (s *Server) handleSkillUpdate(ctx context.Context, req *mcp.CallToolRequest
 		}
 	}
 
-	payload := MergeSkillFields(effectiveName, existing, input.Description, input.Version, input.Triggers, input.Body, input.MaxToolRounds, input.MaxOutputTokens, input.RequiresTools)
+	payload, err := MergeSkillFields(effectiveName, existing, input.Description, input.Version, input.Triggers, input.Body, input.MaxToolRounds, input.MaxOutputTokens, input.RequiresTools)
+	if err != nil {
+		return toolError("building skill: " + err.Error()), nil
+	}
 	applyFn, summary := s.buildSkillUpdateAction(input.Name, effectiveName, isRename, payload)
 
 	return s.applyLintedSkill(ctx, &existing, approval.ActionKindUpdateSkill,
@@ -696,6 +715,17 @@ func (s *Server) buildSkillUpdateAction(oldName, effectiveName string, isRename 
 	return fn, "Update skill: " + oldName
 }
 
+// replaceOnce replaces old in body, refusing unless it matches exactly once.
+func replaceOnce(body, old, replacement string) (string, error) {
+	switch count := strings.Count(body, old); {
+	case count == 0:
+		return "", errors.New("old_string not found in skill body")
+	case count > 1:
+		return "", fmt.Errorf("old_string matches %d times; must match exactly once", count)
+	}
+	return strings.Replace(body, old, replacement, 1), nil
+}
+
 func (s *Server) handleSkillPatch(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	if s.deps.AgentSkillsDir == "" {
 		return toolError("skill_patch is not available: no agent skills directory configured"), nil
@@ -732,16 +762,15 @@ func (s *Server) handleSkillPatch(ctx context.Context, req *mcp.CallToolRequest)
 		}
 	}
 
-	count := strings.Count(sk.Body, input.OldString)
-	if count == 0 {
-		return toolError("old_string not found in skill body"), nil
+	newBody, err := replaceOnce(sk.Body, input.OldString, input.NewString)
+	if err != nil {
+		return toolError(err.Error()), nil
 	}
-	if count > 1 {
-		return toolError(fmt.Sprintf("old_string matches %d times; must match exactly once", count)), nil
+	// Body only, so the frontmatter block is reused byte for byte.
+	payload, err := MergeSkillFields(input.Name, sk, nil, nil, nil, &newBody, nil, nil, nil)
+	if err != nil {
+		return toolError("building skill: " + err.Error()), nil
 	}
-
-	newBody := strings.Replace(sk.Body, input.OldString, input.NewString, 1)
-	payload := BuildSkillPayload(input.Name, sk.Description, sk.Version, sk.Triggers, newBody, sk.MaxToolRounds, sk.MaxOutputTokens, sk.Requires.Tools)
 
 	deps := s.deps
 	skillName := input.Name
@@ -1943,9 +1972,8 @@ func writeSkillFileAtomic(root *os.Root, name, payload string) error {
 // journal these bytes as the "state before a mutation" must not mistake an
 // unreadable file for an absent one.
 //
-// The bytes are returned verbatim rather than re-serialized through
-// BuildSkillPayload, so a frontmatter field this build does not know about
-// still survives a round trip through the undo journal.
+// The bytes are returned verbatim, so the undo journal restores the file
+// exactly: dialect, comments and formatting included.
 func ReadSkillFile(agentSkillsDir, name string) (string, bool, error) {
 	if err := ValidateSkillName(name); err != nil {
 		return "", false, err
@@ -2149,37 +2177,14 @@ func RemoveSkillFile(agentSkillsDir, name string) error {
 	return nil
 }
 
-// BuildSkillPayload constructs the canonical +++ frontmatter + body format.
-//
-// This is the single frontmatter writer behind every CRUD surface (config MCP,
-// external MCP, REST), so a field missing here is silently dropped from any
-// skill that is updated or patched. The optional fields (the two caps and
-// requires) are omitted when empty, leaving skills that use none of them
-// byte-identical to what earlier versions wrote.
-//
-// Table-valued fields (requires) must stay LAST in fm: a TOML table header
-// captures every key after it, so a scalar declared below one would be parsed
-// as a member of that table.
+// BuildSkillPayload writes a new skill file (skill.RenderNew: TOML, +++). It is
+// the create path on every surface; edits go through MergeSkillFields, which
+// keeps the skill's dialect and unknown keys.
 func BuildSkillPayload(name, description, version string, triggers []string, body string, maxToolRounds, maxOutputTokens int, requiresTools []string) string {
-	type fm struct {
-		Name            string              `toml:"name"`
-		Description     string              `toml:"description,omitempty"`
-		Version         string              `toml:"version,omitempty"`
-		Triggers        []string            `toml:"triggers,omitempty"`
-		MaxToolRounds   int                 `toml:"max_tool_rounds,omitempty"`
-		MaxOutputTokens int                 `toml:"max_output_tokens,omitempty"`
-		Requires        skill.SkillRequires `toml:"requires,omitempty"`
-	}
-	data, _ := toml.Marshal(fm{
-		Name:            name,
-		Description:     description,
-		Version:         version,
-		Triggers:        triggers,
-		MaxToolRounds:   maxToolRounds,
-		MaxOutputTokens: maxOutputTokens,
-		Requires:        skill.SkillRequires{Tools: requiresTools},
-	})
-	return "+++\n" + strings.TrimSpace(string(data)) + "\n+++\n\n" + strings.TrimSpace(body)
+	return skill.RenderNew(skill.Fields{
+		Name: name, Description: description, Version: version, Triggers: triggers,
+		MaxToolRounds: maxToolRounds, MaxOutputTokens: maxOutputTokens, RequiresTools: requiresTools,
+	}, body)
 }
 
 // BuildSchedulePayload marshals the schedule config to TOML for storage as

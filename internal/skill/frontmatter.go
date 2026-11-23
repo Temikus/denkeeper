@@ -2,6 +2,7 @@ package skill
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -527,6 +528,10 @@ func encodeYAML(top, doc *yaml.Node) (string, error) {
 	return strings.Trim(buf.String(), "\r\n"), nil
 }
 
+// ErrUnknownKeysChanged is Render refusing a rewrite that would lose or add a
+// key Denkeeper does not read. Nothing is written.
+var ErrUnknownKeysChanged = errors.New("skill: rewriting frontmatter changed its unknown keys")
+
 // sameUnknownKeys compares the unknown key names (top level and inside
 // requires) of two blocks of one dialect. Any difference means the rewrite
 // lost or invented a key.
@@ -540,7 +545,7 @@ func sameUnknownKeys(dialect Dialect, before, after string) error {
 		return fmt.Errorf("skill: rewriting frontmatter: %w", err)
 	}
 	if !reflect.DeepEqual(a, b) {
-		return fmt.Errorf("skill: rewriting frontmatter changed its unknown keys (before %v, after %v)", b, a)
+		return fmt.Errorf("%w (before %v, after %v)", ErrUnknownKeysChanged, b, a)
 	}
 	return nil
 }

@@ -642,3 +642,97 @@ func TestEffector_TraversalName_JournalsNothing(t *testing.T) {
 		t.Errorf("a traversal name was journaled: %+v", rev)
 	}
 }
+
+// effectorYAMLSkill carries a comment and an unknown key: a revert must bring
+// back the exact bytes, not a re-rendered block.
+const effectorYAMLSkill = "---\n" +
+	"name: kelos # the skill's id\n" +
+	"description: Looks after things.\n" +
+	"license: MIT\n" +
+	"---\n\n" +
+	"Old body."
+
+func seedYAML(t *testing.T, e *skilleffect.Effector, sa *fakeSkills) string {
+	t.Helper()
+	if err := e.Create(context.Background(), sa, "seed-kelos", effectorYAMLSkill, agent.SkillActorUser, 0); err != nil {
+		t.Fatalf("seeding YAML skill: %v", err)
+	}
+	return onDisk(t, sa, "kelos")
+}
+
+// yamlEdit renders an edit of the in-memory skill the way every surface does.
+func yamlEdit(t *testing.T, sa *fakeSkills, newName, desc string) string {
+	t.Helper()
+	existing, ok := sa.GetSkill("kelos")
+	if !ok {
+		t.Fatal("kelos missing from memory")
+	}
+	payload, err := configmcp.MergeSkillFields(newName, existing, &desc, nil, nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("MergeSkillFields: %v", err)
+	}
+	return payload
+}
+
+func TestEffector_Revert_YAMLUpdateRestoresExactBytes(t *testing.T) {
+	store := newStore(t)
+	sa := newFakeSkills(t)
+	e := newEffector(t, store)
+
+	before := seedYAML(t, e, sa)
+	if err := e.Update(context.Background(), sa, "t1", "kelos", yamlEdit(t, sa, "kelos", "Changed."), agent.SkillActorUser, 0); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if onDisk(t, sa, "kelos") == before {
+		t.Fatal("update changed nothing on disk")
+	}
+
+	if _, err := e.Revert(context.Background(), sa, "kelos", 0); err != nil {
+		t.Fatalf("revert: %v", err)
+	}
+	if got := onDisk(t, sa, "kelos"); got != before {
+		t.Errorf("revert did not restore the exact YAML bytes:\n got %q\nwant %q", got, before)
+	}
+}
+
+func TestEffector_Revert_YAMLDeleteRecreatesExactBytes(t *testing.T) {
+	store := newStore(t)
+	sa := newFakeSkills(t)
+	e := newEffector(t, store)
+
+	before := seedYAML(t, e, sa)
+	if err := e.Delete(context.Background(), sa, "t1", "kelos", agent.SkillActorUser, 0); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	mustNotExist(t, sa, "kelos")
+
+	if _, err := e.Revert(context.Background(), sa, "kelos", 0); err != nil {
+		t.Fatalf("revert: %v", err)
+	}
+	if got := onDisk(t, sa, "kelos"); got != before {
+		t.Errorf("deleted YAML skill not restored byte for byte:\n got %q\nwant %q", got, before)
+	}
+}
+
+func TestEffector_Revert_YAMLRenameRestoresNameAndBytes(t *testing.T) {
+	store := newStore(t)
+	sa := newFakeSkills(t)
+	e := newEffector(t, store)
+
+	before := seedYAML(t, e, sa)
+	if err := e.Rename(context.Background(), sa, "t1", "kelos", yamlEdit(t, sa, "kelos-two", "Looks after things."), agent.SkillActorUser, 0); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	mustNotExist(t, sa, "kelos")
+
+	if _, err := e.Revert(context.Background(), sa, "kelos-two", 0); err != nil {
+		t.Fatalf("revert: %v", err)
+	}
+	if got := onDisk(t, sa, "kelos"); got != before {
+		t.Errorf("rename revert did not restore the exact YAML bytes:\n got %q\nwant %q", got, before)
+	}
+	mustNotExist(t, sa, "kelos-two")
+	if sk, ok := sa.GetSkill("kelos"); !ok || sk.Dialect != skill.DialectYAML {
+		t.Errorf("restored skill = %+v, want the YAML kelos back in memory", sk)
+	}
+}
