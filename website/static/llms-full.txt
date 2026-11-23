@@ -416,7 +416,10 @@ When a run finishes it pairs the incumbent and candidate samples for each test
 case, assigns each pair a random A/B identity that stays server-side, and queues
 two judgment items per pair with the presentation order swapped. An LLM judge
 works that queue over MCP (eval_pending, eval_get_pair, eval_verdict,
-eval_summary, eval_run_status) and never learns which side is which. The verdict
+eval_summary, eval_run_status, eval_samples) and never learns which side is
+which while it can still judge. eval_samples, which names the variant behind
+each sample, opens only once every judgment item has a judge verdict, and from
+then on the run takes no more verdicts. The verdict
 is asymmetric: the objective gates below can declare a downgrade on their own,
 but calling a candidate an upgrade also needs the judge win-rate.
 

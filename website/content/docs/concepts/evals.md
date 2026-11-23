@@ -3,7 +3,7 @@ title: "Evals"
 description: "Comparing a candidate model against the one you run today, on your own conversations."
 slug: "evals"
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-30T00:00:00+00:00
+lastmod: 2026-11-23T00:00:00+00:00
 draft: false
 weight: 57
 toc: true
@@ -131,7 +131,7 @@ Setting `[eval] judge_model` adds a second consumer for the same queue: an **int
 The rubric lives in the repo at `.claude/skills/judge-eval/SKILL.md`, where it can be read and edited: four dimensions in priority order — `task_success`, `tool_path`, `persona_fit`, `length` — with instructions to cite the specific persona or skill clause behind any deduction. Unknown dimension names are rejected rather than stored, because a typo that silently vanishes from the results is worse than a failed call. A verdict records the rubric version the judge worked to, and the summary reports the distinct set it saw, so a queue worked across a rubric edit says so instead of averaging two rubrics into one number.
 
 {{< callout context="note" >}}
-**Calibrate a new rubric before trusting it headless.** Judge a random ~20-item subset yourself and record your own call alongside the judge's (`judge_ident: "operator"`). Operator marks sit beside the judge's rather than replacing it, are excluded from the win rate, and feed only the agreement figure `eval_summary` reports. Below roughly 80 % agreement, fix the rubric first — a drifted rubric quietly devalues every later run.
+**Calibrate a new rubric before trusting it headless.** Mark a random ~20-item subset yourself before the judge calls those items (`judge_ident: "operator"`). A mark is accepted only while its item has no judge verdict, so the agreement figure `eval_summary` reports compares two calls made without sight of each other. Marks are excluded from the win rate. Calibrate before starting the internal judge: an item it has judged can no longer be marked. Below roughly 80 % agreement, fix the rubric first. A drifted rubric quietly devalues every later run.
 {{< /callout >}}
 
 A pair counts only when **both** presentation orders carry a verdict. If the two calls name different sides, the judge tracked position rather than quality and the pair records as a tie — so position bias splits the vote instead of deciding it. A half-judged pair is not evidence and stays out of the tally.
@@ -159,6 +159,8 @@ upgrade: judge win-rate 62% over 45 judged pair(s) meets the 55% threshold, and 
 ```
 
 `GET /api/v1/eval/runs/{id}/pairs` is the operator's unblinded view of the same evidence: which variant produced each side, every verdict with its dimensions and notes, and each pair's resolved outcome. It is REST-only on purpose — the judge's MCP surface must not be able to look up which variant produced which response.
+
+Over MCP, `eval_samples` returns a run's samples with the variant behind each one. It is refused until the run is terminal and every judgment item has a judge verdict, and from then on the run takes no more verdicts, so a judge never holds identities while it can still judge.
 
 ## In the dashboard
 
