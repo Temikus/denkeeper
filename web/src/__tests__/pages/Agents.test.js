@@ -4,6 +4,7 @@ import { http, HttpResponse } from 'msw'
 import { server } from '../../test/server.js'
 import { token, authMode } from '../../store.js'
 import Agents from '../../pages/Agents.svelte'
+import { attention } from '../../attention.js'
 
 beforeEach(() => {
   token.set('test-key')
@@ -588,20 +589,34 @@ describe('Agents permission config', () => {
     await waitFor(() => expect(patchBody()).toEqual({ supervisor_decider_approve_at: 0.98 }))
   })
 
-  test('Permission card counts shadow approvals the supervisor did not make', async () => {
-    server.use(http.get('/api/v1/agents/:name/decider-reviews', () => HttpResponse.json({
-      decider: 'jev', reviews: [
-        { audit_id: 1, min_score: 0.97, supervisor: 'DENY', time: '2026-10-01T00:00:00Z' },
-        { audit_id: 2, min_score: 0.99, supervisor: 'APPROVE', time: '2026-10-01T00:00:00Z' },
-        // An escalation counts too: the decider would have run it unreviewed.
-        { audit_id: 3, min_score: 0.96, supervisor: 'ESCALATE', time: '2026-10-01T00:00:00Z' },
-        // Below the saved approve threshold: escalates, so not counted.
-        { audit_id: 4, min_score: 0.9, supervisor: 'DENY', time: '2026-10-01T00:00:00Z' },
-      ],
-    })))
-    setupDeciderAgent({ supervisor_decider: 'jev', supervisor_decider_mode: 'shadow', supervisor_decider_approve_at: 0.95 })
+  test('Permission card reads the count to review from the attention poll', async () => {
+    attention.set({ pendingApprovals: 0, unhealthyTools: [], deciderReviews: { default: 2 } })
+    try {
+      setupDeciderAgent({ supervisor_decider: 'jev', supervisor_decider_mode: 'shadow', supervisor: 'argus' })
+      const line = await waitFor(() => screen.getByTestId('permission-decider'))
+      await waitFor(() => expect(line.textContent).toContain('jev · 2 to review'))
+      expect(line.querySelector('[title]').getAttribute('title')).toBe("2 new calls jev approved and argus didn't")
+    } finally {
+      attention.set({ pendingApprovals: 0, unhealthyTools: [], deciderReviews: {} })
+    }
+  })
 
-    await waitFor(() => expect(screen.getByTestId('permission-decider').textContent).toContain('jev · 2 to review'))
+  test('the agent list marks only the agent with calls to review', async () => {
+    attention.set({ pendingApprovals: 0, unhealthyTools: [], deciderReviews: { default: 1, helper: 0 } })
+    try {
+      server.use(http.get('/api/v1/agents', () => HttpResponse.json([
+        { name: 'default', permission_tier: 'supervised', skill_count: 0, has_tools: false, fallbacks: [] },
+        { name: 'helper', permission_tier: 'autonomous', skill_count: 0, has_tools: false, fallbacks: [] },
+      ])))
+      const { container } = render(Agents)
+      await waitFor(() => expect(container.querySelectorAll('.item .name-text')).toHaveLength(2))
+      const [def, helper] = container.querySelectorAll('.item .name-text')
+      expect(def.querySelector('.review-dot')).not.toBeNull()
+      expect(def).toHaveTextContent('default, 1 to review')
+      expect(helper.querySelector('.review-dot')).toBeNull()
+    } finally {
+      attention.set({ pendingApprovals: 0, unhealthyTools: [], deciderReviews: {} })
+    }
   })
 
   test('Permission card and agent list name the bound decision model', async () => {

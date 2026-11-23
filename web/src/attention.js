@@ -3,14 +3,22 @@ import { api } from './api.js'
 import { panicStatus } from './wsStore.js'
 
 /**
- * What needs the operator: pending approvals and broken tool servers. Feeds the
- * sidebar and tab-bar badges and the top-bar health line.
+ * What needs the operator: pending approvals, broken tool servers and shadow
+ * decider approvals the supervisor did not make. Feeds the sidebar and tab-bar
+ * badges and the top-bar health line.
  *
- * Polled because no WS frame announces a new approval. Each half fails on its
- * own: a key without the approvals or tools scope keeps that half at its
- * default rather than hiding the other.
+ * Polled because no WS frame announces a new approval. Each part fails on its
+ * own: a key without the approvals, tools or audit scope keeps that part at
+ * its default rather than hiding the others.
  */
-export const attention = writable({ pendingApprovals: 0, unhealthyTools: [] })
+const EMPTY = () => ({ pendingApprovals: 0, unhealthyTools: [], deciderReviews: {} })
+
+export const attention = writable(EMPTY())
+
+// Sum of deciderReviews ({agent: n}). Tolerates a store set without the key.
+export function deciderReviewTotal(a) {
+  return Object.values(a?.deciderReviews || {}).reduce((n, v) => n + (Number(v) || 0), 0)
+}
 
 export const ATTENTION_POLL_MS = 15000
 
@@ -30,9 +38,10 @@ let gen = 0
 
 export async function refreshAttention() {
   const mine = ++gen
-  const [approvals, tools] = await Promise.allSettled([
+  const [approvals, tools, reviews] = await Promise.allSettled([
     api.approvals('pending'),
     api.listTools(),
+    api.deciderReviewCounts(),
   ])
   if (mine !== gen) return
   attention.update((a) => ({
@@ -42,6 +51,9 @@ export async function refreshAttention() {
     unhealthyTools: tools.status === 'fulfilled' && Array.isArray(tools.value?.tools)
       ? tools.value.tools.filter(t => UNHEALTHY.has(t.status)).map(t => t.name)
       : a.unhealthyTools,
+    deciderReviews: reviews.status === 'fulfilled' && reviews.value && typeof reviews.value === 'object'
+      ? reviews.value
+      : (a.deciderReviews || {}),
   }))
 }
 
@@ -69,5 +81,5 @@ export function stopAttention() {
   gen++
   // The next credential may lack the scope to refill these, and a failed
   // poll keeps the old value, so never carry them across a logout.
-  attention.set({ pendingApprovals: 0, unhealthyTools: [] })
+  attention.set(EMPTY())
 }

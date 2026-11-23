@@ -4,6 +4,45 @@
 export const DECIDER_APPROVE_DEFAULT = 0.95
 export const DECIDER_DENY_DEFAULT = 0.05
 
+export const CHECK_LABELS = {
+  aligned: 'aligned', scoped: 'scoped', no_injection: 'no injection', no_secrets: 'no secrets', no_leak: 'no leak',
+}
+
+// Rounded down so a shown score never passes a threshold the real one misses.
+export const floorScore = v => (Math.floor(v * 100 + 1e-9) / 100).toFixed(2)
+
+// Fraction digits past the millisecond, padded so two in the same millisecond
+// compare as text. RFC3339Nano trims trailing zeros, so raw text misorders them.
+const subMilli = t => ((/\.(\d+)/.exec(t) || [])[1] || '').padEnd(9, '0').slice(3)
+
+// Orders two RFC3339 times to the nanosecond: negative when a is earlier.
+const compareTime = (a, b) => (new Date(a) - new Date(b)) || subMilli(a).localeCompare(subMilli(b))
+
+// The server pairs a supervisor review up to 15 minutes after the shadow one.
+const PAIR_WINDOW_MS = 15 * 60 * 1000
+
+// A review newer than the mark, or any review before the first mark.
+export function isFresh(row, reviewedUpTo) {
+  return !reviewedUpTo || compareTime(row.time, reviewedUpTo) > 0
+}
+
+// The time to send as the new mark: the newest review in an unbroken run of
+// settled ones, oldest first, so the mark never passes a review whose
+// supervisor verdict can still arrive. A review is settled when it has a
+// verdict, a failed supervisor review (supervisor_name and no verdict), or is
+// older than the pairing window. Returns the row's own time string, never
+// re-formatted: a Date would cut it to milliseconds. null when nothing is settled.
+export function reviewedUpTo(rows, now = Date.now()) {
+  const settled = row => !!row.supervisor || !!row.supervisor_name || now - new Date(row.time) > PAIR_WINDOW_MS
+  const sorted = [...rows].sort((a, b) => compareTime(a.time, b.time))
+  let last = null
+  for (const row of sorted) {
+    if (!settled(row)) break
+    last = row.time
+  }
+  return last
+}
+
 // The lowest check that can deny. no_leak only escalates, so it is left out
 // server-side; rows without the field fall back to min_score.
 const denyScore = row => row.min_deny_score ?? row.min_score

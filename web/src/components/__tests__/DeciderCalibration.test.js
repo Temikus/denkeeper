@@ -129,3 +129,102 @@ describe('DeciderCalibration', () => {
     await waitFor(() => expect(container.querySelector('#decider-calibration')).toBeNull())
   })
 })
+
+describe('DeciderCalibration review mark', () => {
+  const MARK = '2026-11-21T00:00:00Z'
+  const NEW_TIME = '2026-11-22T10:00:00.123456789Z'
+  const OLD_TIME = '2026-11-19T10:00:00Z'
+  // Unsafe approvals: jev approves (0.99), argus denies.
+  const fresh = () => review(1, 0.99, 'DENY', { time: NEW_TIME, tool: 'kv_set' })
+  const old = () => review(2, 0.99, 'DENY', { time: OLD_TIME, tool: 'web_search' })
+  const tableRows = () => [...screen.getByTestId('calibration-disagreements').querySelectorAll('tbody tr')]
+
+  function serveMark(handler) {
+    const bodies = []
+    server.use(http.post('/api/v1/agents/:name/decider-reviews/reviewed', async ({ request }) => {
+      const body = await request.json()
+      bodies.push(body)
+      return handler(body)
+    }))
+    return bodies
+  }
+
+  test('lists fresh rows above a divider that shows when and who', async () => {
+    serveReviews([old(), fresh()], { reviewed_up_to: MARK, reviewed_by: 'temik' })
+    render(DeciderCalibration, { props })
+
+    await waitFor(() => screen.getByTestId('calibration-mark'))
+    const rows = tableRows()
+    expect(rows[0]).toHaveTextContent('kv_set')
+    expect(rows[1]).toHaveAttribute('data-testid', 'calibration-mark')
+    expect(rows[1]).toHaveTextContent(/Reviewed up to .* · temik/)
+    expect(rows[1].querySelector('[title]').getAttribute('title')).toBe('2026-11-21T00:00:00.000Z')
+    expect(rows[2]).toHaveTextContent('web_search')
+    expect(rows[2]).toHaveClass('reviewed')
+    expect(screen.getByTestId('calibration-new')).toHaveTextContent('1 new since')
+  })
+
+  test('shows no divider before the first mark', async () => {
+    serveReviews([old(), fresh()])
+    render(DeciderCalibration, { props })
+
+    await waitFor(() => screen.getByTestId('calibration-disagreements'))
+    expect(screen.queryByTestId('calibration-mark')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Mark all reviewed' })).toBeInTheDocument()
+  })
+
+  test('has no button when nothing fresh is an unsafe approval', async () => {
+    // The only fresh disagreement is a wrong denial, which the badge does not count.
+    serveReviews([old(), review(3, 0.01, 'APPROVE', { time: NEW_TIME })], { reviewed_up_to: MARK, reviewed_by: 'temik' })
+    render(DeciderCalibration, { props })
+
+    await waitFor(() => screen.getByTestId('calibration-disagreements'))
+    expect(screen.queryByRole('button', { name: 'Mark all reviewed' })).toBeNull()
+    expect(screen.getByRole('status')).toHaveTextContent('Nothing new to review')
+  })
+
+  test('posts the newest settled time unchanged and shows Marking… while in flight', async () => {
+    serveReviews([old(), fresh()], { reviewed_up_to: MARK, reviewed_by: 'temik' })
+    let release
+    const bodies = serveMark(async body => {
+      await new Promise(r => { release = r })
+      return HttpResponse.json({ agent: 'pamela', decider: 'jev', reviewed_up_to: body.up_to, reviewed_by: 'temik' })
+    })
+    render(DeciderCalibration, { props })
+
+    await fireEvent.click(await waitFor(() => screen.getByRole('button', { name: 'Mark all reviewed' })))
+    await waitFor(() => expect(bodies).toHaveLength(1))
+    expect(bodies[0]).toEqual({ decider: 'jev', up_to: NEW_TIME })
+    expect(screen.getByRole('button', { name: 'Marking…' })).toBeDisabled()
+    release()
+    await waitFor(() => expect(screen.queryByRole('button', { name: /Mark/ })).toBeNull())
+  })
+
+  test('a failed mark shows the error inline and brings the button back', async () => {
+    serveReviews([old(), fresh()], { reviewed_up_to: MARK, reviewed_by: 'temik' })
+    serveMark(() => HttpResponse.json({ error: 'up_to is in the future' }, { status: 400 }))
+    render(DeciderCalibration, { props })
+
+    await fireEvent.click(await waitFor(() => screen.getByRole('button', { name: 'Mark all reviewed' })))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Could not mark as reviewed: up_to is in the future'))
+    expect(screen.getByRole('button', { name: 'Mark all reviewed' })).toBeEnabled()
+  })
+
+  test('after a mark the divider moves, nothing is new, and the badge count is fetched again', async () => {
+    serveReviews([old(), fresh()], { reviewed_up_to: MARK, reviewed_by: 'temik' })
+    serveMark(body => HttpResponse.json({ agent: 'pamela', decider: 'jev', reviewed_up_to: body.up_to, reviewed_by: 'temik' }))
+    let counts = 0
+    server.use(http.get('/api/v1/decider-reviews/unreviewed', () => { counts++; return HttpResponse.json({ pamela: 0 }) }))
+    render(DeciderCalibration, { props })
+
+    await fireEvent.click(await waitFor(() => screen.getByRole('button', { name: 'Mark all reviewed' })))
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Nothing new to review'))
+    // The button is gone; focus lands on the status text, not <body>.
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('status')))
+    const rows = tableRows()
+    expect(rows[0]).toHaveAttribute('data-testid', 'calibration-mark')
+    expect(rows[1]).toHaveClass('reviewed')
+    expect(screen.queryByTestId('calibration-new')).toBeNull()
+    await waitFor(() => expect(counts).toBe(1))
+  })
+})

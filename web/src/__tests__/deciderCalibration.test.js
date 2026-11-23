@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest'
-import { verdict, summarize, histogram, disagreements, suggestion } from '../deciderCalibration.js'
+import { verdict, summarize, histogram, disagreements, suggestion, reviewedUpTo, isFresh } from '../deciderCalibration.js'
 
 const row = (min, supervisor, extra = {}) => ({
   min_score: min, supervisor, decider_cost: 0.0001, supervisor_cost: 0.04, time: '2026-10-01T00:00:00Z', ...extra,
@@ -103,5 +103,54 @@ describe('suggestion', () => {
 
   test('is null when the decider agrees with the supervisor', () => {
     expect(suggestion([row(0.99, 'APPROVE'), row(0.01, 'DENY')], 0.95, 0.05)).toBeNull()
+  })
+})
+
+describe('reviewedUpTo', () => {
+  const now = Date.parse('2026-11-23T12:00:00Z')
+  const at = (time, extra = {}) => ({ time, ...extra })
+
+  test('is the newest row when every row is settled', () => {
+    const rows = [at('2026-11-23T11:59:00.123456789Z', { supervisor: 'DENY' }), at('2026-11-20T00:00:00Z', { supervisor: 'APPROVE' })]
+    expect(reviewedUpTo(rows, now)).toBe('2026-11-23T11:59:00.123456789Z')
+  })
+
+  test('stops before a young row with no verdict yet', () => {
+    const rows = [
+      at('2026-11-23T11:00:00Z', { supervisor: 'DENY' }),
+      at('2026-11-23T11:55:00Z'),
+      at('2026-11-23T11:58:00Z', { supervisor: 'APPROVE' }),
+    ]
+    expect(reviewedUpTo(rows, now)).toBe('2026-11-23T11:00:00Z')
+  })
+
+  test('treats a failed supervisor review as settled', () => {
+    expect(reviewedUpTo([at('2026-11-23T11:58:00Z', { supervisor_name: 'argus' })], now)).toBe('2026-11-23T11:58:00Z')
+  })
+
+  test('treats a row older than the pairing window as settled', () => {
+    expect(reviewedUpTo([at('2026-11-23T11:40:00Z')], now)).toBe('2026-11-23T11:40:00Z')
+  })
+
+  test('orders rows in the same millisecond by their nanoseconds', () => {
+    const rows = [at('2026-11-23T11:00:00.1234567Z', { supervisor: 'DENY' }), at('2026-11-23T11:00:00.12345Z', { supervisor: 'DENY' })]
+    expect(reviewedUpTo(rows, now)).toBe('2026-11-23T11:00:00.1234567Z')
+  })
+
+  test('is null with no rows', () => {
+    expect(reviewedUpTo([], now)).toBeNull()
+  })
+})
+
+describe('isFresh', () => {
+  test('is true before the first mark', () => {
+    expect(isFresh({ time: '2026-11-01T00:00:00Z' }, null)).toBe(true)
+  })
+
+  test('is false at the mark and true after it', () => {
+    const mark = '2026-11-23T11:00:00.123456789Z'
+    expect(isFresh({ time: mark }, mark)).toBe(false)
+    expect(isFresh({ time: '2026-11-23T11:00:00.12345679Z' }, mark)).toBe(true)
+    expect(isFresh({ time: '2026-11-23T10:00:00Z' }, mark)).toBe(false)
   })
 })

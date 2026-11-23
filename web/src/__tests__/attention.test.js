@@ -3,7 +3,7 @@ import { get } from 'svelte/store'
 import { http, HttpResponse } from 'msw'
 import { waitFor } from '@testing-library/svelte'
 import { server } from '../test/server.js'
-import { attention, refreshAttention, startAttention, stopAttention, ATTENTION_POLL_MS } from '../attention.js'
+import { attention, refreshAttention, startAttention, stopAttention, deciderReviewTotal, ATTENTION_POLL_MS } from '../attention.js'
 import { panicStatus } from '../wsStore.js'
 
 const pending = (n) => Array.from({ length: n }, (_, i) => ({ id: `a${i}`, status: 'pending' }))
@@ -30,7 +30,29 @@ describe('attention', () => {
       ] })),
     )
     await refreshAttention()
-    expect(get(attention)).toEqual({ pendingApprovals: 2, unhealthyTools: ['github', 'jira'] })
+    expect(get(attention)).toEqual({ pendingApprovals: 2, unhealthyTools: ['github', 'jira'], deciderReviews: {} })
+  })
+
+  test('the decider review counts land in the store', async () => {
+    server.use(http.get('/api/v1/decider-reviews/unreviewed', () => HttpResponse.json({ default: 2, helper: 0 })))
+    await refreshAttention()
+    expect(get(attention).deciderReviews).toEqual({ default: 2, helper: 0 })
+  })
+
+  test('a forbidden review count keeps its last map and the other parts still update', async () => {
+    attention.set({ pendingApprovals: 0, unhealthyTools: [], deciderReviews: { default: 1 } })
+    server.use(
+      http.get('/api/v1/decider-reviews/unreviewed', () => HttpResponse.json({ error: 'forbidden' }, { status: 403 })),
+      http.get('/api/v1/approvals', () => HttpResponse.json(pending(1))),
+      http.get('/api/v1/tools', () => HttpResponse.json({ tools: [{ name: 'github', status: 'error' }] })),
+    )
+    await refreshAttention()
+    expect(get(attention)).toEqual({ pendingApprovals: 1, unhealthyTools: ['github'], deciderReviews: { default: 1 } })
+  })
+
+  test('deciderReviewTotal sums the map and treats a missing key as 0', () => {
+    expect(deciderReviewTotal({ deciderReviews: { a: 2, b: 3 } })).toBe(5)
+    expect(deciderReviewTotal({ pendingApprovals: 1, unhealthyTools: [] })).toBe(0)
   })
 
   test('asks only for pending approvals', async () => {
@@ -50,7 +72,7 @@ describe('attention', () => {
       http.get('/api/v1/tools', () => HttpResponse.json({ tools: [{ name: 'github', status: 'error' }] })),
     )
     await refreshAttention()
-    expect(get(attention)).toEqual({ pendingApprovals: 3, unhealthyTools: ['github'] })
+    expect(get(attention)).toEqual({ pendingApprovals: 3, unhealthyTools: ['github'], deciderReviews: {} })
   })
 
   test('re-reads when panic flips, since a stop aborts pending approvals', async () => {
@@ -126,15 +148,16 @@ describe('attention', () => {
       await new Promise(r => { release = r })
       return HttpResponse.json(pending(4))
     }))
-    attention.set({ pendingApprovals: 2, unhealthyTools: ['github'] })
+    attention.set({ pendingApprovals: 2, unhealthyTools: ['github'], deciderReviews: { default: 3 } })
 
     const inFlight = refreshAttention()
     await vi.waitFor(() => expect(release).toBeTypeOf('function'))
     stopAttention()
-    expect(get(attention)).toEqual({ pendingApprovals: 0, unhealthyTools: [] })
+    const empty = { pendingApprovals: 0, unhealthyTools: [], deciderReviews: {} }
+    expect(get(attention)).toEqual(empty)
 
     release()
     await inFlight
-    expect(get(attention)).toEqual({ pendingApprovals: 0, unhealthyTools: [] })
+    expect(get(attention)).toEqual(empty)
   })
 })

@@ -128,7 +128,30 @@ describe('Nav', () => {
     const { getByRole } = render(Nav, { props: { active: 'overview' } })
     const agents = toggle(getByRole, 'Agents')
     await fireEvent.click(agents)
-    expect(agents).toHaveTextContent('(2 pending)')
+    expect(agents).toHaveTextContent('(2 need attention)')
+  })
+
+  test('the Agents link counts decider calls to review', () => {
+    attention.set({ pendingApprovals: 0, unhealthyTools: [], deciderReviews: { default: 2, helper: 1 } })
+    const { getByText } = render(Nav, { props: { active: 'overview' } })
+    const link = getByText('Agents', { selector: '.nav-item span' }).closest('a')
+    expect(link.querySelector('.badge')).toHaveTextContent('3')
+    expect(link).toHaveTextContent('3 to review')
+  })
+
+  test('the Agents link has no badge with nothing to review', () => {
+    attention.set({ pendingApprovals: 0, unhealthyTools: [], deciderReviews: { default: 0 } })
+    const { getByText } = render(Nav, { props: { active: 'overview' } })
+    expect(getByText('Agents', { selector: '.nav-item span' }).closest('a').querySelector('.badge')).toBeNull()
+  })
+
+  test('a closed Agents group adds approvals and reviews', async () => {
+    attention.set({ pendingApprovals: 2, unhealthyTools: [], deciderReviews: { default: 3 } })
+    const { getByRole } = render(Nav, { props: { active: 'overview' } })
+    const agents = toggle(getByRole, 'Agents')
+    await fireEvent.click(agents)
+    expect(agents.querySelector('.group-badge')).toHaveTextContent('5')
+    expect(agents).toHaveTextContent('(5 need attention)')
   })
 
   test('Platform flags a broken tool server', () => {
