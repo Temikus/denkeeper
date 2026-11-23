@@ -3,7 +3,7 @@ title: "Configuration Reference"
 description: "Complete reference for denkeeper.toml options."
 slug: "config"
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-09-18T00:00:00+00:00
+lastmod: 2026-11-23T00:00:00+00:00
 draft: false
 weight: 10
 toc: true
@@ -191,6 +191,7 @@ Defaults for agents that do not set their own directories.
 | `max_output_tokens` | int | `0` | Override `llm.max_output_tokens` for this agent. `0` = inherit. The post-turn reviewer keeps the global value |
 | `session_tier` | string | — | Override default permission tier |
 | `timezone` | string | — | IANA name, e.g. `"Australia/Sydney"`. Precedence: agent > `api.timezone` > UTC. Does **not** affect cron evaluation, which stays on `api.timezone` and is restart-only |
+| `skill_index` | bool | — | Overrides `[skills] index` for this agent; unset inherits it. Applied on `POST /server/reload` |
 | `cost_limit_soft` | float | — | Per-agent soft cost limit in USD (overrides global) |
 | `cost_limit_hard` | float | — | Per-agent hard cost limit in USD (overrides global) |
 | `max_context_messages` | int | `50` | Most recent messages sent to the LLM. Older history is dropped from the request, not deleted |
@@ -372,6 +373,7 @@ While it is off, the task endpoints answer `503` and the tools aren't offered. C
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `max_bytes` | int | `1048576` | Cap on a single persisted skill file, frontmatter + body (1 MiB). Negative = unlimited |
+| `index` | bool | `true` | List every skill's name, triggers and first description line in each agent's system prompt (see [Skill index](/docs/concepts/skills/#skill-index)). An agent's `skill_index` overrides it. Applied on `POST /server/reload`. The list is capped at 8,000 bytes |
 
 Skill content is written verbatim, so without a bound an authorized caller could exhaust disk. The cap is enforced on every write surface (REST, config MCP, external MCP).
 

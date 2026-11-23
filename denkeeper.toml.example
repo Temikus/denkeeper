@@ -128,6 +128,7 @@ api_key = "YOUR_OPENROUTER_API_KEY"
 # adapters     = ["telegram"]
 # # llm_model  = "anthropic/claude-sonnet-4-20250514"   # optional override
 # # session_tier = "supervised"                          # optional override
+# # skill_index = false                                  # drop the skill list from this agent's prompt
 # #
 # # Tools listed here skip the entire approval chain (auto-approve rules →
 # # supervisor → human) for this agent. Only meaningful on the "supervised"
@@ -368,6 +369,7 @@ format = "text"
 
 # [skills]
 # max_bytes = 1048576              # cap on one skill file (frontmatter + body); 1 MiB default, negative = unlimited
+# index = true                     # list every skill's name, triggers and description in each prompt
 
 # ---------------------------------------------------------------------------
 # Browser Automation (Docker)

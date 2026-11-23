@@ -61,7 +61,7 @@ A skill with a `schedule:` trigger and no matching `[[schedules]]` entry will ne
 
 ## Skill index
 
-Every turn, the system prompt lists all of the agent's skills under `## Available Skills`, one line each: the name, how the skill is triggered (its commands, the schedules that run it, or "always on"), and the first line of its `description`. So when you ask "what does /briefing do?", the agent knows `briefing` exists even though the message did not trigger it, and reads the skill with `skill_get` before describing it.
+Every turn, the system prompt lists all of the agent's skills under `## Available Skills`, one line each: the name, how the skill is triggered (its commands, the schedules that run it, "always on", or "no active trigger"), and, for a skill that is not always on, the first line of its `description`. So when you ask "what does /briefing do?", the agent knows `briefing` exists even though the message did not trigger it, and is told to read the skill with `skill_get` before describing it.
 
 A skill's instructions still load only on a turn that triggers it. The first line of `description` is what the agent sees on every turn, so keep it to one short line (longer text is cut at 120 characters). A skill whose `requires.tools` are missing is still listed. The list is capped at 8,000 bytes: past that, descriptions are left out, then the last skills by name.
 

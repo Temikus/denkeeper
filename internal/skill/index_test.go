@@ -13,6 +13,7 @@ import (
 const indexIntro = "Your skills are listed here, one per line, as: name (how it is triggered): description. " +
 	"A skill's full instructions are in this prompt only on a turn that triggers it. " +
 	"To describe any other skill in detail, read it with skill_get first. " +
+	"To run a skill, the user sends its command. " +
 	"Never say a skill does not exist while it is listed here."
 
 func sampleSkills() []skill.Skill {
