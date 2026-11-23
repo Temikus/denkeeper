@@ -151,7 +151,7 @@ Multi-agent definitions. If absent, a single "default" agent is synthesized.
     llm_model = ""                   # override default model
     max_output_tokens = 0            # override llm.max_output_tokens (0 = inherit)
     session_tier = ""              # override default permission tier
-    skill_index = true               # override [skills] index for this agent (unset = inherit)
+    # skill_index = false            # override [skills] index for this agent (unset = inherit)
     browser_url_allowlist = []       # allowed domains for browser automation
     cost_limit_soft = 0.0            # soft cost limit override
     cost_limit_hard = 0.0            # hard cost limit override
