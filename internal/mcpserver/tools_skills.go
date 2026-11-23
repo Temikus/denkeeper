@@ -31,7 +31,7 @@ type skillCreateInput struct {
 	Triggers        []string `json:"triggers,omitempty" jsonschema:"Trigger strings, e.g. command:name or schedule:schedule-name; a schedule: trigger must name an existing schedule"`
 	Body            string   `json:"body" jsonschema:"Skill content/instructions"`
 	MaxToolRounds   int      `json:"max_tool_rounds,omitempty" jsonschema:"Optional cap on tool-call ROUNDS (not calls) for turns this skill drives; 0 = no cap. Only lowers the agent's budget, never raises it."`
-	MaxOutputTokens int      `json:"max_output_tokens,omitempty" jsonschema:"Optional cap on output tokens per completion for turns this skill drives; 0 = no skill cap. Only lowers the agent's max_output_tokens, never raises it."`
+	MaxOutputTokens int      `json:"max_output_tokens,omitempty" jsonschema:"Optional cap on output tokens per completion for turns this skill drives; 0 = no skill cap. Lowers a cap set on the agent or in [llm]; sent as is when neither sets one."`
 	RequiresTools   []string `json:"requires_tools,omitempty" jsonschema:"Optional tool names this skill depends on (frontmatter [requires] tools)."`
 }
 
@@ -44,7 +44,7 @@ type skillUpdateInput struct {
 	Triggers        []string `json:"triggers,omitempty" jsonschema:"New triggers; a newly added schedule: trigger must name an existing schedule"`
 	Body            *string  `json:"body,omitempty" jsonschema:"New content"`
 	MaxToolRounds   *int     `json:"max_tool_rounds,omitempty" jsonschema:"New cap on tool-call ROUNDS (not calls); 0 removes the cap. Omit to keep current."`
-	MaxOutputTokens *int     `json:"max_output_tokens,omitempty" jsonschema:"New cap on output tokens per completion; 0 removes the cap. Omit to keep current. Only lowers the agent's max_output_tokens."`
+	MaxOutputTokens *int     `json:"max_output_tokens,omitempty" jsonschema:"New cap on output tokens per completion; 0 removes the cap. Omit to keep current. Lowers a cap set on the agent or in [llm]; sent as is when neither sets one."`
 	RequiresTools   []string `json:"requires_tools,omitempty" jsonschema:"New required tool names; omit to keep current, pass [] to clear."`
 }
 
