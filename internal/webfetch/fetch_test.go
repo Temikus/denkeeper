@@ -2,12 +2,15 @@ package webfetch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Temikus/denkeeper/internal/netguard"
 )
 
 func TestDefaultFetcher_BasicHTML(t *testing.T) {
@@ -187,6 +190,12 @@ func TestDefaultFetcher_RobotsTxtBlocking(t *testing.T) {
 	if !strings.Contains(err.Error(), "blocked by robots.txt") {
 		t.Errorf("error should mention robots.txt: %v", err)
 	}
+	if !errors.Is(err, ErrDisallowed) {
+		t.Errorf("err = %v, want ErrDisallowed", err)
+	}
+	if errors.Is(err, netguard.ErrBlocked) {
+		t.Errorf("err = %v, must not be netguard.ErrBlocked", err)
+	}
 
 	// Allowed path should succeed.
 	result, err := f.Fetch(context.Background(), srv.URL+"/allowed")
@@ -248,6 +257,12 @@ func TestDefaultFetcher_AgentsTxtBlocking(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "blocked by agents.txt") {
 		t.Errorf("error should mention agents.txt: %v", err)
+	}
+	if !errors.Is(err, ErrDisallowed) {
+		t.Errorf("err = %v, want ErrDisallowed", err)
+	}
+	if errors.Is(err, netguard.ErrBlocked) {
+		t.Errorf("err = %v, must not be netguard.ErrBlocked", err)
 	}
 }
 

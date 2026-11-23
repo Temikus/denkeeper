@@ -3,7 +3,7 @@ title: "Denkeeper as an MCP Server"
 description: "Expose your instance to other MCP clients — Claude Code, IDEs, or another agent."
 slug: "mcp-server"
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-25T00:00:00+00:00
+lastmod: 2026-11-23T00:00:00+00:00
 draft: false
 weight: 40
 toc: true
@@ -53,7 +53,7 @@ Behind a reverse proxy, set `api.external_url` so generated URLs are correct.
 | Area | Tools |
 |---|---|
 | Chat | `chat` |
-| Agents | `agent_list`, `agent_info`, `agent_update` |
+| Agents | `agent_list`, `agent_info`, `agent_update`, `persona_get`, `persona_update` |
 | Skills | `skill_list`, `skill_get`, `skill_create`, `skill_update`, `skill_delete`, `skill_revert` |
 | Schedules | `schedule_list`, `schedule_create`, `schedule_update`, `schedule_delete` |
 | Sessions | `session_list`, `session_messages`, `session_search`, `session_clear`, `session_compact` |
@@ -70,6 +70,10 @@ Behind a reverse proxy, set `api.external_url` so generated URLs are correct.
 `agent_info` reports an agent's name, tier, provider, model, and skills, and adds `supervisor`, `supervisor_decider`, `persona_sections`, and `channels` only when they are non-empty — presence is the signal. `supervisor_decider` gives the [decision model](/docs/concepts/deciders/)'s name, model, mode, and thresholds; `agent_list` shows its name only. Supervisor and decider information is read from live wiring, so it reflects the state after a config reload or an API change rather than what the file said at startup. `agent_info` also reports `max_tool_rounds`, and `max_output_tokens` when it is not the provider default.
 
 `agent_update` (`agents:write`) changes an agent's `max_output_tokens` and `max_tool_rounds`. The change applies from the next LLM call and is saved to the config file. The result's `persisted` is `false` when there is no file or the save failed.
+
+`persona_get` (`agents:read`) reads one persona section of an agent: `identity`, `soul`, `user` or `memory`. `persona_update` (`agents:write`) replaces that section with the text you send. It replaces the whole section, so read it first and send the full new text; for `identity` that means the whole file, frontmatter included. An empty `soul` is refused, and the `user` character limit applies. Both work like the REST `GET` and `PUT /api/v1/agents/{name}/persona/{section}`, and the change applies from the agent's next turn.
+
+`skill_create` and `skill_update` take an optional `max_output_tokens`, the skill's own cap on output tokens per completion for turns it drives. It lowers a cap set on the agent or in `[llm]`, and is sent as is when neither sets one, even above the provider default (4096 on Anthropic). On `skill_update`, omit it to keep the current value and pass `0` to remove it.
 
 Skill writes are disk-first: the file is written before memory is updated, so an IO error leaves the skill intact rather than creating a version that exists only in RAM until the next restart.
 

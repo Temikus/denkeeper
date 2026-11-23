@@ -57,7 +57,7 @@ func FuzzApplySkillCreate_NeverEscapes(f *testing.F) {
 			t.Fatal(err)
 		}
 
-		payload := configmcp.BuildSkillPayload(name, "desc", "1.0.0", nil, "body", 0, nil)
+		payload := configmcp.BuildSkillPayload(name, "desc", "1.0.0", nil, "body", 0, 0, nil)
 		// Error or success are both fine; the invariant below is what matters.
 		_ = configmcp.ApplySkillCreate(skillsDir, func(skill.Skill) {}, ioTestLogger(), payload, 0)
 
@@ -117,7 +117,7 @@ func FuzzReadSkillFile_NeverEscapes(f *testing.F) {
 		_ = os.Symlink(secret, filepath.Join(skillsDir, "link.md"))
 
 		// One legitimate skill, so the happy path is exercised too.
-		payload := configmcp.BuildSkillPayload("greet", "desc", "1.0.0", nil, "body", 0, nil)
+		payload := configmcp.BuildSkillPayload("greet", "desc", "1.0.0", nil, "body", 0, 0, nil)
 		if err := configmcp.ApplySkillCreate(skillsDir, func(skill.Skill) {}, ioTestLogger(), payload, 0); err != nil {
 			t.Fatal(err)
 		}

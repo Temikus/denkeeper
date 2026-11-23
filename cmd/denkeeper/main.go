@@ -89,7 +89,7 @@ func main() {
 		},
 	}
 
-	rootCmd.AddCommand(serveCmd, versionCmd, newKeysCmd(), newPluginCmd(), newSessionsCmd(), newPasswdCmd(), newDecideCmd())
+	rootCmd.AddCommand(serveCmd, versionCmd, newKeysCmd(), newPluginCmd(), newSessionsCmd(), newPasswdCmd(), newDecideCmd(), newKVCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)

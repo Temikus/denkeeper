@@ -147,7 +147,7 @@ func (s *Server) handleKVSet(ctx context.Context, req *mcp.CallToolRequest) (*mc
 		return toolError(err.Error()), nil
 	}
 	if strings.TrimSpace(input.TTL) == "" {
-		ttl = defaultTTLFor(s.deps.KVDefaultTTL, input.Key)
+		_, ttl = kv.DefaultTTLFor(s.deps.KVDefaultTTL, input.Key)
 	}
 
 	if err := s.deps.KVStore.Set(ctx, s.deps.AgentName, input.Key, input.Value, ttl); err != nil {
@@ -155,18 +155,6 @@ func (s *Server) handleKVSet(ctx context.Context, req *mcp.CallToolRequest) (*mc
 	}
 
 	return toolText(`{"ok": true}`), nil
-}
-
-// defaultTTLFor picks the longest configured prefix that key starts with.
-func defaultTTLFor(defaults map[string]time.Duration, key string) time.Duration {
-	var best string
-	var ttl time.Duration
-	for prefix, d := range defaults {
-		if strings.HasPrefix(key, prefix) && len(prefix) > len(best) {
-			best, ttl = prefix, d
-		}
-	}
-	return ttl
 }
 
 func (s *Server) handleKVDelete(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {

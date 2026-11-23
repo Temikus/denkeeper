@@ -2,7 +2,7 @@
 title: "Writing Skills"
 description: "How to create custom skills for your Denkeeper agent."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-09-04T00:00:00+00:00
+lastmod: 2026-11-23T00:00:00+00:00
 draft: false
 weight: 30
 toc: true
@@ -56,6 +56,7 @@ Always acknowledge with: "Logged: $AMOUNT for CATEGORY"
 | `triggers` | No | When to activate (see below) |
 | `requires.tools` | No | MCP tools this skill needs. The skill is skipped while any of them is unavailable, and an active declaration narrows the tools the model is shown (see below) |
 | `max_tool_rounds` | No | Cap on tool-call rounds for turns this skill drives (command or schedule trigger). Only lowers the agent's limit, never raises it; must be ≥ 0 |
+| `max_output_tokens` | No | Cap on output tokens per completion for turns this skill drives. Same name and unit as the agent's `max_output_tokens`. Only lowers a cap set on the agent or in `[llm]` (see below); 0 or omitted means no skill cap; must be ≥ 0 |
 
 ## Trigger types
 
@@ -63,7 +64,9 @@ Always acknowledge with: "Logged: $AMOUNT for CATEGORY"
 - **`schedule:<name>`** — marks the skill as scheduler-driven. Timing comes from a `[[schedules]]` entry whose `skill` field names this skill; without one, the skill never fires. Skill writes (REST, MCP, or the agent itself) reject a newly added `<name>` that isn't an existing schedule; triggers the skill already carries, and a bare `schedule:`, are accepted
 - **No triggers** — *ambient*: always included in the system prompt, and matched on every turn
 
-The distinction between ambient and scheduled matters for `max_tool_rounds`: the cap applies only when a single skill explicitly drives the turn (a command match, or a schedule naming it). An ambient skill matches every message, so capping on it would throttle unrelated conversation — it is deliberately exempt.
+The distinction between ambient and scheduled matters for `max_tool_rounds` and `max_output_tokens`: each cap applies only when a single skill explicitly drives the turn (a command match, or a schedule naming it). An ambient skill matches every message, so capping on it would throttle unrelated conversation — it is deliberately exempt.
+
+Like `max_tool_rounds`, a skill's `max_output_tokens` only lowers a cap that is already set, on the agent or in [`[llm]`](/docs/reference/config/#llm). When neither the agent nor `[llm]` sets `max_output_tokens`, the skill's value is sent as is, even above the provider default (4096 on Anthropic), and a value above the model's own output limit makes every request fail. A cap that cuts off a tool call, or a reply with no text, ends the turn early with the `output_limit` wrap-up instead of running the half-written call; a text reply cut off by the cap is sent as far as it got, and its `llm` audit event carries `output_limit: true`.
 
 ## Tool requirements
 

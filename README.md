@@ -116,7 +116,7 @@ cosign verify \
 - **Cost tracking** — per-session budgets with automatic cutoff
 - **Conversation memory** — SQLite-backed, persistent across restarts
 - **Scheduler** — cron expressions, named intervals, and `@daily`/`@hourly` shorthand; per-schedule agent targeting and session modes
-- **Skills** — flat markdown files with TOML frontmatter; trigger-based filtering (`command:`/`schedule:`), per-agent skill merging, and per-skill `max_tool_rounds` caps on the tool-call loop
+- **Skills** — flat markdown files with TOML frontmatter; trigger-based filtering (`command:`/`schedule:`), per-agent skill merging, per-skill `max_tool_rounds` caps on the tool-call loop, and per-skill `max_output_tokens` caps on each completion
 - **MCP tools** — spawn MCP servers via stdio (subprocess) or SSE/Streamable HTTP (remote), discover tools, and execute tool calls in an agentic loop; auto-restart on crash with configurable backoff; OAuth 2.1 authorization for remote MCP servers; within-turn memoization of identical calls to read-only tools (built-ins always eligible; external servers opt in via `idempotent`, `idempotent_tools`, or `trust_annotations`)
 - **Web tools** — built-in `web_search` (DuckDuckGo or Tavily) and `web_fetch` (HTML→Markdown conversion with configurable per-call page size, size/timeout caps, robots.txt/agents.txt respect, and optional Jina Reader fallback for JS-heavy pages)
 - **MCP security** — SSRF protection (blocks localhost, link-local, and cloud metadata endpoints), HTTP header injection prevention, redirect target validation, env var denylist for secrets, and URL/arg redaction in API responses
@@ -620,7 +620,7 @@ Cursor (`.cursor/mcp.json`):
 
 Other MCP clients that support Streamable HTTP or SSE transports can connect to `http://<host>:8080/api/v1/mcp` with a `Bearer` token in the `Authorization` header.
 
-The API key must have scopes matching the tools you want to use (e.g. `chat`, `agents:read`, `sessions:read`, `skills:read`, `schedules:read`). Available MCP tools: `chat`, `agent_list`, `agent_info`, `agent_update`, `session_list`, `session_messages`, `session_search`, `session_clear`, `session_compact`, `skill_list`, `skill_get`, `skill_create`, `skill_update`, `skill_delete`, `skill_revert`, `schedule_list`, `schedule_create`, `schedule_update`, `schedule_delete`, `channel_list`, `approval_list`, `approval_resolve`, `tool_list`, `tool_health`, `tool_restart`, `kv_get`, `kv_set`, `kv_list`, `kv_delete`, `cost_summary`, `telemetry_summary`, `panic`, `resume`, `panic_status`.
+The API key must have scopes matching the tools you want to use (e.g. `chat`, `agents:read`, `sessions:read`, `skills:read`, `schedules:read`). Available MCP tools: `chat`, `agent_list`, `agent_info`, `agent_update`, `persona_get`, `persona_update`, `session_list`, `session_messages`, `session_search`, `session_clear`, `session_compact`, `skill_list`, `skill_get`, `skill_create`, `skill_update`, `skill_delete`, `skill_revert`, `schedule_list`, `schedule_create`, `schedule_update`, `schedule_delete`, `channel_list`, `approval_list`, `approval_resolve`, `tool_list`, `tool_health`, `tool_restart`, `kv_get`, `kv_set`, `kv_list`, `kv_delete`, `cost_summary`, `telemetry_summary`, `panic`, `resume`, `panic_status`.
 
 ## Development
 

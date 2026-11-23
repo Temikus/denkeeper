@@ -343,6 +343,21 @@ func (r *Router) SetMaxOutputTokens(n int) {
 // MaxOutputTokens returns the per-completion output cap; 0 = provider default.
 func (r *Router) MaxOutputTokens() int { return int(r.maxOutputTokens.Load()) }
 
+// WithMaxOutputTokens returns a shallow copy of r with its own output cap, for
+// one turn that a skill caps. Unlike WithModel's clones, it does not share the
+// cap's counter: a later SetMaxOutputTokens on r does not reach the copy, and a
+// write to the copy does not reach r. Returns r only when n is 0; any other
+// value is cloned, even the current one, so the copy never shares r's counter.
+func (r *Router) WithMaxOutputTokens(n int) *Router {
+	if n == 0 {
+		return r
+	}
+	clone := *r
+	clone.maxOutputTokens = new(atomic.Int64)
+	clone.maxOutputTokens.Store(int64(n))
+	return &clone
+}
+
 // SetTools configures a dynamic tool definition source. The function is
 // called on every LLM request so that tools added at runtime are visible
 // immediately.

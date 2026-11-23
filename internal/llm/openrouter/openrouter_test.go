@@ -226,6 +226,29 @@ func TestChatCompletion_MalformedJSON(t *testing.T) {
 	}
 }
 
+func TestChatCompletion_ZeroMaxTokensSendsNoCap(t *testing.T) {
+	var body map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decoding request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(apiResponse{Choices: []apiChoice{{Message: apiMessage{Role: "assistant", Content: "ok"}, FinishReason: "stop"}}})
+	}))
+	defer server.Close()
+
+	client := NewWithHTTPClient("key", server.URL, server.Client())
+	if _, err := client.ChatCompletion(context.Background(), llm.ChatRequest{
+		Model:    "test-model",
+		Messages: []llm.Message{{Role: "user", Content: "Hi"}},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := body["max_tokens"]; ok {
+		t.Errorf("max_tokens sent with no cap: %v", body["max_tokens"])
+	}
+}
+
 func TestChatCompletion_MaxTokensAndTemperature(t *testing.T) {
 	var receivedReq apiRequest
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

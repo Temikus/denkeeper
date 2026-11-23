@@ -2,7 +2,9 @@
   // One transcript column: which model ran, what it did, what it said.
   // Used alone for a single-model preview and twice side by side for a
   // comparison, so it carries no assumptions about its own width.
-  let { transcript, label = '', accent = false, compact = false } = $props()
+  // With no transcript it renders the header alone, naming `model`: the
+  // placeholder for a compare candidate that has not landed yet.
+  let { transcript = null, model = '', label = '', accent = false, compact = false } = $props()
 
   let expanded = $state(new Set())
   const uid = Math.random().toString(36).slice(2, 8)
@@ -26,7 +28,7 @@
 
   // A one-line summary replaces the metric tiles: five tiles for one run is
   // over-furnished, and in compare mode the delta strip does the comparing.
-  let summary = $derived([
+  let summary = $derived(!transcript ? '' : [
     `${transcript.rounds} round${transcript.rounds === 1 ? '' : 's'}`,
     transcript.suppressed_count > 0 ? `${transcript.suppressed_count} suppressed` : null,
     `$${(transcript.cost_usd || 0).toFixed(4)}`,
@@ -40,10 +42,11 @@
     max_rounds: 'hit the round limit',
     repeated_calls: 'repeated the same call',
     stop_requested: 'stopped on request',
+    output_limit: 'hit the output-token limit',
   }
 
   // An unknown slug is still a cut-short turn: naming it beats hiding it.
-  let stopLabel = $derived(transcript.stop_reason
+  let stopLabel = $derived(transcript?.stop_reason
     ? (STOP_LABEL[transcript.stop_reason] || transcript.stop_reason)
     : '')
 
@@ -56,17 +59,21 @@
   // by Anthropic, Vertex, or Bedrock — suppressing on the prefix would hide
   // one side of the variance the chip exists to show.
   let upstream = $derived.by(() => {
-    const via = (transcript.upstream || '').trim()
+    const via = (transcript?.upstream || '').trim()
     if (!via) return ''
-    const model = (transcript.model || transcript.requested_model || '').toLowerCase()
-    return model === via.toLowerCase() ? '' : via
+    const ran = (transcript.model || transcript.requested_model || '').toLowerCase()
+    return ran === via.toLowerCase() ? '' : via
   })
+
+  let modelName = $derived(transcript
+    ? (transcript.model || transcript.requested_model || 'unknown')
+    : (model || 'unknown'))
 </script>
 
 <div class="column">
   <div class="head">
     <span class="dot-model" class:accent></span>
-    <span class="model">{transcript.model || transcript.requested_model || 'unknown'}</span>
+    <span class="model">{modelName}</span>
     {#if label}
       <span class="label" class:accent>{label}</span>
     {/if}
@@ -74,62 +81,67 @@
       <span class="upstream" title="The provider that actually served this turn."
         data-testid="upstream">via {upstream}</span>
     {/if}
-    <span class="summary">{summary}</span>
+    {#if summary}
+      <span class="summary">{summary}</span>
+    {/if}
     {#if stopLabel}
       <span class="cut-short" title="The response below is a wrap-up, not a completed answer."
         data-testid="stop-reason">Cut short: {stopLabel}</span>
     {/if}
   </div>
 
-  {#if transcript.tool_calls.length > 0}
-    <div class="rows">
-      {#each transcript.tool_calls as call, i (i)}
-        <button
-          class="row"
-          class:suppressed={call.suppressed}
-          class:failed={call.outcome === 'failed' || call.outcome === 'rejected'}
-          onclick={() => toggle(i)}
-          aria-expanded={expanded.has(i)}
-          aria-controls="{uid}-call-{i}"
-        >
-          <span class="lane-round">R{call.round}</span>
-          <span class="dot {dotClass(call.outcome)}"></span>
-          <span class="lane-tool">{call.tool}</span>
-          {#if !compact}
-            <span class="lane-args">{call.arguments || ''}</span>
+  <!-- Without a transcript the column is header only; the caller renders the body. -->
+  {#if transcript}
+    {#if transcript.tool_calls.length > 0}
+      <div class="rows">
+        {#each transcript.tool_calls as call, i (i)}
+          <button
+            class="row"
+            class:suppressed={call.suppressed}
+            class:failed={call.outcome === 'failed' || call.outcome === 'rejected'}
+            onclick={() => toggle(i)}
+            aria-expanded={expanded.has(i)}
+            aria-controls="{uid}-call-{i}"
+          >
+            <span class="lane-round">R{call.round}</span>
+            <span class="dot {dotClass(call.outcome)}"></span>
+            <span class="lane-tool">{call.tool}</span>
+            {#if !compact}
+              <span class="lane-args">{call.arguments || ''}</span>
+            {/if}
+            <span class="lane-outcome">
+              {#if call.suppressed}
+                <span class="badge">SUPPRESSED</span>
+              {:else if call.outcome !== 'ok' && call.outcome !== 'cached'}
+                <span class="badge badge-error">{call.outcome.toUpperCase()}</span>
+              {:else}
+                {duration(call.duration_ms)}
+              {/if}
+            </span>
+            <span class="lane-chevron" class:open={expanded.has(i)}>&#x25B6;</span>
+          </button>
+          {#if expanded.has(i)}
+            <div class="row-detail" class:suppressed={call.suppressed} id="{uid}-call-{i}">
+              {#if call.arguments && compact}
+                <div class="detail-label">Arguments</div>
+                <pre class="detail-body">{call.arguments}</pre>
+              {/if}
+              <div class="detail-label">Result returned to the model</div>
+              <pre class="detail-body">{call.result || call.error || '(no result)'}</pre>
+              {#if call.truncated}
+                <div class="detail-note">Trimmed for display.</div>
+              {/if}
+            </div>
           {/if}
-          <span class="lane-outcome">
-            {#if call.suppressed}
-              <span class="badge">SUPPRESSED</span>
-            {:else if call.outcome !== 'ok' && call.outcome !== 'cached'}
-              <span class="badge badge-error">{call.outcome.toUpperCase()}</span>
-            {:else}
-              {duration(call.duration_ms)}
-            {/if}
-          </span>
-          <span class="lane-chevron" class:open={expanded.has(i)}>&#x25B6;</span>
-        </button>
-        {#if expanded.has(i)}
-          <div class="row-detail" class:suppressed={call.suppressed} id="{uid}-call-{i}">
-            {#if call.arguments && compact}
-              <div class="detail-label">Arguments</div>
-              <pre class="detail-body">{call.arguments}</pre>
-            {/if}
-            <div class="detail-label">Result returned to the model</div>
-            <pre class="detail-body">{call.result || call.error || '(no result)'}</pre>
-            {#if call.truncated}
-              <div class="detail-note">Trimmed for display.</div>
-            {/if}
-          </div>
-        {/if}
-      {/each}
-    </div>
-  {/if}
+        {/each}
+      </div>
+    {/if}
 
-  {#if transcript.response}
-    <div class="response" class:accent>{transcript.response}</div>
-  {:else}
-    <div class="response empty">The agent produced no text response.</div>
+    {#if transcript.response}
+      <div class="response" class:accent>{transcript.response}</div>
+    {:else}
+      <div class="response empty">The agent produced no text response.</div>
+    {/if}
   {/if}
 </div>
 
