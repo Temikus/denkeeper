@@ -9,7 +9,7 @@ import (
 )
 
 type auditEventsInput struct {
-	Category       string `json:"category,omitempty" jsonschema:"Filter by category (tool_call, skill, channel, approval, schedule, llm, config, session, mcp, safety, supervisor, audit); comma-separated for several"`
+	Category       string `json:"category,omitempty" jsonschema:"Filter by category (tool_call, skill, channel, approval, schedule, llm, config, session, mcp, safety, supervisor, eval, task, audit); comma-separated for several"`
 	Agent          string `json:"agent,omitempty" jsonschema:"Filter by agent name"`
 	Status         string `json:"status,omitempty" jsonschema:"Filter by status (ok, error, pending, denied); comma-separated for several"`
 	Source         string `json:"source,omitempty" jsonschema:"Filter by event source"`
