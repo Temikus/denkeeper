@@ -96,7 +96,7 @@ Some body.`)
 
 	_, err := ParseFile("bad.md", content)
 	if err == nil {
-		t.Fatal("expected error for missing opening +++, got nil")
+		t.Fatal("expected error for missing opening delimiter, got nil")
 	}
 }
 

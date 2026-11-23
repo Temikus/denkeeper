@@ -1,5 +1,6 @@
 // Package skill loads and parses flat-file skill definitions.
-// Skills are markdown files with TOML frontmatter enclosed in +++ delimiters.
+// Skills are markdown files with frontmatter: TOML between +++ lines, or YAML
+// between --- lines. A skill is written back in the dialect it was read in.
 // They are text-only — no code is executed. Their content is injected into
 // the agent's system prompt so the LLM knows what skills are available.
 package skill
@@ -11,13 +12,11 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-
-	"github.com/pelletier/go-toml/v2"
 )
 
 // SkillRequires lists optional capabilities a skill depends on.
 type SkillRequires struct {
-	Tools []string `toml:"tools"`
+	Tools []string `toml:"tools" yaml:"tools"`
 }
 
 // Skill represents a loaded skill file.
@@ -54,47 +53,57 @@ type Skill struct {
 	// Dir is the skill directory path. Non-empty only for subdirectory-form
 	// skills (containing SKILL.md). Empty for flat-file skills.
 	Dir string
+
+	// Dialect is the frontmatter dialect the skill was parsed from; empty
+	// means TOML. Frontmatter is the raw block between the delimiters, kept
+	// so an edit can write it back unchanged. Both stay off JSON output.
+	Dialect     Dialect `json:"-"`
+	Frontmatter string  `json:"-"`
 }
 
-// frontmatter is the TOML-decoded structure of the +++ block.
+// frontmatter is the decoded structure of the known frontmatter keys.
 type frontmatter struct {
-	Name            string        `toml:"name"`
-	Description     string        `toml:"description"`
-	Version         string        `toml:"version"`
-	Triggers        []string      `toml:"triggers"`
-	Requires        SkillRequires `toml:"requires"`
-	MaxToolRounds   int           `toml:"max_tool_rounds"`
-	MaxOutputTokens int           `toml:"max_output_tokens"`
+	Name            string        `toml:"name" yaml:"name"`
+	Description     string        `toml:"description" yaml:"description"`
+	Version         string        `toml:"version" yaml:"version"`
+	Triggers        []string      `toml:"triggers" yaml:"triggers"`
+	Requires        SkillRequires `toml:"requires" yaml:"requires"`
+	MaxToolRounds   int           `toml:"max_tool_rounds" yaml:"max_tool_rounds"`
+	MaxOutputTokens int           `toml:"max_output_tokens" yaml:"max_output_tokens"`
 }
 
 // ParseFile parses the content of a single skill file.
 // path is used only for the Source field and error messages.
 // Returns an error if the frontmatter delimiters are malformed,
-// the TOML is invalid, or the name field is missing.
+// the frontmatter is invalid, or the name field is missing.
 func ParseFile(path string, content []byte) (*Skill, error) {
 	text := strings.TrimSpace(string(content))
 
-	if !strings.HasPrefix(text, "+++") {
-		return nil, fmt.Errorf("skill %q: missing opening +++ delimiter", path)
+	dialect, block, body, err := splitFrontmatter(path, text)
+	if err != nil {
+		return nil, err
 	}
-
-	// Strip the opening +++
-	rest := text[3:]
-
-	// Find the closing +++
-	idx := strings.Index(rest, "+++")
-	if idx == -1 {
-		return nil, fmt.Errorf("skill %q: missing closing +++ delimiter", path)
-	}
-
-	tomlSection := strings.TrimSpace(rest[:idx])
-	body := strings.TrimSpace(rest[idx+3:])
 
 	var fm frontmatter
-	if err := toml.Unmarshal([]byte(tomlSection), &fm); err != nil {
-		return nil, fmt.Errorf("skill %q: parsing frontmatter: %w", path, err)
+	if dialect == DialectYAML {
+		err = decodeYAML(path, block, &fm)
+	} else {
+		err = decodeTOML(path, block, &fm)
+	}
+	if err != nil {
+		return nil, err
 	}
 
+	s, err := buildSkill(path, fm, body)
+	if err != nil {
+		return nil, err
+	}
+	s.Dialect, s.Frontmatter = dialect, block
+	return s, nil
+}
+
+// buildSkill applies the checks both dialects share.
+func buildSkill(path string, fm frontmatter, body string) (*Skill, error) {
 	if strings.TrimSpace(fm.Name) == "" {
 		return nil, fmt.Errorf("skill %q: frontmatter missing required field: name", path)
 	}
