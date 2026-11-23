@@ -531,7 +531,8 @@ func TestEvalVerdict_FullyJudgedRunTakesNoMoreVerdicts(t *testing.T) {
 	}
 
 	res, _, _ := s.handleEvalVerdict(evalWriteCtx(), nil, evalVerdictInput{ItemID: items[0].ID, Winner: "b"})
-	if !res.IsError || !strings.Contains(toolResultText(res), "takes no more verdicts") {
+	if !res.IsError || !strings.Contains(toolResultText(res), "is fully judged: every item has a judge verdict, so the run takes no more") ||
+		!strings.Contains(toolResultText(res), "to judge again, start a new run") {
 		t.Errorf("eval_verdict on a fully judged run = %q, want refused", toolResultText(res))
 	}
 }
@@ -549,7 +550,8 @@ func TestEvalVerdict_OperatorMarkOnJudgedItemIsRefused(t *testing.T) {
 	res, _, _ := s.handleEvalVerdict(evalWriteCtx(), nil, evalVerdictInput{
 		ItemID: items[0].ID, Winner: "b", JudgeIdent: eval.JudgeOperator,
 	})
-	if !res.IsError || !strings.Contains(toolResultText(res), "already has a judge verdict") {
+	if !res.IsError || !strings.Contains(toolResultText(res), "already has a judge verdict") ||
+		!strings.Contains(toolResultText(res), "; draw pending items with eval_pending 'sample_n' and mark those") {
 		t.Errorf("operator mark on a judged item = %q, want refused", toolResultText(res))
 	}
 }
@@ -580,5 +582,75 @@ func TestEvalTools_NoIdentityWhileItemsPending(t *testing.T) {
 				t.Errorf("output %d leaked %q: %s", i, forbidden, out)
 			}
 		}
+	}
+
+	// eval_summary names the variants by design, so it is checked for the
+	// thing that maps a response to one: per-task variant means.
+	res, _, _ = s.handleEvalSummary(ctx, nil, evalRunInput{RunID: runID})
+	if !strings.Contains(toolResultText(res), `"per_task":[]`) {
+		t.Errorf("eval_summary carries per-task data while items are pending: %s", toolResultText(res))
+	}
+}
+
+// While a run can still take verdicts, eval_summary carries no per-task
+// variant means: with k=1 a judge could match a response's rounds on
+// eval_get_pair to the variant that had them.
+func TestEvalSummary_PerTaskHiddenWhileItemsPending(t *testing.T) {
+	s, _, runID := evalServer(t)
+
+	res, _, _ := s.handleEvalSummary(evalReadCtx(), nil, evalRunInput{RunID: runID})
+	if res.IsError {
+		t.Fatalf("eval_summary: %s", toolResultText(res))
+	}
+	var got struct {
+		PerTask     []json.RawMessage     `json:"per_task"`
+		PerTaskNote string                `json:"per_task_note"`
+		Verdicts    []eval.VariantVerdict `json:"verdicts"`
+	}
+	if err := json.Unmarshal([]byte(toolResultText(res)), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.PerTask == nil || len(got.PerTask) != 0 {
+		t.Errorf("per_task = %v, want an empty array while items are pending", got.PerTask)
+	}
+	if !strings.Contains(got.PerTaskNote, "2 judgment items pending") {
+		t.Errorf("per_task_note = %q, want it to say why", got.PerTaskNote)
+	}
+	if len(got.Verdicts) != 1 {
+		t.Errorf("verdicts = %d, want the aggregate verdict kept", len(got.Verdicts))
+	}
+}
+
+func TestEvalSummary_PerTaskReturnedWhenFullyJudged(t *testing.T) {
+	s, store, runID := evalServer(t)
+	judgeEvalRun(t, store, runID)
+
+	res, _, _ := s.handleEvalSummary(evalReadCtx(), nil, evalRunInput{RunID: runID})
+	var got struct {
+		PerTask     []eval.TaskMetrics `json:"per_task"`
+		PerTaskNote *string            `json:"per_task_note"`
+	}
+	if err := json.Unmarshal([]byte(toolResultText(res)), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got.PerTask) != 1 || got.PerTaskNote != nil {
+		t.Errorf("per_task = %+v note = %v, want the task and no note", got.PerTask, got.PerTaskNote)
+	}
+}
+
+func TestEvalSamples_OnePendingItemIsSingular(t *testing.T) {
+	s, store, runID := evalServer(t)
+	items, err := store.ListItems(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("ListItems: %v", err)
+	}
+	if _, err := store.RecordVerdict(context.Background(), eval.Verdict{
+		ItemID: items[0].ID, Winner: eval.WinnerA, JudgeIdent: "judge-key",
+	}); err != nil {
+		t.Fatalf("RecordVerdict: %v", err)
+	}
+	res, _, _ := s.handleEvalSamples(evalReadCtx(), nil, evalSamplesInput{RunID: runID})
+	if !strings.Contains(toolResultText(res), "has 1 judgment item pending") {
+		t.Errorf("refusal = %q, want the singular form", toolResultText(res))
 	}
 }

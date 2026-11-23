@@ -313,8 +313,8 @@ func TestRecordVerdict_FullyJudgedRunTakesNoVerdicts(t *testing.T) {
 	if !errors.Is(err, ErrJudgingClosed) {
 		t.Fatalf("err = %v, want ErrJudgingClosed", err)
 	}
-	if !strings.Contains(err.Error(), "takes no more verdicts") {
-		t.Errorf("err = %q, want it to say the run takes no more verdicts", err)
+	if !strings.Contains(err.Error(), "is fully judged: every item has a judge verdict, so the run takes no more") {
+		t.Errorf("err = %q, want it to say the run is fully judged", err)
 	}
 	// A different judge identity is refused too: the run is closed, not the ident.
 	if _, err := f.store.RecordVerdict(context.Background(), Verdict{

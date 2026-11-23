@@ -289,8 +289,8 @@ func checkVerdictWindow(ctx context.Context, tx *sqlx.Tx, v Verdict) error {
 	}
 	if v.JudgeIdent == JudgeOperator {
 		if item.Status == ItemJudged {
-			return fmt.Errorf("item %d already has a judge verdict; mark calibration items before they are judged: %w",
-				v.ItemID, ErrMarkNotBlind)
+			return fmt.Errorf("item %d already has a judge verdict; mark calibration items before they are judged; "+
+				"draw pending items with eval_pending 'sample_n' and mark those: %w", v.ItemID, ErrMarkNotBlind)
 		}
 		return nil
 	}
@@ -299,8 +299,8 @@ func checkVerdictWindow(ctx context.Context, tx *sqlx.Tx, v Verdict) error {
 		return err
 	}
 	if pending == 0 {
-		return fmt.Errorf("run %d takes no more verdicts, its samples can now be read unblinded: %w",
-			item.RunID, ErrJudgingClosed)
+		return fmt.Errorf("run %d is fully judged: every item has a judge verdict, so the run takes no more. "+
+			"eval_samples can now name the variants; to judge again, start a new run: %w", item.RunID, ErrJudgingClosed)
 	}
 	return nil
 }

@@ -479,7 +479,8 @@
               <span class="hint">
                 <span class="mono">{serverJudgeLabel}</span>
                 {judgeModel ? 'grades them here, unattended' : 'grades what it is sure of here; the rest stays pending'}
-                {#if judgeCostCap > 0}· up to ${judgeCostCap.toFixed(2)}{/if}
+                {#if judgeCostCap > 0}· up to ${judgeCostCap.toFixed(2)}{/if}.
+                After this the run takes no more verdicts, so mark any calibration items first.
               </span>
             </div>
             {#if serverJudge?.message}

@@ -224,6 +224,9 @@ describe('EvalResults — judgment pending', () => {
     // and the hint must not promise otherwise.
     expect(screen.getByTestId('judgment-pending-4')).toHaveTextContent('jev grades what it is sure of here')
     expect(screen.getByTestId('judgment-pending-4')).toHaveTextContent('stays pending')
+    // Operator marks are refused on judged items, so the hint says to mark first.
+    expect(screen.getByTestId('judgment-pending-4')).toHaveTextContent(
+      'After this the run takes no more verdicts, so mark any calibration items first.')
   })
 
   test('says when two judges split the pairs between them', async () => {

@@ -16,9 +16,10 @@ import (
 // here, and it writes verdicts only.
 //
 // Blinding is server-side. eval_get_pair builds its payload from scratch in the
-// eval package. Identity reaches a judge only through eval_samples, and only
-// once the run has no pending item, which is also when RecordVerdict stops
-// taking judge verdicts.
+// eval package. Anything that maps a response to its variant (eval_samples,
+// and eval_summary's per_task) passes identityRefusal, which opens only once
+// the run has no pending item: exactly when RecordVerdict stops taking judge
+// verdicts. REST /samples and /pairs stay ungated on purpose (operator view).
 
 type evalPendingInput struct {
 	RunID   int64 `json:"run_id,omitempty" jsonschema:"Only list items for this run; omit for every run"`
@@ -69,7 +70,7 @@ const (
 	evalSamplesToolDescription = "List a fully judged run's samples with the variant that produced each: " +
 		"response, tool trace, rounds, stop reason, cost, latency and token usage, the same rows as " +
 		"GET /eval/runs/{id}/samples, plus the run's variants to resolve 'variant_id'. Refused until " +
-		"the run is terminal and every judgment item has a judge verdict; from then on the run takes " +
+		"the run is finished and every judgment item has a judge verdict; from then on the run takes " +
 		"no more verdicts. Pass 'task_id' for one test case. Without it results are paged ('limit' " +
 		"default 20, max 100, and 'offset'). Requires 'eval:read' scope."
 )
@@ -81,7 +82,8 @@ func (s *Server) registerEvalTools() {
 			"run. Each pair of responses is queued twice with the presentation order " +
 			"swapped, so both orders must be judged before the pair counts. Use " +
 			"'sample_n' to draw a random calibration subset rather than the head of the " +
-			"queue; the operator marks those items before any judge calls them. " +
+			"queue. The operator must mark those items (eval_verdict, judge_ident \"operator\") " +
+			"before a judge records a verdict on them, because a mark on a judged item is refused. " +
 			"Requires 'eval:read' scope.",
 	}, s.handleEvalPending)
 
@@ -108,7 +110,8 @@ func (s *Server) registerEvalTools() {
 			"table with deltas and pass/fail, the judge win-rate over pairs both " +
 			"presentation orders agreed on, the operator-judge agreement figure, a " +
 			"per-category breakdown, and the verdict with its plain-language reason. " +
-			"Requires 'eval:read' scope.",
+			"'per_task' stays empty, with 'per_task_note' saying why, until the run is finished " +
+			"and every judgment item has a judge verdict. Requires 'eval:read' scope.",
 	}, s.handleEvalSummary)
 
 	mcp.AddTool(s.mcpServer, &mcp.Tool{
@@ -275,8 +278,24 @@ func (s *Server) handleEvalSummary(ctx context.Context, _ *mcp.CallToolRequest, 
 	if err != nil {
 		return toolError("summarizing run: " + err.Error()), nil, nil
 	}
-	r, jsonErr := toolJSON(summary)
+	refusal, err := identityRefusal(ctx, store, input.RunID,
+		"per_task pairs each variant with its per-task means, which match a response's rounds on eval_get_pair")
+	if err != nil {
+		return toolError("summarizing run: " + err.Error()), nil, nil
+	}
+	out := evalSummaryResult{Summary: summary}
+	if refusal != "" {
+		summary.PerTask = []eval.TaskMetrics{}
+		out.PerTaskNote = refusal
+	}
+	r, jsonErr := toolJSON(out)
 	return r, nil, jsonErr
+}
+
+// evalSummaryResult is the summary plus, while per_task is withheld, why.
+type evalSummaryResult struct {
+	*eval.Summary
+	PerTaskNote string `json:"per_task_note,omitempty"`
 }
 
 // evalSummaryOpts mirrors the REST handler's: a nil config leaves the fields
@@ -335,24 +354,43 @@ func checkSamplesGate(ctx context.Context, store *eval.Store, input evalSamplesI
 	if input.TaskID < 0 {
 		return toolError("task_id must be a positive integer")
 	}
-	run, err := store.GetRun(ctx, input.RunID)
+	refusal, err := identityRefusal(ctx, store, input.RunID, "eval_samples names the variant behind each response")
 	if err != nil {
 		return toolError("listing samples: " + err.Error())
 	}
+	if refusal != "" {
+		return toolError(refusal)
+	}
+	return nil
+}
+
+// identityRefusal is the one gate on anything that maps a response to its
+// variant: it returns why that stays closed, or "" once the run is finished
+// with no pending item, which is exactly when RecordVerdict stops taking
+// judge verdicts. The finished check matters because a running run has no
+// items yet. what says what the caller would reveal.
+func identityRefusal(ctx context.Context, store *eval.Store, runID int64, what string) (string, error) {
+	run, err := store.GetRun(ctx, runID)
+	if err != nil {
+		return "", err
+	}
 	if !eval.IsTerminal(run.Status) {
-		return toolError(fmt.Sprintf("run %d is %s: eval_samples opens once the run has finished "+
-			"and every judgment item has a judge verdict", run.ID, run.Status))
+		return fmt.Sprintf("run %d is %s: %s, so it opens once the run has finished "+
+			"and every judgment item has a judge verdict", run.ID, run.Status, what), nil
 	}
 	pending, err := store.PendingItems(ctx, run.ID)
 	if err != nil {
-		return toolError("listing samples: " + err.Error())
+		return "", err
 	}
 	if pending > 0 {
-		return toolError(fmt.Sprintf("run %d has %d judgment items pending: eval_samples names the "+
-			"variant behind each response, so it stays closed until every item has a judge verdict",
-			run.ID, pending))
+		items := "items"
+		if pending == 1 {
+			items = "item"
+		}
+		return fmt.Sprintf("run %d has %d judgment %s pending: %s, so it stays closed "+
+			"until every item has a judge verdict", run.ID, pending, items, what), nil
 	}
-	return nil
+	return "", nil
 }
 
 func clampSamplesLimit(limit int) int {
