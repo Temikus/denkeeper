@@ -2,13 +2,13 @@
 title: "Skills"
 description: "Markdown-based instruction files that teach the agent how to behave."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-11-23T00:00:00+00:00
+lastmod: 2026-11-24T00:00:00+00:00
 draft: false
 weight: 20
 toc: true
 ---
 
-Skills are the simplest extension point. They are markdown files with TOML frontmatter that provide instructions to the agent. No code execution — skills teach the agent *how to behave* and *what steps to follow*.
+Skills are the simplest extension point. They are markdown files with TOML or YAML frontmatter that provide instructions to the agent. No code execution — skills teach the agent *how to behave* and *what steps to follow*.
 
 ## File format
 
@@ -30,6 +30,42 @@ tools = ["web-search", "calendar"]
 3. List any pending tasks or reminders
 4. Format as a concise morning briefing
 ```
+
+### YAML frontmatter
+
+Skills from other tools, such as skills.sh, often put YAML between `---` lines. Denkeeper reads that too:
+
+```markdown
+---
+name: release-notes
+description: >-
+  Draft release notes from merged pull requests,
+  grouped by area.
+license: Apache-2.0
+metadata:
+  author: example
+---
+
+## Instructions
+
+1. List the pull requests merged since the last tag
+2. Group them by area and summarize each in one line
+```
+
+- Both forms use the same keys: `name`, `description`, `version`, `triggers`, `requires.tools`, `max_tool_rounds` and `max_output_tokens`. Denkeeper ignores other keys, such as `license` and `metadata` above, but keeps them when the skill is edited.
+- A skill keeps the form it was written in. New skills are written as TOML.
+- Anchors, aliases, merge keys, explicit tags (such as `!!binary`) and duplicate keys are refused. A refused file is skipped, and the server log has a warning that names the file and the reason, with the line.
+- Any `.md` file in a skills directory that starts with `---` and has a `name` key loads as a skill.
+- A skill with no `triggers` is ambient in either form, so its body goes into every prompt. Most skills.sh skills have no triggers: add a `command:` trigger to use one only on demand.
+
+### What an edit keeps
+
+An edit that changes no frontmatter field, such as a body edit, writes the frontmatter back byte for byte. An edit that changes a field rewrites the block:
+
+- **YAML** keeps keys, their order, comments and quoting, but not exact formatting. Blank lines and indentation can change, and a folded `description` can be rewrapped onto one line. A newly set field goes at the end.
+- **TOML** keeps every key and value, but not comments or key order.
+
+If a rewrite would change a key Denkeeper does not read, the edit is refused and the file is left as it was. Edit that file by hand.
 
 ## Triggers
 
