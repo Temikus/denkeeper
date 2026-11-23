@@ -368,7 +368,7 @@ Global MCP settings.
 ### [skills]
 
     max_bytes = 1048576              # cap on a single persisted skill file (frontmatter + body); 1 MiB default, negative = unlimited
-    index = true                     # list every skill's name, triggers and description in the system prompt
+    index = true                     # list skill names and triggers (+ first description line unless always on); descriptions, then trailing entries, dropped past 8,000 bytes
 
 ### [browser]
 

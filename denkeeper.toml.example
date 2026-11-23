@@ -369,7 +369,7 @@ format = "text"
 
 # [skills]
 # max_bytes = 1048576              # cap on one skill file (frontmatter + body); 1 MiB default, negative = unlimited
-# index = true                     # list every skill's name, triggers and description in each prompt
+# index = true                     # list skills (name, triggers, first description line) in each prompt; capped at 8 KB
 
 # ---------------------------------------------------------------------------
 # Browser Automation (Docker)

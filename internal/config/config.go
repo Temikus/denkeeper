@@ -358,7 +358,8 @@ func (c *DecideConfig) DecideEnabled() bool {
 	return c.Enabled == nil || *c.Enabled
 }
 
-// SkillsConfig controls skill management (create/update via API, MCP, config MCP).
+// SkillsConfig controls skill management (create/update via API, MCP, config
+// MCP) and the skill index in each agent's system prompt.
 type SkillsConfig struct {
 	// MaxBytes caps the size of a single persisted skill file (frontmatter +
 	// body). Skill content is written verbatim, so without a bound an authorized
@@ -366,9 +367,9 @@ type SkillsConfig struct {
 	// limit.
 	MaxBytes int `toml:"max_bytes"`
 
-	// Index lists every skill (name, triggers, first description line) in
-	// each agent's system prompt. nil means on. [[agents]] skill_index
-	// overrides it per agent.
+	// Index lists every skill (name, triggers, and the first description line
+	// unless always on) in each agent's system prompt, capped at 8,000 bytes.
+	// nil means on. [[agents]] skill_index overrides it per agent.
 	Index *bool `toml:"index"`
 }
 

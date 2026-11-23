@@ -8,10 +8,11 @@ import (
 )
 
 // Bounds for the skill index. Names, descriptions, commands and schedule
-// names are agent-writable, so every one is collapsed to one line and cut.
+// names are agent-writable, so every one is collapsed to one line. Only
+// descriptions are cut: a cut name or command could not be looked up or typed.
+// MaxIndexBytes still bounds the section, since it drops whole lines.
 const (
 	MaxIndexBytes        = 8000
-	maxIndexNameRunes    = 64
 	maxIndexDescRunes    = 120
 	maxIndexCommands     = 4
 	maxIndexScheduleRefs = 4
@@ -100,7 +101,7 @@ func renderIndex(lines []string, trailer string) string {
 // indexLine renders "- name (triggers)" plus ": description" for a skill with
 // triggers. An ambient skill's description is already in the prompt every turn.
 func indexLine(s Skill, scheduleNames []string, withDesc bool) string {
-	line := "- " + oneLine(s.Name, maxIndexNameRunes) + " (" + indexTriggers(s, scheduleNames) + ")"
+	line := "- " + collapse(s.Name) + " (" + indexTriggers(s, scheduleNames) + ")"
 	if !withDesc || len(s.ParsedTriggers) == 0 {
 		return line
 	}
@@ -120,7 +121,7 @@ func indexTriggers(s Skill, scheduleNames []string) string {
 		if t.Type != TriggerCommand {
 			continue
 		}
-		c := "/" + oneLine(t.Command, maxIndexNameRunes)
+		c := "/" + collapse(t.Command)
 		if !slices.Contains(cmds, c) {
 			cmds = append(cmds, c)
 		}
@@ -131,7 +132,7 @@ func indexTriggers(s Skill, scheduleNames []string) string {
 	if len(scheduleNames) > 0 {
 		names := make([]string, len(scheduleNames))
 		for i, n := range scheduleNames {
-			names[i] = oneLine(n, maxIndexNameRunes)
+			names[i] = collapse(n)
 		}
 		slices.Sort(names)
 		parts = append(parts, "schedule: "+capList(names, maxIndexScheduleRefs))
@@ -158,10 +159,15 @@ func firstLine(s string) string {
 	return ""
 }
 
-// oneLine collapses whitespace runs, line breaks included, to one space and
-// cuts the result to limit runes plus an ellipsis.
+// collapse turns whitespace runs, line breaks included, into one space, so an
+// agent-written value cannot start a new line or heading.
+func collapse(s string) string {
+	return strings.Join(strings.Fields(s), " ")
+}
+
+// oneLine collapses s and cuts it to limit runes plus an ellipsis.
 func oneLine(s string, limit int) string {
-	s = strings.Join(strings.Fields(s), " ")
+	s = collapse(s)
 	if utf8.RuneCountInString(s) <= limit {
 		return s
 	}

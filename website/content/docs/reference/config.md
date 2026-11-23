@@ -373,7 +373,7 @@ While it is off, the task endpoints answer `503` and the tools aren't offered. C
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `max_bytes` | int | `1048576` | Cap on a single persisted skill file, frontmatter + body (1 MiB). Negative = unlimited |
-| `index` | bool | `true` | List every skill's name, triggers and first description line in each agent's system prompt (see [Skill index](/docs/concepts/skills/#skill-index)). An agent's `skill_index` overrides it. Applied on `POST /server/reload`. The list is capped at 8,000 bytes |
+| `index` | bool | `true` | List every skill's name and triggers in each agent's system prompt, plus the first description line for skills that are not always on (see [Skill index](/docs/concepts/skills/#skill-index)). The list is capped at 8,000 bytes: past that, descriptions and then the last entries are left out. An agent's `skill_index` overrides it. Applied on `POST /server/reload` |
 
 Skill content is written verbatim, so without a bound an authorized caller could exhaust disk. The cap is enforced on every write surface (REST, config MCP, external MCP).
 

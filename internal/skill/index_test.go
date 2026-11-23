@@ -120,12 +120,15 @@ func TestBuildIndexSection_LongMultiByteDescriptionCutOnRune(t *testing.T) {
 	}
 }
 
-func TestBuildIndexSection_LongNameCut(t *testing.T) {
-	name := "  " + strings.Repeat("n", 70) + "\nevil"
-	s := []skill.Skill{skilltest.New(name, "d", []string{"command:x"}, "")}
-	got := skill.BuildIndexSection(s, nil)
-	if !strings.Contains(got, "\n- "+strings.Repeat("n", 64)+"… (/x): d") {
-		t.Fatalf("name not collapsed and cut:\n%s", got)
+// Names are never cut: a cut name could not be looked up with skill_get.
+// They are still collapsed to one line, since they are agent-written.
+func TestBuildIndexSection_LongNameKeptWhole(t *testing.T) {
+	long := strings.Repeat("ж", 100)
+	s := []skill.Skill{skilltest.New("  "+long+"\nevil", "d", []string{"command:" + long}, "")}
+	got := skill.BuildIndexSection(s, map[string][]string{"  " + long + "\nevil": {long}})
+	want := "\n- " + long + " evil (/" + long + "; schedule: " + long + "): d"
+	if !strings.HasSuffix(got, want) {
+		t.Fatalf("name, command or schedule cut or not collapsed:\n%s", got)
 	}
 }
 
