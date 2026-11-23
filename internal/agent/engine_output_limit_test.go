@@ -260,7 +260,7 @@ func TestOutputLimit_WrapUpCarriesItsOwnInstruction(t *testing.T) {
 	}
 	msgs := provider.requests[1].Messages
 	last := msgs[len(msgs)-1].Content
-	want := "[engine: your last response hit the output-token limit and was cut off, so its tool call did not run. " +
+	want := "[engine: your last response hit the output-token limit and was cut off, so nothing in it ran or reached the user. " +
 		"Tools are no longer available this turn. Briefly tell the user what was done and what was not, " +
 		"using only the tool results above if there are any. Do not guess the result of a call that did not run.]"
 	if last != want {

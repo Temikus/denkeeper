@@ -42,8 +42,8 @@ type Skill struct {
 
 	// MaxOutputTokens optionally caps output tokens per completion for turns
 	// this skill drives, under the same name and unit as the agent-level
-	// max_output_tokens knob. Like MaxToolRounds, 0 means unset and the value
-	// only ever lowers the agent's cap.
+	// max_output_tokens knob. 0 means unset. The value lowers a cap set on the
+	// agent or in [llm], and is sent as is when neither sets one.
 	MaxOutputTokens int
 
 	// SubFileNames lists relative paths to sub-files within a subdirectory-form

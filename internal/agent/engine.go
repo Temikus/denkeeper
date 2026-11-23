@@ -1708,6 +1708,31 @@ func (e *Engine) resolveToolBudget(ctx context.Context, matched []skill.Skill, m
 	return turnToolBudget{maxRounds: driver.MaxToolRounds, skillName: driver.Name}
 }
 
+// resolveOutputCap returns the output-token cap the driving skill sets for this
+// turn, or 0 when the agent's own cap stays in force. Same rule as
+// resolveToolBudget: one driving skill, and it only lowers the agent's cap. An
+// agent cap of 0 means no agent cap, so any positive skill value applies.
+func (e *Engine) resolveOutputCap(ctx context.Context, matched []skill.Skill, msg adapter.IncomingMessage) int {
+	driver, ok := drivingSkill(matched, msg)
+	if !ok || driver.MaxOutputTokens <= 0 {
+		return 0
+	}
+	agentCap := e.MaxOutputTokens()
+	if agentCap > 0 && driver.MaxOutputTokens >= agentCap {
+		return 0
+	}
+
+	trace.SpanFromContext(ctx).SetAttributes(attribute.Int("agent.skill_output_cap", driver.MaxOutputTokens))
+	e.logger.Info("skill output-token cap applied",
+		"skill", driver.Name,
+		"skill_max_output_tokens", driver.MaxOutputTokens,
+		"engine_max_output_tokens", agentCap,
+		"adapter", msg.Adapter,
+		"external_id", msg.ExternalID,
+	)
+	return driver.MaxOutputTokens
+}
+
 // turnToolExposure is the per-turn gate on which tool *definitions* are
 // advertised to the model, the request-time counterpart of the match-time
 // inclusion gate in filterUnsatisfiedSkills. Resolved once in prepareTurn and
@@ -1969,6 +1994,9 @@ type turnPrep struct {
 	llmMessages []llm.Message
 	sysResult   buildSystemPromptResult
 	budget      turnToolBudget
+	// outputCap is the skill's output-token cap for this turn; 0 keeps the
+	// agent's (see resolveOutputCap).
+	outputCap int
 	// toolFilter narrows the advertised tool set for this turn; nil advertises
 	// everything (see resolveToolExposure).
 	toolFilter llm.ToolFilter
@@ -2048,7 +2076,7 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 	run := turnRun{
 		budget:     prep.budget,
 		policy:     policy,
-		router:     e.routerFor(policy),
+		router:     e.routerFor(policy).WithMaxOutputTokens(prep.outputCap),
 		toolFilter: prep.toolFilter,
 		stopGen:    stopGen,
 		stop:       stopHandle,
@@ -2179,6 +2207,7 @@ func (e *Engine) prepareTurn(ctx context.Context, msg adapter.IncomingMessage, p
 	// per turn means skill edits (CRUD copies whole skill.Skill values) take
 	// effect on the next turn with no hot-reload plumbing.
 	prep.budget = e.resolveToolBudget(ctx, prep.sysResult.matchedSkills, msg)
+	prep.outputCap = e.resolveOutputCap(ctx, prep.sysResult.matchedSkills, msg)
 
 	// Same timing, same input set: which tools this turn advertises is gated by
 	// what the active skills declared they need.
@@ -3030,7 +3059,7 @@ func (e *Engine) wrapUpToolLoop(ctx context.Context, convID string, reason loopS
 // made-up result.
 func wrapUpInstruction(reason loopStopReason) string {
 	if reason == stopOutputLimit {
-		return "[engine: your last response hit the output-token limit and was cut off, so its tool call did not run. " +
+		return "[engine: your last response hit the output-token limit and was cut off, so nothing in it ran or reached the user. " +
 			"Tools are no longer available this turn. Briefly tell the user what was done and what was not, " +
 			"using only the tool results above if there are any. Do not guess the result of a call that did not run.]"
 	}

@@ -320,6 +320,86 @@ func TestRouter_MaxOutputTokens_SharedWithClones(t *testing.T) {
 	}
 }
 
+func TestRouter_WithMaxOutputTokens_LeavesOriginalUnchanged(t *testing.T) {
+	r := NewRouter("primary", "m", nil)
+	r.SetMaxOutputTokens(8000)
+
+	clone := r.WithMaxOutputTokens(2000)
+	if got := clone.MaxOutputTokens(); got != 2000 {
+		t.Errorf("clone MaxOutputTokens = %d, want 2000", got)
+	}
+	if got := r.MaxOutputTokens(); got != 8000 {
+		t.Errorf("original MaxOutputTokens = %d, want 8000", got)
+	}
+}
+
+// A later write to the original (a PATCH mid-turn) must not move a turn that
+// already resolved its cap, and a write to the clone must not leak back.
+func TestRouter_WithMaxOutputTokens_DoesNotShareTheCounter(t *testing.T) {
+	r := NewRouter("primary", "m", nil)
+	clone := r.WithMaxOutputTokens(2000)
+
+	r.SetMaxOutputTokens(9000)
+	if got := clone.MaxOutputTokens(); got != 2000 {
+		t.Errorf("clone MaxOutputTokens after original write = %d, want 2000", got)
+	}
+	clone.SetMaxOutputTokens(100)
+	if got := r.MaxOutputTokens(); got != 9000 {
+		t.Errorf("original MaxOutputTokens after clone write = %d, want 9000", got)
+	}
+}
+
+func TestRouter_WithMaxOutputTokens_ZeroReturnsReceiver(t *testing.T) {
+	r := NewRouter("primary", "m", nil)
+	r.SetMaxOutputTokens(8000)
+	if got := r.WithMaxOutputTokens(0); got != r {
+		t.Error("WithMaxOutputTokens(0) returned a copy, want the receiver")
+	}
+}
+
+func TestRouter_WithMaxOutputTokens_CurrentValueReturnsReceiver(t *testing.T) {
+	r := NewRouter("primary", "m", nil)
+	r.SetMaxOutputTokens(8000)
+	if got := r.WithMaxOutputTokens(8000); got != r {
+		t.Error("WithMaxOutputTokens(current) returned a copy, want the receiver")
+	}
+}
+
+func TestRouter_WithMaxOutputTokens_SentOnRequest(t *testing.T) {
+	r := NewRouter("primary", "m", NewCostTracker(SessionLimits{Hard: 10.0}, nil))
+	cap := &capturingMockProvider{}
+	cap.name = "primary"
+	cap.response = &ChatResponse{Content: "ok"}
+	r.RegisterProvider(cap)
+	r.SetMaxOutputTokens(8000)
+
+	if _, err := r.WithMaxOutputTokens(1500).Complete(context.Background(), "s1", []Message{{Role: "user", Content: "hi"}}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cap.lastMaxTokens != 1500 {
+		t.Errorf("MaxTokens = %d, want 1500", cap.lastMaxTokens)
+	}
+}
+
+func TestRouter_WithMaxOutputTokens_ComposesWithModel(t *testing.T) {
+	r := NewRouter("primary", "m", NewCostTracker(SessionLimits{Hard: 10.0}, nil))
+	cap := &capturingMockProvider{}
+	cap.name = "primary"
+	cap.response = &ChatResponse{Content: "ok"}
+	r.RegisterProvider(cap)
+
+	clone := r.WithModel("candidate").WithMaxOutputTokens(1500)
+	if _, err := clone.Complete(context.Background(), "s1", []Message{{Role: "user", Content: "hi"}}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cap.lastModel != "candidate" || cap.lastMaxTokens != 1500 {
+		t.Errorf("request model/cap = %q/%d, want candidate/1500", cap.lastModel, cap.lastMaxTokens)
+	}
+	if r.DefaultModel() != "m" || r.MaxOutputTokens() != 0 {
+		t.Errorf("original model/cap = %q/%d, want m/0", r.DefaultModel(), r.MaxOutputTokens())
+	}
+}
+
 func TestRouter_MaxOutputTokens_SentOnFallback(t *testing.T) {
 	r := NewRouter("primary", "m", NewCostTracker(SessionLimits{Hard: 10.0}, nil))
 	cap := &capturingMockProvider{}

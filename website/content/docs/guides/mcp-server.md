@@ -3,7 +3,7 @@ title: "Denkeeper as an MCP Server"
 description: "Expose your instance to other MCP clients — Claude Code, IDEs, or another agent."
 slug: "mcp-server"
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-25T00:00:00+00:00
+lastmod: 2026-11-23T00:00:00+00:00
 draft: false
 weight: 40
 toc: true
@@ -71,7 +71,7 @@ Behind a reverse proxy, set `api.external_url` so generated URLs are correct.
 
 `agent_update` (`agents:write`) changes an agent's `max_output_tokens` and `max_tool_rounds`. The change applies from the next LLM call and is saved to the config file. The result's `persisted` is `false` when there is no file or the save failed.
 
-`skill_create` and `skill_update` take an optional `max_output_tokens`, the skill's own cap on output tokens per completion for turns it drives. It can only lower the agent's `max_output_tokens`. On `skill_update`, omit it to keep the current value and pass `0` to remove it.
+`skill_create` and `skill_update` take an optional `max_output_tokens`, the skill's own cap on output tokens per completion for turns it drives. It lowers a cap set on the agent or in `[llm]`, and is sent as is when neither sets one. On `skill_update`, omit it to keep the current value and pass `0` to remove it.
 
 Skill writes are disk-first: the file is written before memory is updated, so an IO error leaves the skill intact rather than creating a version that exists only in RAM until the next restart.
 

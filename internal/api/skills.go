@@ -100,8 +100,8 @@ type skillCreateInput struct {
 	// skill drives. 0 = no cap; it only lowers the agent's budget.
 	MaxToolRounds int `json:"max_tool_rounds"`
 	// MaxOutputTokens optionally caps output tokens per completion for turns
-	// this skill drives. 0 = no skill cap; it only lowers the agent's
-	// max_output_tokens.
+	// this skill drives. 0 = no skill cap. It lowers a cap set on the agent or
+	// in [llm], and is sent as is when neither sets one.
 	MaxOutputTokens int `json:"max_output_tokens"`
 	// RequiresTools declares the tool names this skill depends on (frontmatter
 	// [requires] tools).
@@ -213,8 +213,8 @@ type skillUpdateInput struct {
 	// whatever the skill already carries.
 	MaxToolRounds *int `json:"max_tool_rounds"`
 	// MaxOutputTokens sets the per-completion output-token cap; 0 removes it.
-	// Omitted keeps whatever the skill already carries. It only lowers the
-	// agent's max_output_tokens.
+	// Omitted keeps whatever the skill already carries. It lowers a cap set on
+	// the agent or in [llm], and is sent as is when neither sets one.
 	MaxOutputTokens *int `json:"max_output_tokens"`
 	// RequiresTools replaces the declared tool set; [] clears it. Omitted keeps
 	// whatever the skill already carries.

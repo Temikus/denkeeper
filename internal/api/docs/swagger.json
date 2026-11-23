@@ -12299,7 +12299,7 @@
                     "type": "string"
                 },
                 "max_output_tokens": {
-                    "description": "MaxOutputTokens optionally caps output tokens per completion for turns\nthis skill drives. 0 = no skill cap; it only lowers the agent's\nmax_output_tokens.",
+                    "description": "MaxOutputTokens optionally caps output tokens per completion for turns\nthis skill drives. 0 = no skill cap. It lowers a cap set on the agent or\nin [llm], and is sent as is when neither sets one.",
                     "type": "integer"
                 },
                 "max_tool_rounds": {
@@ -12337,7 +12337,7 @@
                     "type": "string"
                 },
                 "max_output_tokens": {
-                    "description": "MaxOutputTokens sets the per-completion output-token cap; 0 removes it.\nOmitted keeps whatever the skill already carries. It only lowers the\nagent's max_output_tokens.",
+                    "description": "MaxOutputTokens sets the per-completion output-token cap; 0 removes it.\nOmitted keeps whatever the skill already carries. It lowers a cap set on\nthe agent or in [llm], and is sent as is when neither sets one.",
                     "type": "integer"
                 },
                 "max_tool_rounds": {

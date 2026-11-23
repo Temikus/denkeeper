@@ -106,7 +106,7 @@ func (s *Server) registerSkillTools() {
 					"triggers":    {"type": "array", "items": {"type": "string"}, "description": "Trigger strings, e.g. [\"command:skill-name\", \"schedule:schedule-name\"]. A schedule: trigger must name an existing schedule."},
 					"body":        {"type": "string",  "description": "Markdown body — the skill instructions"},
 					"max_tool_rounds": {"type": "integer", "minimum": 0, "description": "Optional cap on tool-call ROUNDS (not calls) for turns this skill drives. Omit or 0 for no cap; it can only lower the agent's budget, never raise it. Prefer this over telling the model in the body to count its own tool calls."},
-					"max_output_tokens": {"type": "integer", "minimum": 0, "description": "Optional cap on output tokens per completion for turns this skill drives. Omit or 0 for no skill cap; it can only lower the agent's max_output_tokens, never raise it."},
+					"max_output_tokens": {"type": "integer", "minimum": 0, "description": "Optional cap on output tokens per completion for turns this skill drives. Omit or 0 for no skill cap. It lowers a cap set on the agent or in [llm], and is sent as is when neither sets one."},
 					"requires_tools": {"type": "array", "items": {"type": "string"}, "description": "Optional list of tool names this skill depends on (frontmatter [requires] tools). Declaring it documents the skill's tool surface; omit when the skill needs no particular tools."}
 				},
 				"required": ["name", "body"]
@@ -150,7 +150,7 @@ func (s *Server) registerSkillTools() {
 					"triggers":    {"type": "array", "items": {"type": "string"}, "description": "New triggers (omit to keep current). A newly added schedule: trigger must name an existing schedule."},
 					"body":        {"type": "string",  "description": "New markdown body (omit to keep current)"},
 					"max_tool_rounds": {"type": "integer", "minimum": 0, "description": "New cap on tool-call ROUNDS (not calls) for turns this skill drives; 0 removes the cap (omit to keep current). It can only lower the agent's budget, never raise it."},
-					"max_output_tokens": {"type": "integer", "minimum": 0, "description": "New cap on output tokens per completion for turns this skill drives; 0 removes the cap (omit to keep current). It can only lower the agent's max_output_tokens, never raise it."},
+					"max_output_tokens": {"type": "integer", "minimum": 0, "description": "New cap on output tokens per completion for turns this skill drives; 0 removes the cap (omit to keep current). It lowers a cap set on the agent or in [llm], and is sent as is when neither sets one."},
 					"requires_tools": {"type": "array", "items": {"type": "string"}, "description": "New list of required tool names (omit to keep current; pass [] to clear)."}
 				},
 				"required": ["name"]
