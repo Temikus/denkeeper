@@ -190,6 +190,57 @@ Body.`)
 	}
 }
 
+func TestParseFile_MaxOutputTokens(t *testing.T) {
+	content := []byte(`+++
+name = "digest"
+triggers = ["command:digest"]
+max_output_tokens = 2048
++++
+
+Body.`)
+
+	s, err := ParseFile("digest.md", content)
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	if s.MaxOutputTokens != 2048 {
+		t.Errorf("MaxOutputTokens = %d, want 2048", s.MaxOutputTokens)
+	}
+}
+
+func TestParseFile_MaxOutputTokensAbsent_Zero(t *testing.T) {
+	content := []byte(`+++
+name = "uncapped"
++++
+
+Body.`)
+
+	s, err := ParseFile("uncapped.md", content)
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	if s.MaxOutputTokens != 0 {
+		t.Errorf("MaxOutputTokens = %d, want 0 (unset)", s.MaxOutputTokens)
+	}
+}
+
+func TestParseFile_MaxOutputTokensNegative_Error(t *testing.T) {
+	content := []byte(`+++
+name = "bad-cap"
+max_output_tokens = -1
++++
+
+Body.`)
+
+	_, err := ParseFile("badcap.md", content)
+	if err == nil {
+		t.Fatal("expected error for negative max_output_tokens, got nil")
+	}
+	if !strings.Contains(err.Error(), "max_output_tokens") {
+		t.Errorf("error = %q, want it to name the max_output_tokens field", err.Error())
+	}
+}
+
 // ---------------------------------------------------------------------------
 // LoadDir tests
 // ---------------------------------------------------------------------------

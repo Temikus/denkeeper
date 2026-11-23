@@ -15,7 +15,7 @@ import (
 // bytes verbatim, so any normalization here would corrupt a restore.
 func TestReadSkillFile_ReturnsRawBytes(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "skills")
-	payload := configmcp.BuildSkillPayload("greet", "desc", "1.0.0", nil, "hello body", 0, nil)
+	payload := configmcp.BuildSkillPayload("greet", "desc", "1.0.0", nil, "hello body", 0, 0, nil)
 	if err := configmcp.ApplySkillCreate(dir, func(skill.Skill) {}, ioTestLogger(), payload, 0); err != nil {
 		t.Fatalf("seed create: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestReadSkillFile_ReturnsRawBytes(t *testing.T) {
 // makes a revert byte-identical rather than newline-creeping.
 func TestReadSkillFile_PayloadRoundTrip(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "skills")
-	payload := configmcp.BuildSkillPayload("greet", "desc", "1.0.0", nil, "hello body", 0, nil)
+	payload := configmcp.BuildSkillPayload("greet", "desc", "1.0.0", nil, "hello body", 0, 0, nil)
 	if err := configmcp.ApplySkillCreate(dir, func(skill.Skill) {}, ioTestLogger(), payload, 0); err != nil {
 		t.Fatalf("seed create: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestReadSkillFile_SymlinkedSkillsDirIsAllowed(t *testing.T) {
 		t.Skipf("symlinks unavailable on this platform: %v", err)
 	}
 
-	payload := configmcp.BuildSkillPayload("greet", "", "1.0.0", nil, "body", 0, nil)
+	payload := configmcp.BuildSkillPayload("greet", "", "1.0.0", nil, "body", 0, 0, nil)
 	if err := configmcp.ApplySkillCreate(linkDir, func(skill.Skill) {}, ioTestLogger(), payload, 0); err != nil {
 		t.Fatalf("create through symlinked dir: %v", err)
 	}

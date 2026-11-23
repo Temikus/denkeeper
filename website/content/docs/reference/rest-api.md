@@ -3,7 +3,7 @@ title: "REST API Reference"
 description: "HTTP API endpoints for external integrations."
 slug: "rest-api"
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-10-16T00:00:00+00:00
+lastmod: 2026-11-23T00:00:00+00:00
 draft: false
 weight: 30
 toc: true
@@ -723,6 +723,8 @@ Create a new skill. The skill file is written to the agent's skills directory an
 }
 ```
 
+Optional fields: `max_tool_rounds`, `max_output_tokens` and `requires_tools`. `max_output_tokens` caps output tokens per completion for turns this skill drives; it lowers a cap set on the agent or in `[llm]`, is sent as is when neither sets one, and 0 means no skill cap.
+
 ### `PUT /api/v1/skills/{agent}/{name}`
 
 **Scope:** `skills:write`
@@ -738,6 +740,8 @@ Update an existing skill. Fields are merged with existing values — only provid
   "body": "# Updated content"
 }
 ```
+
+An omitted `max_tool_rounds` or `max_output_tokens` keeps the skill's current cap; `0` removes it.
 
 ### `POST /api/v1/skills/{agent}/{name}/dry-run`
 

@@ -40,6 +40,12 @@ type Skill struct {
 	// is never widened by a skill, which the agent itself can author.
 	MaxToolRounds int
 
+	// MaxOutputTokens optionally caps output tokens per completion for turns
+	// this skill drives, under the same name and unit as the agent-level
+	// max_output_tokens knob. 0 means unset. The value lowers a cap set on the
+	// agent or in [llm], and is sent as is when neither sets one.
+	MaxOutputTokens int
+
 	// SubFileNames lists relative paths to sub-files within a subdirectory-form
 	// skill (e.g. "references/oauth.md", "templates/greeting.txt"). Sorted.
 	// Empty for flat-file skills.
@@ -52,12 +58,13 @@ type Skill struct {
 
 // frontmatter is the TOML-decoded structure of the +++ block.
 type frontmatter struct {
-	Name          string        `toml:"name"`
-	Description   string        `toml:"description"`
-	Version       string        `toml:"version"`
-	Triggers      []string      `toml:"triggers"`
-	Requires      SkillRequires `toml:"requires"`
-	MaxToolRounds int           `toml:"max_tool_rounds"`
+	Name            string        `toml:"name"`
+	Description     string        `toml:"description"`
+	Version         string        `toml:"version"`
+	Triggers        []string      `toml:"triggers"`
+	Requires        SkillRequires `toml:"requires"`
+	MaxToolRounds   int           `toml:"max_tool_rounds"`
+	MaxOutputTokens int           `toml:"max_output_tokens"`
 }
 
 // ParseFile parses the content of a single skill file.
@@ -100,17 +107,21 @@ func ParseFile(path string, content []byte) (*Skill, error) {
 	if fm.MaxToolRounds < 0 {
 		return nil, fmt.Errorf("skill %q: max_tool_rounds must be >= 0 (0 = unset)", path)
 	}
+	if fm.MaxOutputTokens < 0 {
+		return nil, fmt.Errorf("skill %q: max_output_tokens must be >= 0 (0 = unset)", path)
+	}
 
 	return &Skill{
-		Name:           strings.TrimSpace(fm.Name),
-		Description:    strings.TrimSpace(fm.Description),
-		Version:        strings.TrimSpace(fm.Version),
-		Triggers:       fm.Triggers,
-		ParsedTriggers: parsed,
-		Requires:       fm.Requires,
-		MaxToolRounds:  fm.MaxToolRounds,
-		Body:           body,
-		Source:         path,
+		Name:            strings.TrimSpace(fm.Name),
+		Description:     strings.TrimSpace(fm.Description),
+		Version:         strings.TrimSpace(fm.Version),
+		Triggers:        fm.Triggers,
+		ParsedTriggers:  parsed,
+		Requires:        fm.Requires,
+		MaxToolRounds:   fm.MaxToolRounds,
+		MaxOutputTokens: fm.MaxOutputTokens,
+		Body:            body,
+		Source:          path,
 	}, nil
 }
 

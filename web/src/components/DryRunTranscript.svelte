@@ -40,6 +40,7 @@
     max_rounds: 'hit the round limit',
     repeated_calls: 'repeated the same call',
     stop_requested: 'stopped on request',
+    output_limit: 'hit the output-token limit',
   }
 
   // An unknown slug is still a cut-short turn: naming it beats hiding it.
