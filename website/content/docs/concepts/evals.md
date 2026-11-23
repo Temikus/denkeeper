@@ -116,7 +116,7 @@ When a run reaches a terminal state it **pairs itself**: for each (task, k) it p
 
 Blinding is total and the payload is **built rather than filtered** — withheld: variant name, model, provider, serving upstream, cost, latency, token usage, tool-call duration (a consistently slower side is an identity hint), and the sample's conversation id. Filtering fails open the day a column is added; construction fails closed.
 
-The judge is Claude Code over Denkeeper's [MCP server](/docs/guides/mcp-server/), working the queue with `eval_pending` → `eval_get_pair` → `eval_verdict`, then reading `eval_summary`. Give it a key scoped to `eval:read,eval:write` and nothing more: that key can judge a run but cannot start one, which is the right shape given runs spend real tokens.
+The judge is Claude Code over Denkeeper's [MCP server](/docs/guides/mcp-server/), working the queue with `eval_pending` → `eval_get_pair` → `eval_verdict`, then reading `eval_summary` (its per-task numbers appear once every item has a judge verdict, so a summary read mid-calibration shows none). Give it a key scoped to `eval:read,eval:write` and nothing more: that key can judge a run but cannot start one, which is the right shape given runs spend real tokens.
 
 ```bash
 denkeeper keys create judge --scopes eval:read,eval:write
@@ -131,7 +131,7 @@ Setting `[eval] judge_model` adds a second consumer for the same queue: an **int
 The rubric lives in the repo at `.claude/skills/judge-eval/SKILL.md`, where it can be read and edited: four dimensions in priority order — `task_success`, `tool_path`, `persona_fit`, `length` — with instructions to cite the specific persona or skill clause behind any deduction. Unknown dimension names are rejected rather than stored, because a typo that silently vanishes from the results is worse than a failed call. A verdict records the rubric version the judge worked to, and the summary reports the distinct set it saw, so a queue worked across a rubric edit says so instead of averaging two rubrics into one number.
 
 {{< callout context="note" >}}
-**Calibrate a new rubric before trusting it headless.** Mark a random ~20-item subset yourself before the judge calls those items (`judge_ident: "operator"`). A mark is accepted only while its item has no judge verdict, so the agreement figure `eval_summary` reports compares two calls made without sight of each other. Marks are excluded from the win rate. Calibrate before starting the internal judge: an item it has judged can no longer be marked. Below roughly 80 % agreement, fix the rubric first. A drifted rubric quietly devalues every later run.
+**Calibrate a new rubric before trusting it headless.** Mark a random ~20-item subset yourself before the judge calls those items (`judge_ident: "operator"`). A mark is accepted only while its item has no judge verdict, so the agreement figure `eval_summary` reports compares two calls made without sight of each other. Draw the subset with `eval_pending` `sample_n`; the `/judge-eval` skill walks you through it. Marks are excluded from the win rate. Calibrate before starting the internal judge: an item it has judged can no longer be marked. Below roughly 80 % agreement, fix the rubric first. A drifted rubric quietly devalues every later run.
 {{< /callout >}}
 
 A pair counts only when **both** presentation orders carry a verdict. If the two calls name different sides, the judge tracked position rather than quality and the pair records as a tie — so position bias splits the vote instead of deciding it. A half-judged pair is not evidence and stays out of the tally.
@@ -158,9 +158,9 @@ upgrade: judge win-rate 62% over 45 judged pair(s) meets the 55% threshold, and 
   ↳ wins overall; regresses on tool_heavy
 ```
 
-`GET /api/v1/eval/runs/{id}/pairs` is the operator's unblinded view of the same evidence: which variant produced each side, every verdict with its dimensions and notes, and each pair's resolved outcome. It is REST-only on purpose — the judge's MCP surface must not be able to look up which variant produced which response.
+`GET /api/v1/eval/runs/{id}/pairs` is the operator's unblinded view of the same evidence: which variant produced each side, every verdict with its dimensions and notes, and each pair's resolved outcome. It is REST-only on purpose — the judge's MCP surface must not be able to look up which variant produced which response while it can still judge.
 
-Over MCP, `eval_samples` returns a run's samples with the variant behind each one. It is refused until the run is terminal and every judgment item has a judge verdict, and from then on the run takes no more verdicts, so a judge never holds identities while it can still judge.
+Over MCP, `eval_samples` returns a run's samples with the variant behind each one. It is refused until the run is terminal and every judgment item has a judge verdict, and from then on the run takes no more verdicts, so the MCP judge tools never show which variant is which while the run can still take verdicts. The REST `/pairs` and `/samples` views are unblinded and need only `eval:read`, so give a judge MCP access only. To judge a finished run again, for example under an edited rubric, start a new run.
 
 ## In the dashboard
 
