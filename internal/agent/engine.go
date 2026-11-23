@@ -3385,8 +3385,6 @@ func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int
 		onEvent(ChatEvent{Type: "tool_start", Tool: tc.Function.Name, ToolID: tc.ID, Round: round})
 	}
 
-	// Read before Execute: a draining server leaves the index mid-call.
-	prov := e.tools.Provenance(tc.Function.Name)
 	toolStart := time.Now()
 	e.logger.Info("executing tool", "tool", tc.Function.Name, "round", round)
 	toolCtx, toolCancel := context.WithTimeout(ctx, toolExecTimeout)
@@ -3435,7 +3433,7 @@ func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int
 	record.Result = result
 	// Last step before the wire: record.Result stays raw, and any future
 	// wire-side cap must cut before this wrap, not after.
-	return e.frameToolResult(prov, result), record, false
+	return e.frameToolResult(res.Provenance, result), record, false
 }
 
 // auditToolExecution records one executed tool call. The result body is capped

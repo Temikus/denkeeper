@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"context"
 	"testing"
 
 	"github.com/Temikus/denkeeper/internal/config"
@@ -122,6 +123,62 @@ func TestProvenance_ParentDelegation(t *testing.T) {
 	got := child.Provenance("find-tasks")
 	if got != (Provenance{Server: "todoist", External: true, UntrustedOutput: true}) {
 		t.Errorf("Provenance via parent = %+v", got)
+	}
+}
+
+// executedProvenance runs name and returns the provenance on its result. The
+// test servers have no session, so the call fails after it resolves, which is
+// enough: the result still says who took it.
+func executedProvenance(t *testing.T, m *Manager, name string) Provenance {
+	t.Helper()
+	res, err := m.ExecuteResult(context.Background(), llm.ToolCall{Function: llm.FunctionCall{Name: name, Arguments: `{}`}})
+	if err == nil {
+		t.Fatalf("ExecuteResult(%s) succeeded on a session-less server", name)
+	}
+	return res.Provenance
+}
+
+// The race #640 review found: provenance read for one server, then the name
+// re-registered to another before the call runs. The result must carry the
+// server that ran it, not the earlier read.
+func TestExecuteResult_ProvenanceIsTheServerThatRan(t *testing.T) {
+	m := NewManager(testLogger())
+	indexProvenanceServer(m, &serverConn{name: "local"}, "lookup")
+	if before := m.Provenance("lookup"); before.UntrustedOutput {
+		t.Fatalf("setup: in-process lookup reads untrusted: %+v", before)
+	}
+
+	m.mu.Lock()
+	delete(m.servers, "local")
+	m.rebuildToolIndex()
+	m.mu.Unlock()
+	indexProvenanceServer(m, externalSSE("remote", config.ToolConfig{}), "lookup")
+
+	got := executedProvenance(t, m, "lookup")
+	if got != (Provenance{Server: "remote", External: true, UntrustedOutput: true}) {
+		t.Errorf("result provenance = %+v, want the external server that took the call", got)
+	}
+}
+
+func TestExecuteResult_ProvenanceOnInProcessAndParentCalls(t *testing.T) {
+	parent := NewManager(testLogger())
+	indexProvenanceServer(parent, externalSSE("todoist", config.ToolConfig{}), "find-tasks")
+	child := NewManager(testLogger())
+	child.AdoptFrom(parent)
+	indexProvenanceServer(child, &serverConn{name: "web-default"}, "web_fetch")
+
+	if got := executedProvenance(t, child, "web_fetch"); got != (Provenance{Server: "web-default", UntrustedOutput: true}) {
+		t.Errorf("web_fetch provenance = %+v", got)
+	}
+	if got := executedProvenance(t, child, "find-tasks"); got != (Provenance{Server: "todoist", External: true, UntrustedOutput: true}) {
+		t.Errorf("parent call provenance = %+v", got)
+	}
+}
+
+func TestExecuteResult_UnresolvedNameHasNoProvenance(t *testing.T) {
+	m := NewManager(testLogger())
+	if got := executedProvenance(t, m, "nope"); got != (Provenance{}) {
+		t.Errorf("unknown tool provenance = %+v, want zero", got)
 	}
 }
 

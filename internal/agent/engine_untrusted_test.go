@@ -303,6 +303,22 @@ func TestUntrustedTurn_ExternalCallIsWrappedBeforeTheBudgetHint(t *testing.T) {
 	}
 }
 
+// Fail closed: with no server named on the result, nothing says who wrote
+// the text, so it is framed.
+func TestExecuteToolCall_UnresolvedToolIsFramed(t *testing.T) {
+	e, _ := newCacheTestEngine(t, config.ToolConfig{}, "autonomous")
+	pinUntrustedID(e)
+	tc := llm.ToolCall{ID: "c1", Function: llm.FunctionCall{Name: "no_such_tool", Arguments: `{}`}}
+
+	got, record, _ := e.executeToolCall(context.Background(), tc, 1, "conv:1", false, turnRun{grant: grantAll}, nil)
+	if !strings.HasPrefix(got, `<untrusted_tool_output source="unknown" id="`+testUntrustedID+`">`+"\nTool error:") {
+		t.Errorf("result = %q, want the error framed with source unknown", got)
+	}
+	if record.Outcome != "failed" {
+		t.Errorf("outcome = %q, want failed", record.Outcome)
+	}
+}
+
 // --- Draining server ---
 
 type slowArgs struct{}

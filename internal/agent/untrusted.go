@@ -44,9 +44,7 @@ func frameUntrusted(source, id, body string) string {
 // would let page text close the block, so there is no fallback.
 func randomUntrustedID() string {
 	b := make([]byte, untrustedIDBytes)
-	if _, err := rand.Read(b); err != nil {
-		panic("untrusted output id: crypto/rand failed: " + err.Error())
-	}
+	_, _ = rand.Read(b) // Go 1.24+: never errors; crashes the program if the OS RNG fails
 	return hex.EncodeToString(b)
 }
 
@@ -76,9 +74,11 @@ func sanitizeUntrustedSource(s string) string {
 }
 
 // frameToolResult wraps a tool's result for the wire when its provenance is
-// untrusted, with a fresh id, and returns it unchanged otherwise.
+// untrusted, with a fresh id, and returns it unchanged otherwise. prov comes
+// from the resolution that ran the call (tool.Result.Provenance). With no
+// server named, nothing says who wrote the text, so it is framed.
 func (e *Engine) frameToolResult(prov tool.Provenance, result string) string {
-	if !prov.UntrustedOutput {
+	if !prov.UntrustedOutput && prov.Server != "" {
 		return result
 	}
 	return frameUntrusted(prov.Server, e.newUntrustedID(), result)

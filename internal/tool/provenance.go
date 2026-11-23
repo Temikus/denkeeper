@@ -27,11 +27,15 @@ func (m *Manager) Provenance(toolName string) Provenance {
 		}
 		return Provenance{}
 	}
-	external := !class.inProcess
+	return class.provenance()
+}
+
+func (c toolClass) provenance() Provenance {
+	external := !c.inProcess
 	return Provenance{
-		Server:          class.server,
+		Server:          c.server,
 		External:        external,
-		UntrustedOutput: external || builtinUntrustedOutputTools[class.local],
+		UntrustedOutput: external || builtinUntrustedOutputTools[c.local],
 	}
 }
 
