@@ -184,7 +184,7 @@ func TestOpsReport_RegisteredWithNoAgentArgument(t *testing.T) {
 		if strings.Contains(string(schema), `"agent"`) || !strings.Contains(string(schema), `"days"`) {
 			t.Errorf("input schema = %s, want days and no agent", schema)
 		}
-		if !strings.Contains(tl.Description, "conversation that was moved to you from another agent") {
+		if !strings.Contains(tl.Description, "conversation was moved to you from another agent") {
 			t.Errorf("description does not state the per-conversation scoping limit: %s", tl.Description)
 		}
 	}

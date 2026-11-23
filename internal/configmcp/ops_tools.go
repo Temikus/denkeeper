@@ -17,10 +17,11 @@ const opsReportDescription = "Return your own computed health numbers for the la
 	"approval_timeout_count and supervisor_error_count. Do not sum them into an error rate. " +
 	"skills also carry runs, cost_per_run_usd and completion_tokens_per_run, counted only for turns one skill owned. " +
 	"schedules: expected_fires from the current expression against actual_fires, the scheduled turns you started; " +
-	"a schedule changed during the window, or one that sends to several chats, will not line up. " +
+	"expected_fires assumes the current schedule ran all window, so a new or edited schedule shows a shortfall " +
+	"(first_fire shows when it started); one that sends to several chats will not line up either. " +
 	"kv: live keys and keys with no expiry, in total and per namespace (the text before the first ':'). " +
-	"Only your own data is returned. Spend, tools and skills are counted per conversation, so a shared channel " +
-	"conversation that was moved to you from another agent brings that agent's earlier turns in it with it. " +
+	"Only your own data is returned. Spend, tools and skills are counted per conversation: if a shared channel's " +
+	"conversation was moved to you from another agent, its earlier turns count as yours. " +
 	"'unavailable' names any part that could not be computed."
 
 func (s *Server) registerOpsTools() {
