@@ -49,7 +49,7 @@ Health-check failures for **remote** (SSE/HTTP) tool servers only emit a `health
 
 ### Integrity
 
-The audit log is tamper-evident, not tamper-proof. Each event stores a hash of all its fields and of the event before it, so the events form a chain. `denkeeper audit verify` ([CLI reference](/docs/reference/cli/#denkeeper-audit-verify)) walks the chain and names the first event that was changed, removed, added or reordered.
+The audit log is tamper-evident, not tamper-proof. Each event stores a hash of all its fields and of the event before it, so the events form a chain. `denkeeper audit verify` ([CLI reference](/docs/reference/cli/#denkeeper-audit-verify)) walks the chain and reports the first place it breaks. For a changed event, that is the event itself. A removed event cannot be named, since it is gone, so verify names the first event after the gap; added and reordered events show the same way.
 
 - **Retention:** pruning removes the oldest events and writes an `audit`/`prune_checkpoint` event that records what it removed, so the chain still verifies afterwards. The checkpoint counts only when it is itself part of the verified chain.
 - **Lost events:** a `dropped_events` event (above) marks where events never reached the log.
@@ -62,7 +62,7 @@ What the chain does not catch:
 - **A forged checkpoint.** For the same reason, someone can delete the oldest events and write a matching checkpoint. It stays visible, with a cutoff and a count you can compare with `retention_days`.
 - **Edits to older events** without a hash.
 
-To catch the first two, keep a copy of verify's `Head` line somewhere other than this machine and check it later, as described in [Checking a saved Head line](/docs/reference/cli/#checking-a-saved-head-line).
+To catch the first two, keep a copy of verify's `Head` line somewhere other than this machine and check it later, as described in [Checking a saved Head line](/docs/reference/cli/#checking-a-saved-head-line). It covers events only up to the saved one: events written after it, then removed, need a later saved line to catch.
 
 {{< callout context="caution" >}}
 Do not run an older denkeeper against an upgraded `audit.db`. It writes events with no hash, which breaks the chain at the first of them: verify reports that event as `unhashed_row` and leaves every later event unchecked, until retention removes the chained events written before them. After that, the unhashed events show as not covered and age out in turn.

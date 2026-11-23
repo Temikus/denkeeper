@@ -24,6 +24,7 @@ type chainRow struct {
 	Timestamp, Category, Action, Agent, Summary, Detail string
 	Status                                              string
 	DurationMs                                          int64
+	DurationNull                                        bool // stored duration_ms is NULL
 	Source, ConversationID, PrevHash                    string
 }
 
@@ -32,9 +33,15 @@ type chainRow struct {
 // shift. Timestamp is the exact stored text, never a re-formatted time.
 func chainHash(r chainRow) string {
 	h := sha256.New()
+	duration := strconv.FormatInt(r.DurationMs, 10)
+	if r.DurationNull {
+		// Empty, which no integer formats to, so NULL differs from 0 and
+		// every non-NULL row hashes as before. Inserts never write NULL.
+		duration = ""
+	}
 	fields := [...]string{
 		chainTag, strconv.FormatInt(r.ID, 10), r.Timestamp, r.Category, r.Action, r.Agent,
-		r.Summary, r.Detail, r.Status, strconv.FormatInt(r.DurationMs, 10), r.Source,
+		r.Summary, r.Detail, r.Status, duration, r.Source,
 		r.ConversationID, r.PrevHash,
 	}
 	var n [8]byte
@@ -189,18 +196,20 @@ func loadCheckpoints(ctx context.Context, tx *sqlx.Tx) (map[string]checkpointRef
 
 func walkChain(ctx context.Context, tx *sqlx.Tx, rep *ChainReport, starts map[string]checkpointRef) error {
 	rows, err := tx.QueryContext(ctx, `SELECT id, timestamp, category, action, agent, summary, detail, status,
-		COALESCE(duration_ms, 0), source, conversation_id, prev_hash, hash FROM audit_events ORDER BY id`)
+		duration_ms, source, conversation_id, prev_hash, hash FROM audit_events ORDER BY id`)
 	if err != nil {
 		return fmt.Errorf("reading audit events: %w", err)
 	}
 	w := &chainWalker{rep: rep, starts: starts}
 	for rows.Next() {
 		var r storedRow
+		var duration sql.NullInt64
 		if err := rows.Scan(&r.ID, &r.Timestamp, &r.Category, &r.Action, &r.Agent, &r.Summary, &r.Detail,
-			&r.Status, &r.DurationMs, &r.Source, &r.ConversationID, &r.PrevHash, &r.Hash); err != nil {
+			&r.Status, &duration, &r.Source, &r.ConversationID, &r.PrevHash, &r.Hash); err != nil {
 			_ = rows.Close()
 			return fmt.Errorf("scanning audit event: %w", err)
 		}
+		r.DurationMs, r.DurationNull = duration.Int64, !duration.Valid
 		if rep.Break = w.step(r); rep.Break != nil {
 			break
 		}

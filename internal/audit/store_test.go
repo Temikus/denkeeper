@@ -606,7 +606,9 @@ func checkpoints(t *testing.T, s *SQLiteStore) []checkpointDetail {
 				t.Fatalf("checkpoint detail %q lacks %s", d, k)
 			}
 		}
-		_ = json.Unmarshal([]byte(d), &out[i])
+		if err := json.Unmarshal([]byte(d), &out[i]); err != nil {
+			t.Fatalf("checkpoint detail %q has invalid field types: %v", d, err)
+		}
 	}
 	return out
 }

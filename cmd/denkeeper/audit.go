@@ -55,7 +55,7 @@ func newAuditCmd() *cobra.Command {
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runAuditVerify(cmd.Context(), os.Stdout, os.Stderr, cfgFile)
+			return runAuditVerify(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), cfgFile)
 		},
 	}
 	auditCmd.AddCommand(verifyCmd)

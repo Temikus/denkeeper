@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -22,11 +21,10 @@ type BufferedEmitter struct {
 	flushReq chan chan struct{} // Flush() sends a signal; flushLoop acks when done
 
 	// Events lost since the last dropped_events record: refused by a full
-	// channel, or in a batch whose InsertBatch failed. firstLoss is the unix
-	// nanos of the first of them, 0 when none.
-	dropped     atomic.Int64
-	writeFailed atomic.Int64
-	firstLoss   atomic.Int64
+	// channel, or in a batch whose InsertBatch failed. One lock covers the
+	// counts and the first-loss time so a record never splits them.
+	lossMu sync.Mutex
+	loss   lossCounts
 }
 
 // NewBufferedEmitter creates a buffered emitter with the given buffer capacity.
@@ -58,8 +56,7 @@ func (e *BufferedEmitter) Emit(_ context.Context, event Event) {
 	select {
 	case e.ch <- event:
 	default:
-		e.noteLoss(time.Now())
-		e.dropped.Add(1)
+		e.addLoss(lossCounts{dropped: 1, since: time.Now().UTC()})
 		e.logger.Warn("audit buffer full, dropping event",
 			"category", event.Category, "action", event.Action)
 	}
@@ -151,10 +148,9 @@ func (e *BufferedEmitter) flush(ctx context.Context, batch []Event, drained bool
 	own := len(batch)
 	if taken != nil {
 		own--
-		e.restoreLoss(*taken)
+		e.addLoss(*taken)
 	}
-	e.noteLoss(time.Now())
-	e.writeFailed.Add(int64(own))
+	e.addLoss(lossCounts{writeFailed: int64(own), since: time.Now().UTC()})
 	e.logger.Error("failed to flush audit events", "count", own, "error", err)
 }
 
@@ -172,42 +168,28 @@ type lossDetail struct {
 	Until       string `json:"until"`
 }
 
-func (e *BufferedEmitter) noteLoss(at time.Time) {
-	e.firstLoss.CompareAndSwap(0, at.UnixNano())
+// addLoss adds c to the pending losses, keeping the earliest first-loss time.
+// It also puts back counts a failed flush had taken.
+func (e *BufferedEmitter) addLoss(c lossCounts) {
+	e.lossMu.Lock()
+	defer e.lossMu.Unlock()
+	e.loss.dropped += c.dropped
+	e.loss.writeFailed += c.writeFailed
+	if !c.since.IsZero() && (e.loss.since.IsZero() || c.since.Before(e.loss.since)) {
+		e.loss.since = c.since
+	}
 }
 
+// takeLoss returns and clears the pending losses; false when there are none.
 func (e *BufferedEmitter) takeLoss() (lossCounts, bool) {
-	c := lossCounts{dropped: e.dropped.Swap(0), writeFailed: e.writeFailed.Swap(0)}
-	since := e.firstLoss.Swap(0)
-	if c.dropped == 0 && c.writeFailed == 0 {
-		if since != 0 {
-			e.firstLoss.CompareAndSwap(0, since)
-		}
-		return c, false
+	e.lossMu.Lock()
+	defer e.lossMu.Unlock()
+	if e.loss.dropped == 0 && e.loss.writeFailed == 0 {
+		return lossCounts{}, false
 	}
-	if since != 0 {
-		c.since = time.Unix(0, since).UTC()
-	}
+	c := e.loss
+	e.loss = lossCounts{}
 	return c, true
-}
-
-// restoreLoss puts taken counts back, keeping the earliest first-loss time.
-func (e *BufferedEmitter) restoreLoss(c lossCounts) {
-	e.dropped.Add(c.dropped)
-	e.writeFailed.Add(c.writeFailed)
-	if c.since.IsZero() {
-		return
-	}
-	since := c.since.UnixNano()
-	for {
-		cur := e.firstLoss.Load()
-		if cur != 0 && cur <= since {
-			return
-		}
-		if e.firstLoss.CompareAndSwap(cur, since) {
-			return
-		}
-	}
 }
 
 func (e *BufferedEmitter) lossRecord(c lossCounts) Event {

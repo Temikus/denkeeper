@@ -244,7 +244,7 @@ Chain start: event 1 is the first chained event.
 Head: id 48211 hash 9f2c…
 ```
 
-A broken one (older events were pruned), which names the first event that fails:
+A broken one (an event was changed after it was written), which names the first event that fails. Its chain starts at id 16342 because retention pruned the events before it, which is normal:
 
 ```
 Audit log: /home/me/.denkeeper/data/audit.db
@@ -269,7 +269,7 @@ Exit code `1` covers both a broken chain and a command that could not run. To te
 
 An empty log also exits `0`. If the log has ever had events, an empty table means it was emptied outside denkeeper.
 
-What the chain cannot catch, as the [Observability](/docs/concepts/observability/#integrity) page explains: removing the newest events, a full rewrite of the file with recomputed hashes, and a forged prune checkpoint. A saved `Head` line covers the first two.
+What the chain cannot catch, as the [Observability](/docs/concepts/observability/#integrity) page explains: removing the newest events, a full rewrite of the file with recomputed hashes, and a forged prune checkpoint. A saved `Head` line covers the first two, but only for events up to the saved one: events written after it need a later saved line.
 
 #### Checking a saved Head line
 

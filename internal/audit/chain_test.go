@@ -259,7 +259,8 @@ func TestVerifyChain_NonUTCTimestamp(t *testing.T) {
 	requireIntact(t, verifyChain(t, s))
 }
 
-func TestVerifyChain_NullDurationHashesAsZero(t *testing.T) {
+// Inserts never write NULL, so a NULL duration_ms is an edit, even from 0.
+func TestVerifyChain_NullDurationIsHashMismatch(t *testing.T) {
 	s := newChainStore(t)
 	e := chainEvent(1)
 	e.DurationMs = 0
@@ -267,7 +268,16 @@ func TestVerifyChain_NullDurationHashesAsZero(t *testing.T) {
 		t.Fatal(err)
 	}
 	rawExec(t, s, `UPDATE audit_events SET duration_ms = NULL WHERE id = 1`)
-	requireIntact(t, verifyChain(t, s))
+	requireBreak(t, verifyChain(t, s), 1, BreakHashMismatch)
+}
+
+func TestChainHash_NullDurationDiffersFromZero(t *testing.T) {
+	r := chainRow{ID: 1, Timestamp: "t", DurationMs: 0}
+	null := r
+	null.DurationNull = true
+	if chainHash(r) == chainHash(null) {
+		t.Fatal("a NULL duration_ms hashes the same as 0")
+	}
 }
 
 // Removing the newest rows is a documented limit: nothing later disagrees.
