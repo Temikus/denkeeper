@@ -118,7 +118,7 @@ func TestParseFile_YAMLRuleInBodyStaysInBody(t *testing.T) {
 func TestParseFile_YAMLDelimiterErrors(t *testing.T) {
 	parseErr(t, "---\nname: n\nbody", "missing closing --- delimiter")
 	parseErr(t, "name: n\nbody", "missing opening frontmatter delimiter (+++ or ---)")
-	parseErr(t, "---\n- a\n- b\n---\nbody", "frontmatter must be a YAML mapping")
+	parseErr(t, "---\n- a\n- b\n---\nbody", "frontmatter must be YAML key: value pairs")
 }
 
 func TestParseFile_YAMLDuplicateKeys(t *testing.T) {
@@ -141,6 +141,28 @@ func TestParseFile_YAMLAnchorsAndAliasesRejected(t *testing.T) {
 	if d := time.Since(start); d > time.Second {
 		t.Errorf("alias bomb took %v to reject", d)
 	}
+}
+
+// Refusals name the line in the file, not in the frontmatter block: the
+// opening delimiter, blank lines after it and leading blank lines count.
+func TestParseFile_YAMLRefusalsNameTheFileLine(t *testing.T) {
+	parseErr(t, "\n\n---\n\nname: a\nname: b\n---\nbody", `duplicate frontmatter key "name" (line 6)`)
+	parseErr(t, "---\nname: n\nbase: &b {x: 1}\n---\nbody", "(line 3)")
+	parseErr(t, "---\n\nname: good\n<<: {name: evil}\n---\nbody", "(line 4)")
+}
+
+// An explicit tag can change what a key decodes to: !!binary turns base64
+// text into "../evil".
+func TestParseFile_YAMLTagsRejected(t *testing.T) {
+	parseErr(t, "---\nname: !!binary Li4vZXZpbA==\n---\nbody", "YAML tags are not supported in frontmatter (line 2)")
+	parseErr(t, "---\nname: n\ndescription: !custom text\n---\nbody", "YAML tags are not supported")
+	parseErr(t, "---\nname: n\nmetadata: !!map {a: b}\n---\nbody", "YAML tags are not supported")
+}
+
+func TestParseFile_YAMLRefusalWording(t *testing.T) {
+	parseErr(t, "---\nname: &n demo\n---\nb", "; write the value out in full")
+	parseErr(t, "---\nname: n\n<<: {a: b}\n---\nb", "; write the keys out in full")
+	parseErr(t, "---\njust text\n---\nb", "frontmatter must be YAML key: value pairs")
 }
 
 func TestParseFile_YAMLMergeKeyRejected(t *testing.T) {

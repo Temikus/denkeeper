@@ -95,26 +95,35 @@ func (f Fields) value(key string) any {
 
 // --- Splitting ---
 
-// splitFrontmatter finds the dialect, the raw block between the delimiters
-// (leading and trailing CR/LF removed, nothing else) and the trimmed body.
-func splitFrontmatter(path, text string) (Dialect, string, string, error) {
+// splitResult is a skill file cut at its frontmatter delimiters. Block is the
+// raw text between them (leading and trailing CR/LF removed, nothing else);
+// blockStart is its byte offset in the text, for file line numbers.
+type splitResult struct {
+	dialect    Dialect
+	block      string
+	body       string
+	blockStart int
+}
+
+// splitFrontmatter finds the dialect, the block and the trimmed body.
+func splitFrontmatter(path, text string) (splitResult, error) {
 	if strings.HasPrefix(text, "+++") {
 		rest := text[3:]
 		idx := strings.Index(rest, "+++")
 		if idx == -1 {
-			return "", "", "", fmt.Errorf("skill %q: missing closing +++ delimiter", path)
+			return splitResult{}, fmt.Errorf("skill %q: missing closing +++ delimiter", path)
 		}
-		return DialectTOML, strings.Trim(rest[:idx], "\r\n"), strings.TrimSpace(rest[idx+3:]), nil
+		return splitResult{dialect: DialectTOML, block: strings.Trim(rest[:idx], "\r\n"), body: strings.TrimSpace(rest[idx+3:])}, nil
 	}
 	firstLine, rest, _ := strings.Cut(text, "\n")
 	if !isYAMLDelimiter(firstLine) {
-		return "", "", "", fmt.Errorf("skill %q: missing opening frontmatter delimiter (+++ or ---)", path)
+		return splitResult{}, fmt.Errorf("skill %q: missing opening frontmatter delimiter (+++ or ---)", path)
 	}
-	block, body, ok := splitYAML(rest)
+	block, body, lead, ok := splitYAML(rest)
 	if !ok {
-		return "", "", "", fmt.Errorf("skill %q: missing closing --- delimiter", path)
+		return splitResult{}, fmt.Errorf("skill %q: missing closing --- delimiter", path)
 	}
-	return DialectYAML, block, body, nil
+	return splitResult{dialect: DialectYAML, block: block, body: body, blockStart: len(firstLine) + 1 + lead}, nil
 }
 
 func isYAMLDelimiter(line string) bool {
@@ -122,20 +131,23 @@ func isYAMLDelimiter(line string) bool {
 }
 
 // splitYAML ends the block at the first line that is exactly ---. Later ---
-// lines belong to the body, so a markdown rule there is safe.
-func splitYAML(rest string) (block, body string, ok bool) {
+// lines belong to the body, so a markdown rule there is safe. lead is how
+// many CR/LF bytes were trimmed from the front of the block.
+func splitYAML(rest string) (block, body string, lead int, ok bool) {
 	pos := 0
 	for pos <= len(rest) {
 		line, after, more := strings.Cut(rest[pos:], "\n")
 		if isYAMLDelimiter(line) {
-			return strings.Trim(rest[:pos], "\r\n"), strings.TrimSpace(after), true
+			raw := rest[:pos]
+			lead = len(raw) - len(strings.TrimLeft(raw, "\r\n"))
+			return strings.Trim(raw, "\r\n"), strings.TrimSpace(after), lead, true
 		}
 		if !more {
-			return "", "", false
+			return "", "", 0, false
 		}
 		pos += len(line) + 1
 	}
-	return "", "", false
+	return "", "", 0, false
 }
 
 // --- Decoding ---
@@ -152,7 +164,7 @@ func decodeTOML(path, block string, fm *frontmatter) error {
 func parseYAMLMapping(block string) (top *yaml.Node, doc *yaml.Node, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = fmt.Errorf("yaml parser panic: %v", r)
+			err = fmt.Errorf("could not parse the YAML frontmatter: %v", r)
 		}
 	}()
 	doc = &yaml.Node{}
@@ -170,9 +182,11 @@ func parseYAMLMapping(block string) (top *yaml.Node, doc *yaml.Node, err error) 
 	return top, doc, nil
 }
 
-var errNotMapping = fmt.Errorf("frontmatter must be a YAML mapping")
+var errNotMapping = fmt.Errorf("frontmatter must be YAML key: value pairs")
 
-func decodeYAML(path, block string, fm *frontmatter) error {
+// decodeYAML decodes block. lineBase is the file line of the block's first
+// line, so refusals name the line a person sees in the file.
+func decodeYAML(path, block string, lineBase int, fm *frontmatter) error {
 	top, _, err := parseYAMLMapping(block)
 	if err == errNotMapping {
 		return fmt.Errorf("skill %q: %w", path, err)
@@ -180,44 +194,67 @@ func decodeYAML(path, block string, fm *frontmatter) error {
 	if err != nil {
 		return fmt.Errorf("skill %q: parsing frontmatter: %w", path, err)
 	}
-	if err := checkYAMLTree(path, top); err != nil {
+	if err := checkYAMLTree(path, top, lineBase); err != nil {
 		return err
 	}
 	if err := checkYAMLIntegers(path, top); err != nil {
 		return err
 	}
-	if err := top.Decode(fm); err != nil {
+	if err := decodeYAMLNode(top, fm); err != nil {
 		return fmt.Errorf("skill %q: parsing frontmatter: %w", path, err)
 	}
 	return nil
 }
 
+// decodeYAMLNode runs the struct decode under recover, like the parse.
+func decodeYAMLNode(top *yaml.Node, fm *frontmatter) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("could not parse the YAML frontmatter: %v", r)
+		}
+	}()
+	return top.Decode(fm)
+}
+
 // checkYAMLTree walks the whole tree before any value is decoded. Anchors and
 // aliases are refused (no alias is ever expanded, so a bomb costs nothing),
-// as are merge keys and a repeated key in any mapping: yaml.v3 accepts both
-// silently when decoding into a Node.
-func checkYAMLTree(path string, n *yaml.Node) error {
+// as are explicit tags (!!binary turns base64 into any string), merge keys
+// and a repeated key in any mapping: yaml.v3 accepts the last two silently
+// when decoding into a Node. Lines are file lines: node line + lineBase - 1.
+func checkYAMLTree(path string, n *yaml.Node, lineBase int) error {
+	line := n.Line + lineBase - 1
 	if n.Kind == yaml.AliasNode || n.Anchor != "" {
-		return fmt.Errorf("skill %q: YAML anchors and aliases are not supported in frontmatter (line %d)", path, n.Line)
+		return fmt.Errorf("skill %q: YAML anchors and aliases are not supported in frontmatter (line %d); write the value out in full", path, line)
+	}
+	if n.Style&yaml.TaggedStyle != 0 {
+		return fmt.Errorf("skill %q: YAML tags are not supported in frontmatter (line %d); write the value without a tag", path, line)
 	}
 	if n.Kind == yaml.MappingNode {
-		seen := make(map[string]bool, len(n.Content)/2)
-		for i := 0; i+1 < len(n.Content); i += 2 {
-			k := n.Content[i]
-			if k.ShortTag() == "!!merge" {
-				return fmt.Errorf("skill %q: YAML merge keys are not supported in frontmatter (line %d)", path, k.Line)
-			}
-			if k.Kind == yaml.ScalarNode {
-				if seen[k.Value] {
-					return fmt.Errorf("skill %q: duplicate frontmatter key %q (line %d)", path, k.Value, k.Line)
-				}
-				seen[k.Value] = true
-			}
+		if err := checkYAMLKeys(path, n, lineBase); err != nil {
+			return err
 		}
 	}
 	for _, c := range n.Content {
-		if err := checkYAMLTree(path, c); err != nil {
+		if err := checkYAMLTree(path, c, lineBase); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func checkYAMLKeys(path string, m *yaml.Node, lineBase int) error {
+	seen := make(map[string]bool, len(m.Content)/2)
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		k := m.Content[i]
+		line := k.Line + lineBase - 1
+		if k.ShortTag() == "!!merge" {
+			return fmt.Errorf("skill %q: YAML merge keys are not supported in frontmatter (line %d); write the keys out in full", path, line)
+		}
+		if k.Kind == yaml.ScalarNode {
+			if seen[k.Value] {
+				return fmt.Errorf("skill %q: duplicate frontmatter key %q (line %d)", path, k.Value, line)
+			}
+			seen[k.Value] = true
 		}
 	}
 	return nil
@@ -384,7 +421,7 @@ func stripKnownTOML(m map[string]any) {
 func rewriteYAML(raw string, old, f Fields) (out string, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = fmt.Errorf("skill: rewriting frontmatter: yaml panic: %v", r)
+			err = fmt.Errorf("skill: rewriting frontmatter: could not parse the YAML frontmatter: %v", r)
 		}
 	}()
 	top, doc, err := parseYAMLMapping(raw)

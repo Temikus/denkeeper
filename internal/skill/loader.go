@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 // SkillRequires lists optional capabilities a skill depends on.
@@ -77,28 +78,33 @@ type frontmatter struct {
 // Returns an error if the frontmatter delimiters are malformed,
 // the frontmatter is invalid, or the name field is missing.
 func ParseFile(path string, content []byte) (*Skill, error) {
-	text := strings.TrimSpace(string(content))
+	raw := string(content)
+	text := strings.TrimSpace(raw)
 
-	dialect, block, body, err := splitFrontmatter(path, text)
+	sp, err := splitFrontmatter(path, text)
 	if err != nil {
 		return nil, err
 	}
 
 	var fm frontmatter
-	if dialect == DialectYAML {
-		err = decodeYAML(path, block, &fm)
+	if sp.dialect == DialectYAML {
+		// File line of the block's first line: whitespace TrimSpace removed
+		// from the front, the opening delimiter, and blank lines after it.
+		leading := raw[:len(raw)-len(strings.TrimLeftFunc(raw, unicode.IsSpace))]
+		lineBase := 1 + strings.Count(leading, "\n") + strings.Count(text[:sp.blockStart], "\n")
+		err = decodeYAML(path, sp.block, lineBase, &fm)
 	} else {
-		err = decodeTOML(path, block, &fm)
+		err = decodeTOML(path, sp.block, &fm)
 	}
 	if err != nil {
 		return nil, err
 	}
 
-	s, err := buildSkill(path, fm, body)
+	s, err := buildSkill(path, fm, sp.body)
 	if err != nil {
 		return nil, err
 	}
-	s.Dialect, s.Frontmatter = dialect, block
+	s.Dialect, s.Frontmatter = sp.dialect, sp.block
 	return s, nil
 }
 
