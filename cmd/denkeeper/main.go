@@ -37,6 +37,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/llm/pricing"
 	"github.com/Temikus/denkeeper/internal/mcpserver"
 	"github.com/Temikus/denkeeper/internal/onboarding/chatapp"
+	"github.com/Temikus/denkeeper/internal/opsreport"
 	dkotel "github.com/Temikus/denkeeper/internal/otel"
 	"github.com/Temikus/denkeeper/internal/persona"
 	"github.com/Temikus/denkeeper/internal/plugin"
@@ -289,6 +290,15 @@ func auditReader(st *audit.SQLiteStore) audit.Store {
 		return nil
 	}
 	return st
+}
+
+// opsScheduleSource boxes the scheduler for opsreport.New, which needs a nil
+// interface rather than a nil pointer to leave schedules out.
+func opsScheduleSource(s *scheduler.Scheduler) opsreport.ScheduleSource {
+	if s == nil {
+		return nil
+	}
+	return s
 }
 
 // closeStores closes all persistence stores in reverse order.
@@ -929,6 +939,7 @@ func connectConfigMCP(ctx context.Context, agentName, skillsDir string, e *agent
 		ActiveChannelsForChannel: abc.dispatcher.ActiveChannelsForChannel,
 		Auditor:                  abc.auditor,
 		AuditStore:               abc.auditStore,
+		OpsReport:                opsreport.New(abc.memory, abc.kvStore, opsScheduleSource(abc.sched), abc.auditStore),
 		IsSkillPinned:            buildIsSkillPinned(agentName, abc.memory),
 		BumpSkillView:            buildSkillBump(abc.memory, abc.logger, "view"),
 		BumpSkillPatch:           buildSkillBump(abc.memory, abc.logger, "patch"),
@@ -1521,6 +1532,7 @@ func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc ag
 
 	applySupervisorKnobs(e, ac)
 	e.SetLocation(agentLocation(abc.cfg, ac))
+	e.SetSkillIndex(ac.EffectiveSkillIndex(abc.cfg.Skills.IndexEnabled()))
 	e.SetReplyGuard(replyGuardFrom(abc.cfg))
 	// Nil-check before boxing: a typed-nil *eval.Store in the TraceSink
 	// interface reads as non-nil, which would turn every capture into a nil
@@ -1756,6 +1768,8 @@ func buildReviewerEngine(ctx context.Context, ac config.AgentInstanceConfig, par
 		revLogger,
 	)
 	revEngine.SetLocation(agentLocation(abc.cfg, ac))
+	// The reviewer holds a build-time skill snapshot and no scheduler, so its index would be stale.
+	revEngine.SetSkillIndex(false)
 
 	revCMCP := configmcp.New(reviewerConfigDeps(ac.Name, parent, revEngine.PermissionTier, abc.memory, revLogger))
 	session, err := revCMCP.Connect(ctx)
@@ -2470,6 +2484,7 @@ func buildReloadFunc(path string, cfgHolder *config.Holder, dispatcher *agent.Di
 			reconcileSupervisor(e, ac, dispatcher, logger)
 			applySupervisorKnobs(e, ac)
 			e.SetLocation(agentLocation(cfg, ac))
+			e.SetSkillIndex(ac.EffectiveSkillIndex(cfg.Skills.IndexEnabled()))
 			e.SetReplyGuard(replyGuardFrom(cfg))
 			e.SetTraceCapture(cfg.Eval.Capture, cfg.Eval.TraceBytesCap())
 			warnUnadvertisedAutoApprove(ac.Name, ac.AutoApproveTools, e.ToolNames(), logger)

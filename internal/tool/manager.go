@@ -974,6 +974,7 @@ var builtinReadOnlyTools = map[string]bool{
 	"get_cost_summary":     true,
 	"kv_get":               true,
 	"kv_list":              true,
+	"ops_report":           true,
 	"task_get":             true,
 	"task_list":            true,
 	"persona_get":          true,

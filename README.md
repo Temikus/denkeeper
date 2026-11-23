@@ -286,7 +286,7 @@ When triggered, compile a briefing with:
 3. Any pending reminders
 ```
 
-Place skill files in `~/.denkeeper/skills/` (configurable via `[agent] skills_dir`). Subdirectories with a `SKILL.md` file are also supported. Skills with `triggers` are only injected when matched; skills without triggers are always included. A `schedule:<name>` trigger added at runtime must name an existing `[[schedules]]` entry; triggers a skill already carries are exempt.
+Place skill files in `~/.denkeeper/skills/` (configurable via `[agent] skills_dir`). Subdirectories with a `SKILL.md` file are also supported. Skills with `triggers` are only injected when matched; skills without triggers are always included. Each turn's prompt also lists every skill's name and triggers, plus the first line of its description for skills that are not always on, so the agent knows about skills a message did not trigger. The list is capped at 8,000 bytes: past that, descriptions and then entries that do not fit are left out and the agent is pointed to `skill_list`. Set `[skills] index = false` to turn it off. A `schedule:<name>` trigger added at runtime must name an existing `[[schedules]]` entry; triggers a skill already carries are exempt.
 
 Agent-specific skills in `<persona_dir>/skills/` override global skills of the same name.
 
@@ -621,7 +621,7 @@ Cursor (`.cursor/mcp.json`):
 
 Other MCP clients that support Streamable HTTP or SSE transports can connect to `http://<host>:8080/api/v1/mcp` with a `Bearer` token in the `Authorization` header.
 
-The API key must have scopes matching the tools you want to use (e.g. `chat`, `agents:read`, `sessions:read`, `skills:read`, `schedules:read`). Available MCP tools: `chat`, `agent_list`, `agent_info`, `agent_update`, `persona_get`, `persona_update`, `session_list`, `session_messages`, `session_search`, `session_clear`, `session_compact`, `skill_list`, `skill_get`, `skill_create`, `skill_update`, `skill_delete`, `skill_revert`, `schedule_list`, `schedule_create`, `schedule_update`, `schedule_delete`, `channel_list`, `approval_list`, `approval_resolve`, `tool_list`, `tool_health`, `tool_restart`, `kv_get`, `kv_set`, `kv_list`, `kv_delete`, `cost_summary`, `telemetry_summary`, `panic`, `resume`, `panic_status`.
+The API key must have scopes matching the tools you want to use (e.g. `chat`, `agents:read`, `sessions:read`, `skills:read`, `schedules:read`). Available MCP tools: `chat`, `agent_list`, `agent_info`, `agent_update`, `persona_get`, `persona_update`, `session_list`, `session_messages`, `session_search`, `session_clear`, `session_compact`, `skill_list`, `skill_get`, `skill_create`, `skill_update`, `skill_delete`, `skill_revert`, `schedule_list`, `schedule_create`, `schedule_update`, `schedule_delete`, `channel_list`, `approval_list`, `approval_resolve`, `tool_list`, `tool_health`, `tool_restart`, `kv_get`, `kv_set`, `kv_list`, `kv_delete`, `cost_summary`, `telemetry_summary`, `ops_report`, `panic`, `resume`, `panic_status`.
 
 ## Development
 
