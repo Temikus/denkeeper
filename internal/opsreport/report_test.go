@@ -179,7 +179,8 @@ func TestBuild_Fixture(t *testing.T) {
 	s.addTurn(t, turn{agent: "pamela", conv: "c3", cost: 0.2, backdate: 8 * 24 * time.Hour})
 	s.addSchedule(t, "daily", "heartbeat", "pamela", "@every 24h", true)
 	s.addSchedule(t, "paused", "heartbeat", "pamela", "0 8 * * *", false)
-	first, last := s.now.Add(-2*time.Hour), s.now.Add(-time.Hour)
+	// Whole seconds: the audit query reports fire times to the millisecond.
+	first, last := s.now.Add(-2*time.Hour).Truncate(time.Second), s.now.Add(-time.Hour).Truncate(time.Second)
 	s.addTrigger(t, "pamela", "daily", first)
 	s.addTrigger(t, "pamela", "daily", last)
 	s.addKey(t, "pamela", "log:a", 0)
@@ -281,6 +282,21 @@ func TestBuild_NoChangePctWithoutPreviousSpend(t *testing.T) {
 	}
 	if rep.Spend.ChangeUSD != 0.5 {
 		t.Fatalf("change_usd = %v", rep.Spend.ChangeUSD)
+	}
+}
+
+// A previous spend that rounds to $0 reads as 0, so it gets no percentage
+// either: an extreme change_pct beside a zero baseline is noise.
+func TestBuild_NoChangePctWhenPreviousSpendRoundsToZero(t *testing.T) {
+	s := newStores(t)
+	s.addTurn(t, turn{agent: "pamela", conv: "c1", cost: 0.5})
+	s.addTurn(t, turn{agent: "pamela", conv: "c0", cost: 1e-8, backdate: 10 * 24 * time.Hour})
+	rep := s.build(t, "pamela", 7)
+	if rep.Spend.PreviousTurns != 1 || rep.Spend.PreviousCostUSD != 0 {
+		t.Fatalf("previous = %d turns, $%v; want 1 turn reading $0", rep.Spend.PreviousTurns, rep.Spend.PreviousCostUSD)
+	}
+	if rep.Spend.ChangePct != nil {
+		t.Fatalf("change_pct = %v, want null beside a $0 baseline", *rep.Spend.ChangePct)
 	}
 }
 

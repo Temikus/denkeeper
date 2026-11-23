@@ -211,7 +211,8 @@ func (r *Reporter) spend(ctx context.Context, agentName string, w Window) (Spend
 		PreviousCostUSD: usd(prev.CostUSD), PreviousTurns: prev.Turns,
 		ChangeUSD: usd(cur.CostUSD - prev.CostUSD),
 	}
-	if prev.CostUSD > 0 {
+	// Gate on the rounded figure, so a baseline that reads $0 gets no percentage.
+	if s.PreviousCostUSD > 0 {
 		pct := round(100*(cur.CostUSD-prev.CostUSD)/prev.CostUSD, 1)
 		s.ChangePct = &pct
 	}

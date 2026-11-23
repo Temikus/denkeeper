@@ -131,13 +131,21 @@ func TestOpsReport_OnlyTheNamedAgentsNumbers(t *testing.T) {
 
 func TestOpsReport_Days(t *testing.T) {
 	s, _ := opsServer(t, true)
-	if _, rep := callOps(t, s, auditReadCtx(), opsReportInput{Agent: "test-agent"}); rep.Window.Days != 7 {
+	res, rep := callOps(t, s, auditReadCtx(), opsReportInput{Agent: "test-agent"})
+	if rep == nil {
+		t.Fatalf("default days: %s", toolResultText(res))
+	}
+	if rep.Window.Days != 7 {
 		t.Errorf("default days = %d, want 7", rep.Window.Days)
 	}
-	if _, rep := callOps(t, s, auditReadCtx(), opsReportInput{Agent: "test-agent", Days: 45}); rep.Window.Days != 30 {
+	res, rep = callOps(t, s, auditReadCtx(), opsReportInput{Agent: "test-agent", Days: 45})
+	if rep == nil {
+		t.Fatalf("days 45: %s", toolResultText(res))
+	}
+	if rep.Window.Days != 30 {
 		t.Errorf("days 45 -> %d, want 30", rep.Window.Days)
 	}
-	res, _ := callOps(t, s, auditReadCtx(), opsReportInput{Agent: "test-agent", Days: -1})
+	res, _ = callOps(t, s, auditReadCtx(), opsReportInput{Agent: "test-agent", Days: -1})
 	requireOpsError(t, res, "invalid days")
 }
 

@@ -247,9 +247,16 @@ func TestOpsSkillUsage_CostFromTheMatchedReply(t *testing.T) {
 	seedOpsTurn(t, store, opsTurn{agent: "pamela", conv: "c1", model: "m", cost: 0.3, completion: 120,
 		skills: []SkillUsageRecord{{SkillName: "brief", MatchType: "command"}}})
 	// A later, unrelated turn in the same conversation.
-	convID, _ := store.GetOrCreateConversation(ctx, "telegram", "c1")
-	_, _ = store.AddMessage(ctx, convID, StoredMessage{Role: "user", Content: "later"})
-	_, _ = store.AddMessage(ctx, convID, StoredMessage{Role: "assistant", Content: "later", Model: "m", Cost: 5, TokensCompletion: 9000})
+	convID, err := store.GetOrCreateConversation(ctx, "telegram", "c1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AddMessage(ctx, convID, StoredMessage{Role: "user", Content: "later"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AddMessage(ctx, convID, StoredMessage{Role: "assistant", Content: "later", Model: "m", Cost: 5, TokensCompletion: 9000}); err != nil {
+		t.Fatal(err)
+	}
 
 	from, to := opsWindow()
 	got, err := store.OpsSkillUsage(ctx, "pamela", from, to)
@@ -258,6 +265,46 @@ func TestOpsSkillUsage_CostFromTheMatchedReply(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].CostUSD != 0.3 || got[0].CompletionTokens != 120 || got[0].Runs != 1 {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+// A skill turn that failed before its reply was stored must not take the
+// next turn's reply and cost.
+func TestOpsSkillUsage_UnansweredTurnTakesNoLaterReply(t *testing.T) {
+	store := opsStore(t)
+	ctx := context.Background()
+	convID, err := store.GetOrCreateConversation(ctx, "telegram", "c1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	userID, err := store.AddMessage(ctx, convID, StoredMessage{Role: "user", Content: "/brief"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AddSkillUsages(ctx, convID, userID, []SkillUsageRecord{{SkillName: "brief", MatchType: "command"}}); err != nil {
+		t.Fatal(err)
+	}
+	// The next turn, with no skill, is answered.
+	if _, err := store.AddMessage(ctx, convID, StoredMessage{Role: "user", Content: "hello"}); err != nil {
+		t.Fatal(err)
+	}
+	reply := StoredMessage{Role: "assistant", Content: "hi", Model: "m", Cost: 5, TokensCompletion: 9000}
+	if _, err := store.AddMessage(ctx, convID, reply); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdateConversationStats(ctx, convID, "pamela", reply, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	from, to := opsWindow()
+	got, err := store.OpsSkillUsage(ctx, "pamela", from, to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range got {
+		if s.SkillName == "brief" && (s.Runs != 0 || s.CostUSD != 0 || s.CompletionTokens != 0) {
+			t.Fatalf("brief took the next turn's reply: %+v", s)
+		}
 	}
 }
 

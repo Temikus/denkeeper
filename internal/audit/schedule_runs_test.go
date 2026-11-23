@@ -84,6 +84,50 @@ func TestScheduledRuns_OnlyThisAgentInsideTheWindow(t *testing.T) {
 	}
 }
 
+// Timestamps are stored as RFC3339Nano, which drops trailing zeros, so as
+// text ".5Z" sorts before "Z". The window must compare instants.
+func TestScheduledRuns_SubSecondBoundaries(t *testing.T) {
+	s := runsStore(t)
+	half := 500 * time.Millisecond
+	insertEvents(t, s,
+		scheduledTrigger("pamela", "heartbeat", runsFrom.Add(half)),
+		scheduledTrigger("pamela", "heartbeat", runsFrom.Add(7*24*time.Hour+half)),
+		scheduledTrigger("pamela", "heartbeat", runsFrom.Add(-half)),
+	)
+	hb := scheduledRuns(t, s, "pamela")["heartbeat"]
+	if hb.Runs != 1 || !hb.First.Equal(runsFrom.Add(half)) {
+		t.Fatalf("heartbeat = %+v, want only the from+500ms run", hb)
+	}
+}
+
+func TestScheduledRuns_FirstAndLastWithinOneSecond(t *testing.T) {
+	s := runsStore(t)
+	at := runsFrom.Add(time.Hour)
+	insertEvents(t, s,
+		scheduledTrigger("pamela", "heartbeat", at.Add(500*time.Millisecond)),
+		scheduledTrigger("pamela", "heartbeat", at),
+	)
+	hb := scheduledRuns(t, s, "pamela")["heartbeat"]
+	if hb.Runs != 2 || !hb.First.Equal(at) || !hb.Last.Equal(at.Add(500*time.Millisecond)) {
+		t.Fatalf("heartbeat = %+v, want first %v and last %v", hb, at, at.Add(500*time.Millisecond))
+	}
+}
+
+// Insert keeps the event's own offset, so the window must not compare text
+// across offsets.
+func TestScheduledRuns_NonUTCTimestamps(t *testing.T) {
+	s := runsStore(t)
+	sydney := time.FixedZone("AEST", 10*60*60)
+	insertEvents(t, s,
+		scheduledTrigger("pamela", "heartbeat", runsFrom.Add(-30*time.Minute).In(sydney)),
+		scheduledTrigger("pamela", "heartbeat", runsFrom.Add(time.Hour).In(sydney)),
+	)
+	hb := scheduledRuns(t, s, "pamela")["heartbeat"]
+	if hb.Runs != 1 || !hb.First.Equal(runsFrom.Add(time.Hour)) {
+		t.Fatalf("heartbeat = %+v, want only the in-window run", hb)
+	}
+}
+
 func TestScheduledRuns_IgnoresUserTriggersAndFireEvents(t *testing.T) {
 	s := runsStore(t)
 	user := scheduledTrigger("pamela", "heartbeat", runsFrom.Add(time.Hour))

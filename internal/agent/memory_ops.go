@@ -29,8 +29,8 @@ type OpsSpend struct {
 }
 
 // OpsSkillUsage is one skill's runs and tool outcomes. Runs, CostUSD and
-// CompletionTokens count only turns the skill owned: it was the scheduled
-// skill, or the only match.
+// CompletionTokens count only answered turns the skill owned: it was the
+// scheduled skill, or the only match.
 type OpsSkillUsage struct {
 	SkillName            string  `db:"skill_name"`
 	Runs                 int     `db:"runs"`
@@ -120,8 +120,10 @@ func (s *SQLiteMemoryStore) OpsSkillUsage(ctx context.Context, agent string, fro
 	}
 	lo, hi := opsBounds(from, to)
 	var runs []OpsSkillUsage
-	// A match owns its turn when it is the scheduled skill or the only match;
-	// the reply is the next assistant row in the conversation.
+	// A match owns its turn when it is the scheduled skill or the only match.
+	// The reply is the next assistant row before the next user row: a turn that
+	// failed before storing its reply has none, so it is not a run and does not
+	// take a later turn's cost.
 	err := s.db.SelectContext(ctx, &runs, `
 		SELECT ms.skill_name, COUNT(*) AS runs,
 		       COALESCE(SUM(r.cost), 0) AS cost, COALESCE(SUM(r.tokens_completion), 0) AS completion_tokens
@@ -130,6 +132,10 @@ func (s *SQLiteMemoryStore) OpsSkillUsage(ctx context.Context, agent string, fro
 		JOIN messages r ON r.id = (
 			SELECT a.id FROM messages a
 			WHERE a.conversation_id = ms.conversation_id AND a.role = 'assistant' AND a.id > ms.message_id
+			  AND NOT EXISTS (
+				SELECT 1 FROM messages u
+				WHERE u.conversation_id = ms.conversation_id AND u.role = 'user'
+				  AND u.id > ms.message_id AND u.id < a.id)
 			ORDER BY a.id LIMIT 1)
 		WHERE cs.agent = ? AND ms.created_at >= ? AND ms.created_at < ?
 		  AND (ms.match_type = 'schedule'
