@@ -2,6 +2,7 @@ package skill_test
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -152,6 +153,31 @@ func TestBuildIndexSection_OversizedEntrySkipped(t *testing.T) {
 	}
 	if !strings.HasSuffix(got, "and 1 more skill is not shown, to keep this list short. Call skill_list before saying a skill does not exist.") {
 		t.Fatalf("trailer does not count the one skipped entry:\n%s", got)
+	}
+}
+
+// A command near the skill-file size limit is skipped before its line is
+// built, so building the index costs far less than the command's size.
+func TestBuildIndexSection_HugeCommandNotRendered(t *testing.T) {
+	const size = 4 << 20
+	skills := []skill.Skill{
+		skilltest.New("aaa", "d", []string{"command:" + strings.Repeat("x", size)}, ""),
+		skilltest.New("bbb", "d", []string{"command:b"}, ""),
+	}
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	got := skill.BuildIndexSection(skills, nil)
+	runtime.ReadMemStats(&after)
+
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > size/2 {
+		t.Errorf("building the index allocated %d bytes for a %d-byte command", allocated, size)
+	}
+	if strings.Contains(got, "- aaa") || !strings.Contains(got, "\n- bbb (/b)") {
+		t.Fatalf("huge entry kept or later entry missing:\n%.300s", got)
+	}
+	if !strings.Contains(got, "and 1 more skill is not shown") {
+		t.Fatalf("trailer does not count the skipped entry:\n%s", got[len(got)-200:])
 	}
 }
 

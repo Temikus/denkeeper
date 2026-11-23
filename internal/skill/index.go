@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -33,8 +34,8 @@ const indexNoDescTrailer = "Descriptions are left out to keep this list short. s
 //
 // The output depends only on its inputs, never on their order, so it is
 // byte-identical between turns (it sits in the prompt-cache prefix). It never
-// exceeds MaxIndexBytes: descriptions are dropped first, then trailing lines.
-// Returns "" for no skills.
+// exceeds MaxIndexBytes: descriptions are dropped first, then lines that do
+// not fit are skipped. Returns "" for no skills.
 func BuildIndexSection(skills []Skill, schedules map[string][]string) string {
 	if len(skills) == 0 {
 		return ""
@@ -42,38 +43,96 @@ func BuildIndexSection(skills []Skill, schedules map[string][]string) string {
 	sorted := slices.Clone(skills)
 	slices.SortStableFunc(sorted, func(a, b Skill) int { return strings.Compare(a.Name, b.Name) })
 
-	full := make([]string, len(sorted))
-	short := make([]string, len(sorted))
-	for i, s := range sorted {
+	// An entry whose minimal line cannot fit is skipped before it is
+	// rendered: a name or command can be as large as the skill file.
+	listed := sorted[:0]
+	skipped := 0
+	for _, s := range sorted {
+		if tooLongForIndex(s, schedules[s.Name]) {
+			skipped++
+			continue
+		}
+		listed = append(listed, s)
+	}
+
+	full := make([]string, len(listed))
+	short := make([]string, len(listed))
+	for i, s := range listed {
 		full[i] = indexLine(s, schedules[s.Name], true)
 		short[i] = indexLine(s, schedules[s.Name], false)
 	}
 
-	if out := renderIndex(full, ""); len(out) <= MaxIndexBytes {
-		return out
+	if skipped == 0 {
+		if out := renderIndex(full, ""); len(out) <= MaxIndexBytes {
+			return out
+		}
+		if out := renderIndex(short, indexNoDescTrailer); len(out) <= MaxIndexBytes {
+			return out
+		}
 	}
-	if out := renderIndex(short, indexNoDescTrailer); len(out) <= MaxIndexBytes {
-		return out
+	return truncatedIndex(short, skipped)
+}
+
+// maxIndexLineBytes is the most a single line can take: the cap less the
+// header and the line's own separator.
+var maxIndexLineBytes = MaxIndexBytes - len(indexHeader) - len("\n\n")
+
+// tooLongForIndex reports whether s's line could not fit even alone. It adds
+// up only parts every line holds (name, and one command or schedule name), so
+// it never skips a line that would have fit.
+func tooLongForIndex(s Skill, scheduleNames []string) bool {
+	fixed := len("- ") + collapsedLen(s.Name) + len(" ()")
+	longest := 0
+	for _, t := range s.ParsedTriggers {
+		if t.Type == TriggerCommand {
+			longest = max(longest, len("/")+collapsedLen(t.Command))
+		}
 	}
-	return truncatedIndex(short)
+	for _, n := range scheduleNames {
+		longest = max(longest, collapsedLen(n))
+	}
+	return fixed+longest > maxIndexLineBytes
+}
+
+// collapsedLen is len(collapse(s)) without building the string.
+func collapsedLen(s string) int {
+	n, fields, inField := 0, 0, false
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		i += size
+		if unicode.IsSpace(r) {
+			inField = false
+			continue
+		}
+		if !inField {
+			fields++
+			inField = true
+		}
+		n += size
+	}
+	if fields > 1 {
+		n += fields - 1
+	}
+	return n
 }
 
 // truncatedIndex keeps, in sort order, each line that still fits in
-// MaxIndexBytes with a trailer naming the dropped count. A line that does not
-// fit is skipped, not a stop, so one oversized entry hides only itself. The
-// trailer is sized for the most lines that could still be dropped.
-func truncatedIndex(lines []string) string {
+// MaxIndexBytes with a trailer naming the dropped count, which includes the
+// skipped entries the caller never rendered. A line that does not fit is
+// skipped, not a stop, so one oversized entry hides only itself. The trailer
+// is sized for the most lines that could still be dropped.
+func truncatedIndex(lines []string, skipped int) string {
 	size := len(indexHeader) + len("\n")
 	kept := make([]string, 0, len(lines))
 	for _, l := range lines {
 		next := size + len("\n") + len(l)
-		if next+len("\n\n")+len(droppedTrailer(len(lines)-len(kept)-1)) > MaxIndexBytes {
+		if next+len("\n\n")+len(droppedTrailer(skipped+len(lines)-len(kept)-1)) > MaxIndexBytes {
 			continue
 		}
 		size = next
 		kept = append(kept, l)
 	}
-	return renderIndex(kept, droppedTrailer(len(lines)-len(kept)))
+	return renderIndex(kept, droppedTrailer(skipped+len(lines)-len(kept)))
 }
 
 func droppedTrailer(n int) string {
