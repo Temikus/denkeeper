@@ -1050,6 +1050,25 @@ func (m *Manager) IsIdempotent(toolName string) bool {
 	return class.declaredReadOnly()
 }
 
+// BuiltinLocalName returns toolName's server-local name when it resolves to an
+// in-process server (config MCP and friends). ok is false for an external
+// server's tool, an ambiguous name, or an unknown one. Callers use it to tell
+// our kv_set from an external server's tool of the same name.
+func (m *Manager) BuiltinLocalName(toolName string) (local string, ok bool) {
+	class, parent, err := m.classify(toolName)
+	if err != nil {
+		// Only a genuine miss goes to the parent; a collision here stays here.
+		if parent != nil && errors.Is(err, ErrToolNotFound) {
+			return parent.BuiltinLocalName(toolName)
+		}
+		return "", false
+	}
+	if !class.inProcess {
+		return "", false
+	}
+	return class.local, true
+}
+
 // IsReadOnly reports whether toolName only reads — the classification the
 // restricted tier's read-only tool grant is checked against. Conservative by
 // construction: a tool nobody classified is not read-only, and neither is an
