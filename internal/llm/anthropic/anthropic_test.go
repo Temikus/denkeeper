@@ -696,6 +696,9 @@ func TestChatCompletion_MaxTokensStopIsLength(t *testing.T) {
 	if resp.FinishReason != "length" {
 		t.Errorf("finish_reason = %q, want length", resp.FinishReason)
 	}
+	if resp.Content != "partial" {
+		t.Errorf("content = %q, want the cut-off text kept", resp.Content)
+	}
 }
 
 // A stream cut off inside a tool_use block keeps the call with its partial

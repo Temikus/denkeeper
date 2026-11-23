@@ -95,4 +95,11 @@ func TestSkillConfigMCP_MaxOutputTokensCreateGetUpdate(t *testing.T) {
 	if got := get("digest").MaxOutputTokens; got != 0 {
 		t.Errorf("after clear: MaxOutputTokens = %d, want 0", got)
 	}
+	var cleared map[string]any
+	if err := json.Unmarshal([]byte(mustCall(t, session, "skill_get", map[string]any{"name": "digest"})), &cleared); err != nil {
+		t.Fatalf("decoding skill_get after clear: %v", err)
+	}
+	if v, ok := cleared["max_output_tokens"]; ok {
+		t.Errorf("skill_get after clear carries max_output_tokens = %v, want the key absent", v)
+	}
 }

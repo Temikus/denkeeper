@@ -357,11 +357,22 @@ func TestRouter_WithMaxOutputTokens_ZeroReturnsReceiver(t *testing.T) {
 	}
 }
 
-func TestRouter_WithMaxOutputTokens_CurrentValueReturnsReceiver(t *testing.T) {
+// Even the current value gets its own counter, so a capped turn never
+// shares the engine's.
+func TestRouter_WithMaxOutputTokens_CurrentValueStillClones(t *testing.T) {
 	r := NewRouter("primary", "m", nil)
 	r.SetMaxOutputTokens(8000)
-	if got := r.WithMaxOutputTokens(8000); got != r {
-		t.Error("WithMaxOutputTokens(current) returned a copy, want the receiver")
+
+	clone := r.WithMaxOutputTokens(8000)
+	if clone == r {
+		t.Fatal("WithMaxOutputTokens(current) returned the receiver, want a distinct clone")
+	}
+	if got := clone.MaxOutputTokens(); got != 8000 {
+		t.Errorf("clone MaxOutputTokens = %d, want 8000", got)
+	}
+	r.SetMaxOutputTokens(9000)
+	if got := clone.MaxOutputTokens(); got != 8000 {
+		t.Errorf("clone MaxOutputTokens after original write = %d, want 8000", got)
 	}
 }
 

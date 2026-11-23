@@ -10539,7 +10539,7 @@
                     "type": "integer"
                 },
                 "wrapup_count": {
-                    "description": "WrapupCount is samples whose loop was cut short by repeated identical\ncalls or by exhausting the round budget — the \"flaily\" signal.",
+                    "description": "WrapupCount is samples whose loop was cut short by repeated identical\ncalls, by exhausting the round budget, or by an output-token cut-off\n(output_limit) — the \"flaily\" signal.",
                     "type": "integer"
                 }
             }

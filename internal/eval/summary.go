@@ -38,7 +38,8 @@ type VariantMetrics struct {
 
 	MeanRounds float64 `json:"mean_rounds"`
 	// WrapupCount is samples whose loop was cut short by repeated identical
-	// calls or by exhausting the round budget — the "flaily" signal.
+	// calls, by exhausting the round budget, or by an output-token cut-off
+	// (output_limit) — the "flaily" signal.
 	WrapupCount     int     `json:"wrapup_count"`
 	MeanCostPerTask float64 `json:"mean_cost_per_task"`
 	MeanLatencyMs   float64 `json:"mean_latency_ms"`

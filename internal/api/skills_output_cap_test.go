@@ -56,12 +56,28 @@ func TestSkillREST_MaxOutputTokensCreateGetUpdate(t *testing.T) {
 	}
 }
 
-func TestSkillREST_NegativeMaxOutputTokensRejected(t *testing.T) {
+func TestSkillREST_CreateNegativeMaxOutputTokensIs400(t *testing.T) {
 	srv := New(testConfig(allScopesKey()), testDepsWithSkillsDir(t), testLogger())
 
 	rec := lintSkillRequest(t, srv, http.MethodPost, "/api/v1/skills/default",
 		`{"name":"digest","body":"Summarise.","max_output_tokens":-1}`)
-	if rec.Code == http.StatusCreated {
-		t.Fatalf("status = %d, want the negative cap refused; body: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSkillREST_UpdateNegativeMaxOutputTokensIs400(t *testing.T) {
+	srv := New(testConfig(allScopesKey()), testDepsWithSkillsDir(t), testLogger())
+	if rec := lintSkillRequest(t, srv, http.MethodPost, "/api/v1/skills/default",
+		`{"name":"digest","version":"1.0.0","body":"Summarise.","max_output_tokens":2048}`); rec.Code != http.StatusCreated {
+		t.Fatalf("create: status = %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	rec := lintSkillRequest(t, srv, http.MethodPut, "/api/v1/skills/default/digest", `{"max_output_tokens":-1}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", rec.Code, rec.Body.String())
+	}
+	if v, ok := getSkillOutputCap(t, srv); !ok || v != 2048 {
+		t.Errorf("after refused update: max_output_tokens = %v (present %v), want 2048 kept", v, ok)
 	}
 }

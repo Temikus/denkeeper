@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -156,6 +157,7 @@ func TestEngine_SkillOutputCap_TwoCommandMatchesDoNotCap(t *testing.T) {
 
 // A round cap of 1 forces the wrap-up: the first round runs, the second
 // completion asks for another call, and the loop stops into CompleteFinal.
+// A real tool is advertised, so "Tools nil" can only mean the wrap-up.
 func TestEngine_SkillOutputCap_HoldsOnSecondRoundAndWrapUp(t *testing.T) {
 	s := nightlyOutputCapSkill(1200)
 	s.MaxToolRounds = 1
@@ -166,11 +168,23 @@ func TestEngine_SkillOutputCap_HoldsOnSecondRoundAndWrapUp(t *testing.T) {
 			FinishReason: "tool_calls",
 		}
 	}
-	reqs := outputCapTurn(t, 8000, []skill.Skill{s}, nightlyMsg("oc-rounds"),
-		toolRound("c1"), toolRound("c2"), stopResponse("Wrapped up."))
+	provider := &capturingSequentialProvider{responses: []*llm.ChatResponse{
+		toolRound("c1"), toolRound("c2"), stopResponse("Wrapped up."),
+	}}
+	e := newExposureEngine(t, newSatisfactionToolManager(t, "tool_a"), []skill.Skill{s}, provider)
+	e.SetMaxOutputTokens(8000)
+	if _, err := e.ChatWithEvents(context.Background(), nightlyMsg("oc-rounds"), nil); err != nil {
+		t.Fatalf("chat: %v", err)
+	}
 
+	reqs := provider.requests
 	if len(reqs) != 3 {
 		t.Fatalf("got %d requests, want 3 (first round, second round, wrap-up)", len(reqs))
+	}
+	for i := range 2 {
+		if got := advertisedTools(t, provider, i); !slices.Equal(got, []string{"tool_a"}) {
+			t.Errorf("request %d advertises %v, want [tool_a]", i+1, got)
+		}
 	}
 	if reqs[2].Tools != nil {
 		t.Errorf("request 3 carries %d tools, want none (the wrap-up)", len(reqs[2].Tools))

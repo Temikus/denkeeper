@@ -346,9 +346,10 @@ func (r *Router) MaxOutputTokens() int { return int(r.maxOutputTokens.Load()) }
 // WithMaxOutputTokens returns a shallow copy of r with its own output cap, for
 // one turn that a skill caps. Unlike WithModel's clones, it does not share the
 // cap's counter: a later SetMaxOutputTokens on r does not reach the copy, and a
-// write to the copy does not reach r. Returns r when n is 0 or already current.
+// write to the copy does not reach r. Returns r only when n is 0; any other
+// value is cloned, even the current one, so the copy never shares r's counter.
 func (r *Router) WithMaxOutputTokens(n int) *Router {
-	if n == 0 || n == r.MaxOutputTokens() {
+	if n == 0 {
 		return r
 	}
 	clone := *r

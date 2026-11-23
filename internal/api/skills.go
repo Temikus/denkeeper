@@ -108,6 +108,10 @@ type skillCreateInput struct {
 	RequiresTools []string `json:"requires_tools"`
 }
 
+// errNegativeSkillOutputCap is checked before the write path, which would
+// also refuse a negative cap but answer 500.
+const errNegativeSkillOutputCap = "max_output_tokens must be >= 0 (0 = no skill cap)"
+
 // skillWriteResponse is the create/update result. Warnings are non-fatal
 // findings from configmcp.LintSkillWrite.
 type skillWriteResponse struct {
@@ -161,6 +165,10 @@ func (s *Server) handleCreateSkill(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.TrimSpace(input.Body) == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "body is required"})
+		return
+	}
+	if input.MaxOutputTokens < 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": errNegativeSkillOutputCap})
 		return
 	}
 	if err := configmcp.ValidateSkillName(input.Name); err != nil {
@@ -265,6 +273,10 @@ func (s *Server) handleUpdateSkill(w http.ResponseWriter, r *http.Request) {
 	var input skillUpdateInput
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+		return
+	}
+	if input.MaxOutputTokens != nil && *input.MaxOutputTokens < 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": errNegativeSkillOutputCap})
 		return
 	}
 
