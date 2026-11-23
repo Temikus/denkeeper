@@ -17,6 +17,10 @@ type deciderReviewsResponse struct {
 	Truncated  bool                 `json:"truncated"` // the scan cap was hit; the oldest reviews are missing
 	Failed     int                  `json:"failed"`    // decider reviews that errored in the window
 	Reviews    []agent.ShadowReview `json:"reviews"`
+	// ReviewedUpTo is the operator's review mark for this decider; null
+	// before the first "Mark all reviewed".
+	ReviewedUpTo *time.Time `json:"reviewed_up_to"`
+	ReviewedBy   string     `json:"reviewed_by,omitempty"`
 }
 
 // handleDeciderReviews godoc
@@ -70,10 +74,20 @@ func (s *Server) handleDeciderReviews(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, deciderReviewsResponse{
+	mark, marked, err := s.deps.AuditStore.ReviewMark(r.Context(), name, decider)
+	if err != nil {
+		s.logger.Error("reading decider review mark", "agent", name, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		return
+	}
+	resp := deciderReviewsResponse{
 		Agent: name, Decider: decider, Supervisor: supervisor,
 		Since: since, Until: until, Truncated: set.Truncated, Failed: set.Failed, Reviews: set.Reviews,
-	})
+	}
+	if marked {
+		resp.ReviewedUpTo, resp.ReviewedBy = &mark.ReviewedUpTo, mark.ReviewedBy
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // reviewedDecider returns the agent's configured supervisor and the decider to

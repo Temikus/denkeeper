@@ -196,6 +196,55 @@ func shadowReviewFrom(ev audit.Event) (ShadowReview, bool) {
 	return r, true
 }
 
+// Verdict is what the decider would decide at these thresholds. It must stay
+// in step with decideSupervisorOutcome: deny first, a missing answer escalates.
+func (r ShadowReview) Verdict(approveAt, denyAt float64) string {
+	if r.MinScore == nil {
+		return string(supervisorEscalate)
+	}
+	deny := r.MinScore
+	if r.MinDenyScore != nil {
+		deny = r.MinDenyScore
+	}
+	switch {
+	case *deny <= denyAt:
+		return string(supervisorDeny)
+	case *r.MinScore >= approveAt:
+		return string(supervisorApprove)
+	}
+	return string(supervisorEscalate)
+}
+
+// UnsafeApproval reports whether the decider would approve a call the
+// supervisor denied or escalated.
+func (r ShadowReview) UnsafeApproval(approveAt, denyAt float64) bool {
+	return r.Verdict(approveAt, denyAt) == string(supervisorApprove) &&
+		(r.Supervisor == string(supervisorDeny) || r.Supervisor == string(supervisorEscalate))
+}
+
+// CountUnsafeApprovals counts the agent's shadow reviews after `after` (the
+// review mark, or zero) that the decider would approve and the supervisor did
+// not. `after` is raised to DefaultShadowReviewWindow ago. Reviews load from
+// shadowPairWindow before it, so a verdict on an earlier call cannot pair with
+// a later identical one.
+func CountUnsafeApprovals(ctx context.Context, store audit.Store, agentName, decider string, after time.Time, approveAt, denyAt float64) (int, error) {
+	now := time.Now().UTC()
+	if floor := now.Add(-DefaultShadowReviewWindow); after.Before(floor) {
+		after = floor
+	}
+	set, err := LoadShadowReviews(ctx, store, agentName, decider, after.Add(-shadowPairWindow), now)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, r := range set.Reviews {
+		if r.Time.After(after) && r.UnsafeApproval(approveAt, denyAt) {
+			n++
+		}
+	}
+	return n, nil
+}
+
 func shadowPairKey(convID, tool, args string) string {
 	return convID + "\x00" + tool + "\x00" + args
 }

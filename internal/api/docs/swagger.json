@@ -359,6 +359,88 @@
                 }
             }
         },
+        "/agents/{name}/decider-reviews/reviewed": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Moves the agent's review mark forward to up_to, the time of the newest review the caller has seen, and records the caller's key or login name. The mark never moves back: an older up_to leaves the stored mark in place, and the response is the stored mark. Reviews at or before the mark no longer count toward the unreviewed badge.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "agents"
+                ],
+                "summary": "Mark an agent's shadow decider reviews as reviewed",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Agent name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Decider (optional) and up_to (RFC3339)",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.markReviewedInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.deciderReviewMarkResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Missing, invalid or future up_to, or no decider named and none set on the agent",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Agent not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Audit not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/agents/{name}/identity": {
             "put": {
                 "security": [
@@ -2536,6 +2618,52 @@
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/decider-reviews/unreviewed": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "For every running agent with a shadow-mode decider, the number of shadow reviews newer than the agent's review mark where the decider would approve at its current thresholds and the supervisor denied or escalated. Agents without a shadow decider are left out; zero is included. Looks back at most 30 days. Counts are reused for up to 60 seconds per agent, and marking an agent reviewed clears its count at once.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "agents"
+                ],
+                "summary": "Count unreviewed unsafe approvals per agent",
+                "responses": {
+                    "200": {
+                        "description": "Agent name to count",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "integer"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Audit not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     }
                 }
@@ -11239,6 +11367,23 @@
                 }
             }
         },
+        "internal_api.deciderReviewMarkResponse": {
+            "type": "object",
+            "properties": {
+                "agent": {
+                    "type": "string"
+                },
+                "decider": {
+                    "type": "string"
+                },
+                "reviewed_by": {
+                    "type": "string"
+                },
+                "reviewed_up_to": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_api.deciderReviewsResponse": {
             "type": "object",
             "properties": {
@@ -11251,6 +11396,13 @@
                 "failed": {
                     "description": "decider reviews that errored in the window",
                     "type": "integer"
+                },
+                "reviewed_by": {
+                    "type": "string"
+                },
+                "reviewed_up_to": {
+                    "description": "ReviewedUpTo is the operator's review mark for this decider; null\nbefore the first \"Mark all reviewed\".",
+                    "type": "string"
                 },
                 "reviews": {
                     "type": "array",
@@ -11882,6 +12034,19 @@
                     "items": {
                         "$ref": "#/definitions/internal_api.providerInfo"
                     }
+                }
+            }
+        },
+        "internal_api.markReviewedInput": {
+            "type": "object",
+            "properties": {
+                "decider": {
+                    "description": "optional: defaults as for the reviews list",
+                    "type": "string"
+                },
+                "up_to": {
+                    "description": "RFC3339; the newest review time the client saw",
+                    "type": "string"
                 }
             }
         },

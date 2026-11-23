@@ -31,6 +31,16 @@ CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_events(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_category ON audit_events(category, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_agent ON audit_events(agent, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_conversation ON audit_events(conversation_id, timestamp DESC);
+-- reviewed_up_to_ns is Unix nanoseconds: RFC3339Nano text does not sort in
+-- time order within a second, and the mark must never move backwards.
+CREATE TABLE IF NOT EXISTS decider_review_marks (
+    agent TEXT NOT NULL,
+    decider TEXT NOT NULL,
+    reviewed_up_to_ns INTEGER NOT NULL,
+    reviewed_by TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (agent, decider)
+);
 `
 
 // SQLiteStore implements Store using SQLite.

@@ -39,6 +39,12 @@ func (s *gateStore) Stats(_ context.Context, _ StatsOpts) (*Stats, error) {
 
 func (s *gateStore) PruneBefore(_ context.Context, _ time.Time) (int, error) { return 0, nil }
 
+func (s *gateStore) ReviewMark(context.Context, string, string) (ReviewMark, bool, error) {
+	return ReviewMark{}, false, nil
+}
+
+func (s *gateStore) SetReviewMark(_ context.Context, m ReviewMark) (ReviewMark, error) { return m, nil }
+
 func (s *gateStore) Close() error { return nil }
 
 // dropCounter counts the "audit buffer full" warning Emit logs per dropped

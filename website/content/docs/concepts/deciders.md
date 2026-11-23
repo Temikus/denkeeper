@@ -3,7 +3,7 @@ title: "Decision Models"
 description: "A cheap, fast classifier that settles routine tool-call approvals, grades eval pairs, and gives agents a decide tool."
 slug: "deciders"
 date: 2026-10-02T00:00:00+00:00
-lastmod: 2026-10-05T00:00:00+00:00
+lastmod: 2026-11-23T00:00:00+00:00
 draft: false
 weight: 47
 toc: true
@@ -109,7 +109,7 @@ The audit event then carries `decision` = `APPROVE`, `DENY` or `ESCALATE`. In ch
 
 Start in shadow. A decider's probabilities are not calibrated to your tools and your requests, so thresholds should come from data:
 
-1. Run in `shadow`, then open the agent's Permission card in the dashboard. Its calibration panel compares the decider's scores with what the supervisor decided on the same calls. Drag the deny and approve thresholds on the chart to see how many calls the decider would settle, and which ones it would get wrong. The same rows are available to an MCP client through the [`decider_reviews`](/docs/guides/mcp-server/) tool.
+1. Run in `shadow`, then open the agent's Permission card in the dashboard. Its calibration panel compares the decider's scores with what the supervisor decided on the same calls. Drag the deny and approve thresholds on the chart to see how many calls the decider would settle, and which ones it would get wrong. The same rows are available to an MCP client through the [`decider_reviews`](/docs/guides/mcp-server/) tool. While the decider runs in shadow, the Agents entry in the navigation shows how many new calls it would have approved that the supervisor denied or escalated. Once you have looked at them, "Mark all reviewed" on the panel clears the count until the next one.
 2. Or run [`denkeeper decide replay`](/docs/reference/cli/#denkeeper-decide-replay) over existing supervisor history to see the agreement at each threshold.
 3. Pick thresholds where the decider's approvals and denials match the supervisor's, then switch that agent to `enforce`.
 

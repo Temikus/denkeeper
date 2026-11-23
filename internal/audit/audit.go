@@ -164,5 +164,21 @@ type Store interface {
 	List(ctx context.Context, opts ListOpts) ([]Event, int, error)
 	Stats(ctx context.Context, opts StatsOpts) (*Stats, error)
 	PruneBefore(ctx context.Context, before time.Time) (int, error)
+	// ReviewMark returns how far an operator has reviewed an agent's shadow
+	// decider reviews. ok is false when they never have.
+	ReviewMark(ctx context.Context, agent, decider string) (mark ReviewMark, ok bool, err error)
+	// SetReviewMark moves the mark forward and returns the stored row. An
+	// older ReviewedUpTo changes nothing: the newer mark comes back as stored.
+	SetReviewMark(ctx context.Context, m ReviewMark) (ReviewMark, error)
 	Close() error
+}
+
+// ReviewMark records that an operator reviewed one agent's shadow decider
+// reviews up to a point in time.
+type ReviewMark struct {
+	Agent        string
+	Decider      string
+	ReviewedUpTo time.Time
+	ReviewedBy   string
+	UpdatedAt    time.Time
 }
