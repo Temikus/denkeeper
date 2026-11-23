@@ -210,6 +210,7 @@ func walkChain(ctx context.Context, tx *sqlx.Tx, rep *ChainReport, starts map[st
 		return fmt.Errorf("reading audit events: %w", err)
 	}
 	_ = rows.Close()
+	w.checkCheckpointStart()
 	if rep.Break == nil {
 		return nil
 	}
@@ -224,8 +225,31 @@ type chainWalker struct {
 	rep      *ChainReport
 	starts   map[string]checkpointRef
 	started  bool
+	first    storedRow // the first hashed row
 	prevID   int64
 	prevHash string
+}
+
+// checkCheckpointStart runs after the walk. A checkpoint vouches for the
+// start only if it is itself in the verified chain (FirstID <= id <= HeadID;
+// it may be the first row). Unhashed rows below such a start are a break
+// too: a prune deletes the oldest ids first, so none can survive one that
+// reached the chain. A break at or before the first row is kept.
+func (w *chainWalker) checkCheckpointStart() {
+	rep := w.rep
+	if rep.Start != ChainStartCheckpoint {
+		return
+	}
+	if rep.Break != nil && rep.Break.ID <= rep.FirstID {
+		return
+	}
+	inChain := rep.Verified > 0 && rep.CheckpointID >= rep.FirstID && rep.CheckpointID <= rep.HeadID
+	if inChain && rep.LegacyRows == 0 {
+		return
+	}
+	rep.Break = newBreak(w.first, BreakMissingStart, "prev_hash", "", w.first.PrevHash)
+	rep.Start, rep.CheckpointID, rep.PrunedThroughID = "", 0, 0
+	rep.Verified, rep.HeadID, rep.HeadHash = 0, 0, ""
 }
 
 func (w *chainWalker) step(r storedRow) *ChainBreak {
@@ -264,7 +288,7 @@ func (w *chainWalker) noteLegacy(id int64) {
 
 // start checks what vouches for the first chained row.
 func (w *chainWalker) start(r storedRow) *ChainBreak {
-	w.rep.FirstID = r.ID
+	w.rep.FirstID, w.first = r.ID, r
 	if r.PrevHash == "" {
 		w.rep.Start = ChainStartGenesis
 		return nil

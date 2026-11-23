@@ -416,5 +416,55 @@ func TestVerifyChain_EditedCheckpointDetail(t *testing.T) {
 	}
 	rawExec(t, s, `UPDATE audit_events SET detail = replace(detail, '"pruned_rows":1', '"pruned_rows":0') WHERE action = ?`, ActionPruneCheckpoint)
 
-	requireBreak(t, verifyChain(t, s), 3, BreakHashMismatch)
+	// The edited checkpoint fails its own hash, so it cannot vouch for the
+	// start: the earliest problem is the unvouched first row.
+	rep := requireBreakAt(t, verifyChain(t, s), 2, BreakMissingStart)
+	if rep.Verified != 0 || rep.Unchecked != 1 {
+		t.Fatalf("report = %+v", rep)
+	}
+}
+
+func requireBreakAt(t *testing.T, rep *ChainReport, id int64, kind string) *ChainReport {
+	t.Helper()
+	requireBreak(t, rep, id, kind)
+	return rep
+}
+
+// A forged checkpoint that is not itself in the chain must not vouch for a
+// deleted prefix.
+func TestVerifyChain_ForgedHiddenCheckpoint(t *testing.T) {
+	s := newChainStore(t)
+	insertChained(t, s, 1, 4)
+	_, hash2 := storedHash(t, s, 2)
+	rawExec(t, s, `DELETE FROM audit_events WHERE id <= 2`)
+	detail := fmt.Sprintf(`{"pruned_rows":2,"pruned_through_id":2,"pruned_through_hash":%q,"cutoff":"x"}`, hash2)
+	rawExec(t, s, `INSERT INTO audit_events (id, timestamp, category, action, summary, detail) VALUES (1, ?, ?, ?, 'forged', ?)`,
+		chainBase.Format(time.RFC3339Nano), CategoryAudit, ActionPruneCheckpoint, detail)
+
+	rep := requireBreakAt(t, verifyChain(t, s), 3, BreakMissingStart)
+	if rep.Verified != 0 || rep.Unchecked != 1 || rep.Start == ChainStartCheckpoint {
+		t.Fatalf("report = %+v", rep)
+	}
+}
+
+// A real prune deletes the oldest ids first, so unhashed rows below a chain
+// that starts at a checkpoint were put there afterwards.
+func TestVerifyChain_LegacyRowsWithCheckpointStart(t *testing.T) {
+	s := newChainStore(t)
+	old := chainEvent(1)
+	old.Timestamp = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := s.InsertBatch(context.Background(), []Event{old, chainEvent(2)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.PruneBefore(context.Background(), time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	requireIntact(t, verifyChain(t, s))
+
+	rawExec(t, s, `INSERT INTO audit_events (id, timestamp, category, action, summary) VALUES (1, ?, 'tool_call', 'execute', 'planted')`,
+		chainBase.Format(time.RFC3339Nano))
+	rep := requireBreakAt(t, verifyChain(t, s), 2, BreakMissingStart)
+	if rep.LegacyRows != 1 {
+		t.Fatalf("report = %+v", rep)
+	}
 }
