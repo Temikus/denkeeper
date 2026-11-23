@@ -22,6 +22,16 @@ import (
 	"github.com/Temikus/denkeeper/internal/netguard"
 )
 
+// ErrDisallowed marks a URL the site's robots.txt or agents.txt disallows. It
+// is not netguard.ErrBlocked: the site refused, not the operator's policy.
+var ErrDisallowed = errors.New("disallowed by robots.txt or agents.txt")
+
+// disallowedError keeps the text the model saw before ErrDisallowed existed.
+type disallowedError struct{ file, url string }
+
+func (e *disallowedError) Error() string { return "blocked by " + e.file + ": " + e.url }
+func (e *disallowedError) Unwrap() error { return ErrDisallowed }
+
 // FetchResult holds the fetched and converted content from a URL.
 type FetchResult struct {
 	URL          string `json:"url"`
@@ -126,7 +136,7 @@ func (f *DefaultFetcher) checkCompliance(ctx context.Context, parsed *url.URL) e
 		} else if err != nil {
 			f.opts.Logger.Warn("robots.txt check failed, proceeding", "url", rawURL, "error", err)
 		} else if blocked {
-			return fmt.Errorf("blocked by robots.txt: %s", rawURL)
+			return &disallowedError{file: "robots.txt", url: rawURL}
 		}
 	}
 	if f.opts.RespectAgentsTxt {
@@ -135,7 +145,7 @@ func (f *DefaultFetcher) checkCompliance(ctx context.Context, parsed *url.URL) e
 		} else if err != nil {
 			f.opts.Logger.Warn("agents.txt check failed, proceeding", "url", rawURL, "error", err)
 		} else if blocked {
-			return fmt.Errorf("blocked by agents.txt: %s", rawURL)
+			return &disallowedError{file: "agents.txt", url: rawURL}
 		}
 	}
 	return nil

@@ -94,7 +94,7 @@ func newEffector(t *testing.T, store skilleffect.Store) *skilleffect.Effector {
 }
 
 func payloadFor(name, version, body string) string {
-	return configmcp.BuildSkillPayload(name, "desc", version, nil, body, 0, nil)
+	return configmcp.BuildSkillPayload(name, "desc", version, nil, body, 0, 0, nil)
 }
 
 // onDisk returns the raw bytes of a skill file, failing the test if it is

@@ -40,7 +40,7 @@ func (s *Server) skillWriter(agentName string, e *agent.Engine) *skilleffect.Bin
 
 // handleGetSkill godoc
 // @Summary Get a skill by name
-// @Description Returns a single skill's full definition including name, description, version, triggers, body, and owning agent. max_tool_rounds and requires_tools are present only when the skill declares them.
+// @Description Returns a single skill's full definition including name, description, version, triggers, body, and owning agent. max_tool_rounds, max_output_tokens and requires_tools are present only when the skill declares them.
 // @Tags skills
 // @Produce json
 // @Security BearerAuth
@@ -81,6 +81,9 @@ func (s *Server) handleGetSkill(w http.ResponseWriter, r *http.Request) {
 	if sk.MaxToolRounds > 0 {
 		resp["max_tool_rounds"] = sk.MaxToolRounds
 	}
+	if sk.MaxOutputTokens > 0 {
+		resp["max_output_tokens"] = sk.MaxOutputTokens
+	}
 	if len(sk.Requires.Tools) > 0 {
 		resp["requires_tools"] = sk.Requires.Tools
 	}
@@ -96,10 +99,18 @@ type skillCreateInput struct {
 	// MaxToolRounds optionally caps tool-call ROUNDS (not calls) for turns this
 	// skill drives. 0 = no cap; it only lowers the agent's budget.
 	MaxToolRounds int `json:"max_tool_rounds"`
+	// MaxOutputTokens optionally caps output tokens per completion for turns
+	// this skill drives. 0 = no skill cap. It lowers a cap set on the agent or
+	// in [llm], and is sent as is when neither sets one.
+	MaxOutputTokens int `json:"max_output_tokens"`
 	// RequiresTools declares the tool names this skill depends on (frontmatter
 	// [requires] tools).
 	RequiresTools []string `json:"requires_tools"`
 }
+
+// errNegativeSkillOutputCap is checked before the write path, which would
+// also refuse a negative cap but answer 500.
+const errNegativeSkillOutputCap = "max_output_tokens must be >= 0 (0 = no skill cap)"
 
 // skillWriteResponse is the create/update result. Warnings are non-fatal
 // findings from configmcp.LintSkillWrite.
@@ -156,6 +167,10 @@ func (s *Server) handleCreateSkill(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "body is required"})
 		return
 	}
+	if input.MaxOutputTokens < 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": errNegativeSkillOutputCap})
+		return
+	}
 	if err := configmcp.ValidateSkillName(input.Name); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -176,7 +191,7 @@ func (s *Server) handleCreateSkill(w http.ResponseWriter, r *http.Request) {
 		version = "1.0.0"
 	}
 
-	payload := configmcp.BuildSkillPayload(input.Name, input.Description, version, input.Triggers, input.Body, input.MaxToolRounds, input.RequiresTools)
+	payload := configmcp.BuildSkillPayload(input.Name, input.Description, version, input.Triggers, input.Body, input.MaxToolRounds, input.MaxOutputTokens, input.RequiresTools)
 	warnings, err := configmcp.LintSkillWrite(s.scheduleLookup(), nil, payload)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -205,6 +220,10 @@ type skillUpdateInput struct {
 	// MaxToolRounds sets the tool-call ROUND cap; 0 removes it. Omitted keeps
 	// whatever the skill already carries.
 	MaxToolRounds *int `json:"max_tool_rounds"`
+	// MaxOutputTokens sets the per-completion output-token cap; 0 removes it.
+	// Omitted keeps whatever the skill already carries. It lowers a cap set on
+	// the agent or in [llm], and is sent as is when neither sets one.
+	MaxOutputTokens *int `json:"max_output_tokens"`
 	// RequiresTools replaces the declared tool set; [] clears it. Omitted keeps
 	// whatever the skill already carries.
 	RequiresTools []string `json:"requires_tools"`
@@ -256,6 +275,10 @@ func (s *Server) handleUpdateSkill(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
 		return
 	}
+	if input.MaxOutputTokens != nil && *input.MaxOutputTokens < 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": errNegativeSkillOutputCap})
+		return
+	}
 
 	// Determine effective name (rename or keep).
 	newName := skillName
@@ -270,7 +293,7 @@ func (s *Server) handleUpdateSkill(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	payload := configmcp.MergeSkillFields(newName, existing, input.Description, input.Version, input.Triggers, input.Body, input.MaxToolRounds, input.RequiresTools)
+	payload := configmcp.MergeSkillFields(newName, existing, input.Description, input.Version, input.Triggers, input.Body, input.MaxToolRounds, input.MaxOutputTokens, input.RequiresTools)
 	warnings, err := configmcp.LintSkillWrite(s.scheduleLookup(), &existing, payload)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})

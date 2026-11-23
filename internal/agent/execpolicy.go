@@ -244,7 +244,8 @@ type TurnResult struct {
 	// Rounds is the number of tool-call rounds the turn used.
 	Rounds int `json:"rounds"`
 	// StopReason is why the tool loop ended, as a machine-readable slug
-	// ("repeated_calls", "max_rounds", "stop_requested"). Empty means the model
+	// ("repeated_calls", "max_rounds", "stop_requested", "cancelled",
+	// "output_limit"). Empty means the model
 	// finished on its own — the ordinary case. It is the only non-textual
 	// signal that a turn was cut short: the alternative is scraping the
 	// "[engine: turn ended early — …]" marker out of the response body.

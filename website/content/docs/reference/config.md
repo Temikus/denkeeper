@@ -313,7 +313,7 @@ Built-in `web_search` and `web_fetch` tools. Running agents keep their `[web]` s
 
 ### Network policy
 
-`web_fetch` refuses non-public addresses. The check runs on the IP each connection actually reaches, so it covers redirects, robots.txt and agents.txt lookups, and hostnames that resolve to a blocked address. A URL refused by the address check or the domain lists is never passed to the Jina fallback. A robots.txt or agents.txt disallow is not: with Jina enabled, that URL is still fetched through Jina.
+`web_fetch` refuses non-public addresses. The check runs on the IP each connection actually reaches, so it covers redirects, robots.txt and agents.txt lookups, and hostnames that resolve to a blocked address. A URL refused by the address check or the domain lists is never passed to the Jina fallback. Neither is a URL the site's robots.txt or agents.txt disallows, when `respect_robots_txt` or `respect_agents_txt` is on. That check covers only the first URL: a redirect to a disallowed path is followed, and if the robots.txt or agents.txt lookup itself fails, the fetch goes ahead and can fall back to Jina.
 
 - Never allowed, under any setting: link-local `169.254.0.0/16` and `fe80::/10`, cloud metadata (including `metadata.google.internal`, `fd00:ec2::254`, `100.100.100.200` and Azure's `168.63.129.16`), unspecified, multicast and broadcast addresses, and a direct request to the configured proxy's own address.
 - Loopback and private ranges: opened only by `allow_loopback` and `allow_private` respectively.
@@ -337,7 +337,7 @@ Bounds for the in-process `run_javascript` tool, which runs short ES5.1 snippets
 |---|---|---|---|
 | `enabled` | bool | `true` | Enable `run_javascript` |
 | `timeout` | string | `"2s"` | Per-call wall-clock limit |
-| `max_output_chars` | int | `16000` | Result length cap (truncates) |
+| `max_output_chars` | int | `16000` | Length cap in bytes for the result and for error text. Longer text is cut and marked as truncated |
 | `max_input_bytes` | int | `262144` | Accepted input payload cap, 256 KiB (rejects) |
 | `max_concurrent` | int | `4` | Simultaneous VM executions across **all** agents. Negative = unlimited |
 | `max_concurrent_per_agent` | int | `0` | Additional per-agent cap so one agent cannot monopolize the global pool. 0 = off |
@@ -594,7 +594,7 @@ Each signal takes `"withhold"`, `"warn"` (audit but deliver anyway), or `"off"`.
 | `list_max_bytes` | int | `16384` | Total value bytes a single `kv_list` response may carry |
 | `list_value_head_bytes` | int | `1024` | Per-value cap inside a `kv_list` response |
 | `cleanup_interval` | string | `"1h"` | Background cleanup interval for expired keys |
-| `default_ttl` | table | none | Expiry applied by `kv_set` when the call passes no `ttl`, keyed by namespace prefix (must end in `:`). Longest matching prefix wins; an explicit `ttl` always wins. Example: `default_ttl = { "log:" = "720h", "cache:" = "168h" }` |
+| `default_ttl` | table | none | Expiry applied by `kv_set` when the call passes no `ttl`, keyed by namespace prefix (must end in `:`). Longest matching prefix wins; an explicit `ttl` always wins. It applies to new writes only; [`denkeeper kv backfill-ttl`](/docs/reference/cli/#denkeeper-kv-backfill-ttl) gives existing keys the same expiry. Example: `default_ttl = { "log:" = "720h", "cache:" = "168h" }` |
 
 Per-agent key-value storage with optional TTL. Exposed as Config MCP tools (`kv_get`, `kv_set`, `kv_delete`, `kv_list`, `kv_set_nx`). Useful for locks, counters, caches, and cross-session coordination.
 

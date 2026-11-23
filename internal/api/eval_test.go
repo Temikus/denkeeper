@@ -11,9 +11,14 @@ import (
 	"testing/iotest"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/eval"
 	"github.com/Temikus/denkeeper/internal/llm"
+	"github.com/Temikus/denkeeper/internal/security"
+	"github.com/Temikus/denkeeper/internal/tool"
 )
 
 // evalReadOnlyKey carries eval:read but no eval:write, so it can list task
@@ -90,6 +95,53 @@ func seedTaskSet(t *testing.T, store *eval.Store, name string, prompts ...string
 		}
 	}
 	return set
+}
+
+type probeToolArgs struct{}
+
+// addToolAgent registers a supervised agent whose real tool manager hosts an
+// in-process session with kv_get (read-only by the built-in list) and
+// kv_delete (a write tool). The default test agent has no tools, so it can
+// never show a tool-specific probe.
+func addToolAgent(t *testing.T, srv *Server, name string) {
+	t.Helper()
+	mcpSrv := mcp.NewServer(&mcp.Implementation{Name: "kv-test", Version: "v1"}, nil)
+	for _, n := range []string{"kv_get", "kv_delete"} {
+		mcp.AddTool(mcpSrv, &mcp.Tool{Name: n, Description: n},
+			func(_ context.Context, _ *mcp.CallToolRequest, _ probeToolArgs) (*mcp.CallToolResult, any, error) {
+				return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "ok"}}}, nil, nil
+			})
+	}
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	if _, err := mcpSrv.Connect(context.Background(), serverTransport, nil); err != nil {
+		t.Fatalf("connecting MCP server: %v", err)
+	}
+	session, err := mcp.NewClient(&mcp.Implementation{Name: "denkeeper-test", Version: "v1"}, nil).
+		Connect(context.Background(), clientTransport, nil)
+	if err != nil {
+		t.Fatalf("connecting MCP client: %v", err)
+	}
+	toolMgr := tool.NewManager(testLogger(), config.MCPConfig{RequestTimeoutSecs: 10})
+	if err := toolMgr.RegisterSession(context.Background(), "kv-test", session); err != nil {
+		t.Fatalf("RegisterSession: %v", err)
+	}
+	t.Cleanup(func() { _ = toolMgr.Close() })
+
+	mem, err := agent.NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	t.Cleanup(func() { _ = mem.Close() })
+	perms, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+	router := llm.NewRouter("mock", "test-model", llm.NewCostTracker(llm.SessionLimits{Hard: 1.0}, nil))
+	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok", FinishReason: "stop"}})
+	e := agent.NewEngine(name, router, mem, nil, perms, nil, "test", nil, toolMgr, nil, testLogger())
+	if err := srv.deps.Dispatcher.AddAgent(name, e); err != nil {
+		t.Fatalf("AddAgent: %v", err)
+	}
 }
 
 // --- Scope enforcement ---
