@@ -596,3 +596,190 @@ func TestBackfillTTL_AgentsCountedSeparately(t *testing.T) {
 		t.Errorf("counts = %+v, want %+v", counts, want)
 	}
 }
+
+func mustGetEntry(t *testing.T, s *SQLiteStore, agent, key string) Entry {
+	t.Helper()
+	e, ok, err := s.GetEntry(context.Background(), agent, key)
+	if err != nil || !ok {
+		t.Fatalf("GetEntry(%q): ok=%v err=%v", key, ok, err)
+	}
+	return e
+}
+
+func TestWrittenBy_EmptyAfterSet(t *testing.T) {
+	s := mustStore(t)
+	if err := s.Set(context.Background(), "agent1", "k", "v", 0); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if e := mustGetEntry(t, s, "agent1", "k"); e.WrittenBy != "" {
+		t.Errorf("WrittenBy = %q, want empty (not recorded)", e.WrittenBy)
+	}
+}
+
+func TestSetWriter_RecordsSkill(t *testing.T) {
+	s := mustStore(t)
+	ctx := context.Background()
+	if err := s.Set(ctx, "agent1", "k", "v", 0); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := s.SetWriter(ctx, "agent1", "k", "v", "daily-digest"); err != nil {
+		t.Fatalf("SetWriter: %v", err)
+	}
+	if e := mustGetEntry(t, s, "agent1", "k"); e.WrittenBy != "daily-digest" {
+		t.Errorf("WrittenBy = %q, want daily-digest", e.WrittenBy)
+	}
+}
+
+func TestSetWriter_ClearedBySet(t *testing.T) {
+	s := mustStore(t)
+	ctx := context.Background()
+	if err := s.Set(ctx, "agent1", "k", "v1", 0); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := s.SetWriter(ctx, "agent1", "k", "v1", "daily-digest"); err != nil {
+		t.Fatalf("SetWriter: %v", err)
+	}
+	if err := s.Set(ctx, "agent1", "k", "v2", 0); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	e := mustGetEntry(t, s, "agent1", "k")
+	if e.WrittenBy != "" {
+		t.Errorf("WrittenBy after a later Set = %q, want empty", e.WrittenBy)
+	}
+	if e.Value != "v2" {
+		t.Errorf("Value = %q, want v2", e.Value)
+	}
+}
+
+func TestSetWriter_ClearedBySetNXOnExpiredKey(t *testing.T) {
+	s := mustStore(t)
+	ctx := context.Background()
+	if err := s.Set(ctx, "agent1", "k", "v1", 0); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := s.SetWriter(ctx, "agent1", "k", "v1", "daily-digest"); err != nil {
+		t.Fatalf("SetWriter: %v", err)
+	}
+	// Expire the row so SetNX reuses the slot.
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE kv SET expires_at = datetime('now', '-1 hour') WHERE agent_name = 'agent1' AND key = 'k'`); err != nil {
+		t.Fatalf("expire row: %v", err)
+	}
+	ok, err := s.SetNX(ctx, "agent1", "k", "v2", 0)
+	if err != nil || !ok {
+		t.Fatalf("SetNX: ok=%v err=%v", ok, err)
+	}
+	if e := mustGetEntry(t, s, "agent1", "k"); e.WrittenBy != "" {
+		t.Errorf("WrittenBy after SetNX = %q, want empty", e.WrittenBy)
+	}
+}
+
+// A Set that lands between a write and its stamp must not be attributed to
+// the earlier writer's skill.
+func TestSetWriter_SkipsWhenValueChangedSinceTheWrite(t *testing.T) {
+	s := mustStore(t)
+	ctx := context.Background()
+	if err := s.Set(ctx, "agent1", "k", "from-skill", 0); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := s.Set(ctx, "agent1", "k", "from-operator", 0); err != nil {
+		t.Fatalf("intervening Set: %v", err)
+	}
+	if err := s.SetWriter(ctx, "agent1", "k", "from-skill", "daily-digest"); err != nil {
+		t.Fatalf("SetWriter: %v", err)
+	}
+	if e := mustGetEntry(t, s, "agent1", "k"); e.WrittenBy != "" || e.Value != "from-operator" {
+		t.Errorf("entry = %+v, want the operator's value with no writer", e)
+	}
+}
+
+func TestSetWriter_MissingKeyIsNoop(t *testing.T) {
+	s := mustStore(t)
+	ctx := context.Background()
+	if err := s.SetWriter(ctx, "agent1", "missing", "x", "daily-digest"); err != nil {
+		t.Fatalf("SetWriter on a missing key: %v", err)
+	}
+	if _, ok, err := s.GetEntry(ctx, "agent1", "missing"); err != nil || ok {
+		t.Errorf("GetEntry after SetWriter: ok=%v err=%v, want no row", ok, err)
+	}
+}
+
+func TestSetWriter_OtherAgentUntouched(t *testing.T) {
+	s := mustStore(t)
+	ctx := context.Background()
+	for _, agent := range []string{"agent1", "agent2"} {
+		if err := s.Set(ctx, agent, "k", "v", 0); err != nil {
+			t.Fatalf("Set(%s): %v", agent, err)
+		}
+	}
+	if err := s.SetWriter(ctx, "agent1", "k", "v", "daily-digest"); err != nil {
+		t.Fatalf("SetWriter: %v", err)
+	}
+	if e := mustGetEntry(t, s, "agent2", "k"); e.WrittenBy != "" {
+		t.Errorf("agent2 WrittenBy = %q, want empty", e.WrittenBy)
+	}
+}
+
+func TestNewSQLiteStore_MigratesOldSchema(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "kv.db")
+	old, err := sqlx.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open old db: %v", err)
+	}
+	// The kv table as it was before written_by existed.
+	if _, err := old.Exec(`
+CREATE TABLE kv (
+    agent_name TEXT    NOT NULL,
+    key        TEXT    NOT NULL,
+    value      TEXT    NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    expires_at DATETIME,
+    PRIMARY KEY (agent_name, key)
+);
+INSERT INTO kv (agent_name, key, value) VALUES ('agent1', 'legacy', 'kept');`); err != nil {
+		t.Fatalf("create old schema: %v", err)
+	}
+	_ = old.Close()
+
+	s, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore on old schema: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	e := mustGetEntry(t, s, "agent1", "legacy")
+	if e.Value != "kept" || e.WrittenBy != "" {
+		t.Errorf("legacy entry = %+v, want value kept and empty WrittenBy", e)
+	}
+	if err := s.SetWriter(context.Background(), "agent1", "legacy", "kept", "daily-digest"); err != nil {
+		t.Fatalf("SetWriter after migration: %v", err)
+	}
+	if e := mustGetEntry(t, s, "agent1", "legacy"); e.WrittenBy != "daily-digest" {
+		t.Errorf("WrittenBy = %q, want daily-digest", e.WrittenBy)
+	}
+}
+
+func TestNewSQLiteStore_OpenTwice(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "kv.db")
+	first, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("first open: %v", err)
+	}
+	if err := first.Set(context.Background(), "agent1", "k", "v", 0); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := first.SetWriter(context.Background(), "agent1", "k", "v", "daily-digest"); err != nil {
+		t.Fatalf("SetWriter: %v", err)
+	}
+	_ = first.Close()
+
+	second, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("second open: %v", err)
+	}
+	t.Cleanup(func() { _ = second.Close() })
+	if e := mustGetEntry(t, second, "agent1", "k"); e.Value != "v" || e.WrittenBy != "daily-digest" {
+		t.Errorf("entry after reopen = %+v, want value v written by daily-digest", e)
+	}
+}

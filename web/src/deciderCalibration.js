@@ -4,8 +4,9 @@
 export const DECIDER_APPROVE_DEFAULT = 0.95
 export const DECIDER_DENY_DEFAULT = 0.05
 
-// The lowest check that can deny. no_leak only escalates, so it is left out
-// server-side; rows without the field fall back to min_score.
+// The lowest check that can deny. no_leak and no_self_grant only escalate,
+// so the server leaves them out of min_deny_score; rows without the field
+// fall back to min_score.
 const denyScore = row => row.min_deny_score ?? row.min_score
 
 // Mirrors decideSupervisorOutcome in internal/agent/supervisor_decider.go:

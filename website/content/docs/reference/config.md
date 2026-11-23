@@ -3,7 +3,7 @@ title: "Configuration Reference"
 description: "Complete reference for denkeeper.toml options."
 slug: "config"
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-09-18T00:00:00+00:00
+lastmod: 2026-11-23T00:00:00+00:00
 draft: false
 weight: 10
 toc: true
@@ -209,10 +209,10 @@ Defaults for agents that do not set their own directories.
 | `supervisor_body_excerpt_len` | int | `500` | Max characters of skill body included in the review prompt |
 | `supervisor_tool_desc_len` | int | `1000` | Max characters of tool description included in the review prompt |
 | `supervisor_max_args_bytes` | int | `16384` | Max bytes of tool-call arguments sent for review. Larger calls skip the supervisor and go straight to human approval (audited with `cause: "too_large"`); arguments are never truncated. `0` = default |
-| `supervisor_decider` | string | — | `[[llm.deciders]]` entry that scores each tool call before the supervisor: six yes/no questions, combined into five checks where high means safe (see [Decision Models](/docs/concepts/deciders/#the-checks)). Supervised tier only; works with or without `supervisor` |
+| `supervisor_decider` | string | — | `[[llm.deciders]]` entry that scores each tool call before the supervisor: seven yes/no questions, combined into six checks where high means safe (see [Decision Models](/docs/concepts/deciders/#the-checks)). Supervised tier only; works with or without `supervisor` |
 | `supervisor_decider_mode` | string | `"shadow"` | `"shadow"`: the decider runs and writes a `supervisor` audit event (`source = "decider:<name>"`) with the verdict it would have given, but never changes the outcome. `"enforce"`: the verdict approves or denies the call, and an uncertain one goes on to the supervisor or a human |
 | `supervisor_decider_approve_at` | float | `0.95` | The decider approves when every check is at or above this score |
-| `supervisor_decider_deny_at` | float | `0.05` | The decider denies when any check except `no_leak` (which only escalates) is at or below this score. Must satisfy `0 < deny_at < approve_at < 1` |
+| `supervisor_decider_deny_at` | float | `0.05` | The decider denies when any check except `no_leak` and `no_self_grant` (which only escalate) is at or below this score. Must satisfy `0 < deny_at < approve_at < 1` |
 
 Decider spend is billed to the reviewed agent, per conversation. A decider failure (timeout, cost limit, input too large) is audited and never approves anything. See [Decision Models](/docs/concepts/deciders/) for how to move from shadow to enforce.
 

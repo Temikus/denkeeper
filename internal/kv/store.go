@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -32,11 +33,18 @@ CREATE TABLE IF NOT EXISTS kv (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     expires_at DATETIME,
+    written_by TEXT    NOT NULL DEFAULT '',
     PRIMARY KEY (agent_name, key)
 );
 CREATE INDEX IF NOT EXISTS idx_kv_expires
     ON kv (expires_at) WHERE expires_at IS NOT NULL;
 `
+
+// migrations bring databases created before a column existed up to schema.
+// Each fails with "duplicate column name" once applied, which is ignored.
+var migrations = []string{
+	`ALTER TABLE kv ADD COLUMN written_by TEXT NOT NULL DEFAULT ''`,
+}
 
 // Entry represents a key-value pair with metadata.
 type Entry struct {
@@ -45,6 +53,9 @@ type Entry struct {
 	CreatedAt time.Time  `db:"created_at"`
 	UpdatedAt time.Time  `db:"updated_at"`
 	ExpiresAt *time.Time `db:"expires_at"`
+	// WrittenBy is the skill whose turn last wrote the value; "" means not
+	// recorded. Only GetEntry fills it.
+	WrittenBy string `db:"written_by"`
 }
 
 // Store provides per-agent key-value storage with optional TTL.
@@ -56,6 +67,11 @@ type Store interface {
 	Delete(ctx context.Context, agent, key string) error
 	List(ctx context.Context, agent, prefix string) ([]Entry, error)
 	SetNX(ctx context.Context, agent, key, value string, ttl time.Duration) (bool, error)
+	// SetWriter records which skill last wrote key. Set and a SetNX that
+	// acquires the key reset it to ""; a refused SetNX leaves it alone. Call
+	// it after the write, passing the value written: it stamps only while key
+	// still holds that value. A missing key is not an error.
+	SetWriter(ctx context.Context, agent, key, value, skill string) error
 	Cleanup(ctx context.Context) error
 	Close() error
 }
@@ -92,9 +108,9 @@ func NewSQLiteStore(dbPath string, opts ...Option) (*SQLiteStore, error) {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
 
-	if _, err := db.Exec(schema); err != nil {
+	if err := initSchema(db); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("initializing kv schema: %w", err)
+		return nil, err
 	}
 
 	s := &SQLiteStore{
@@ -115,9 +131,9 @@ func NewInMemoryStore(opts ...Option) (*SQLiteStore, error) {
 		return nil, fmt.Errorf("opening in-memory database: %w", err)
 	}
 
-	if _, err := db.Exec(schema); err != nil {
+	if err := initSchema(db); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("initializing kv schema: %w", err)
+		return nil, err
 	}
 
 	s := &SQLiteStore{
@@ -151,7 +167,7 @@ func (s *SQLiteStore) Get(ctx context.Context, agent, key string) (string, bool,
 func (s *SQLiteStore) GetEntry(ctx context.Context, agent, key string) (Entry, bool, error) {
 	var e Entry
 	err := s.db.GetContext(ctx, &e,
-		`SELECT key, value, created_at, updated_at, expires_at FROM kv
+		`SELECT key, value, created_at, updated_at, expires_at, written_by FROM kv
 		 WHERE agent_name = ? AND key = ? AND (expires_at IS NULL OR expires_at > datetime('now'))`,
 		agent, key,
 	)
@@ -182,7 +198,7 @@ func (s *SQLiteStore) Set(ctx context.Context, agent, key, value string, ttl tim
 
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO kv (agent_name, key, value, expires_at) VALUES (?, ?, ?, ?)
-		 ON CONFLICT (agent_name, key) DO UPDATE SET value = excluded.value, updated_at = datetime('now'), expires_at = excluded.expires_at`,
+		 ON CONFLICT (agent_name, key) DO UPDATE SET value = excluded.value, updated_at = datetime('now'), expires_at = excluded.expires_at, written_by = ''`,
 		agent, key, value, expiresAt,
 	)
 	if err != nil {
@@ -268,6 +284,24 @@ func (s *SQLiteStore) SetNX(ctx context.Context, agent, key, value string, ttl t
 		return false, fmt.Errorf("kv set_nx rows affected: %w", err)
 	}
 	return n > 0, nil
+}
+
+// SetWriter records skill as the last writer of a non-expired key. Only the
+// written_by column changes, so updated_at keeps the time of the value write.
+//
+// The value condition keeps a concurrent write from being attributed to this
+// one: if another Set replaced the value after ours, its row keeps "".
+func (s *SQLiteStore) SetWriter(ctx context.Context, agent, key, value, skill string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE kv SET written_by = ?
+		 WHERE agent_name = ? AND key = ? AND value = ?
+		   AND (expires_at IS NULL OR expires_at > datetime('now'))`,
+		skill, agent, key, value,
+	)
+	if err != nil {
+		return fmt.Errorf("kv set writer %q: %w", key, err)
+	}
+	return nil
 }
 
 // Cleanup removes all expired keys.
@@ -475,6 +509,20 @@ func (s *SQLiteStore) checkKeyLimit(ctx context.Context, agent, key string) erro
 
 	if count >= s.maxKeysPerAgent {
 		return fmt.Errorf("agent %q has reached the maximum of %d keys", agent, s.maxKeysPerAgent)
+	}
+	return nil
+}
+
+// initSchema creates the kv table and applies column migrations. Safe to run
+// on every open, including against a live database.
+func initSchema(db *sqlx.DB) error {
+	if _, err := db.Exec(schema); err != nil {
+		return fmt.Errorf("initializing kv schema: %w", err)
+	}
+	for _, m := range migrations {
+		if _, err := db.Exec(m); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			return fmt.Errorf("migrating kv schema: %w", err)
+		}
 	}
 	return nil
 }
