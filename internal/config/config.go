@@ -358,13 +358,24 @@ func (c *DecideConfig) DecideEnabled() bool {
 	return c.Enabled == nil || *c.Enabled
 }
 
-// SkillsConfig controls skill management (create/update via API, MCP, config MCP).
+// SkillsConfig controls skill management (create/update via API, MCP, config
+// MCP) and the skill index in each agent's system prompt.
 type SkillsConfig struct {
 	// MaxBytes caps the size of a single persisted skill file (frontmatter +
 	// body). Skill content is written verbatim, so without a bound an authorized
 	// caller could exhaust disk. Default: 1048576 (1 MiB). Set negative for no
 	// limit.
 	MaxBytes int `toml:"max_bytes"`
+
+	// Index lists every skill (name, triggers, and the first description line
+	// unless always on) in each agent's system prompt, capped at 8,000 bytes.
+	// nil means on. [[agents]] skill_index overrides it per agent.
+	Index *bool `toml:"index"`
+}
+
+// IndexEnabled reports whether the skill index is on instance-wide.
+func (c SkillsConfig) IndexEnabled() bool {
+	return c.Index == nil || *c.Index
 }
 
 // WebConfig controls built-in web search and URL fetching tools.
@@ -774,6 +785,9 @@ type AgentInstanceConfig struct {
 	// e.g. "Australia/Sydney". Precedence: agent > api.timezone > UTC.
 	// Does not affect cron evaluation (that remains api.timezone, restart-only).
 	Timezone string `toml:"timezone"`
+
+	// SkillIndex overrides [skills] index for this agent. nil inherits it.
+	SkillIndex *bool `toml:"skill_index"`
 
 	// BrowserURLAllowlist overrides the global browser URL allowlist for this agent.
 	// If set, only these domains are reachable. Supports wildcards: "*.example.com".
@@ -3241,6 +3255,14 @@ func validateAgentBindings(a AgentInstanceConfig, wildcards map[string]string) e
 		}
 	}
 	return nil
+}
+
+// EffectiveSkillIndex is the agent's skill_index when set, else global.
+func (a AgentInstanceConfig) EffectiveSkillIndex(global bool) bool {
+	if a.SkillIndex != nil {
+		return *a.SkillIndex
+	}
+	return global
 }
 
 // EffectiveMaxOutputTokens is the agent's own max_output_tokens, else the

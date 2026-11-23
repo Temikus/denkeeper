@@ -324,6 +324,7 @@ type Engine struct {
 	// filter itself is stateless and re-derived every message.
 	skillSatisfactionMu sync.Mutex
 	skillSatisfaction   map[string]string
+	skillIndexOff       atomic.Bool // zero value: the skill index is on
 
 	// replyGuard holds the reply sanity guard settings. Read on every turn and
 	// replaced wholesale on hot-reload, so it takes its own lock rather than
@@ -1347,6 +1348,7 @@ Prefer KV over persona memory for anything structured or dated. Persona memory i
 	// is the most stable appended block (it changes only when an operator edits
 	// it), so it belongs as early as possible in the prompt-cache prefix.
 	base += e.buildToolGuidanceSection()
+	base += e.buildSkillIndexSection()
 
 	// Inject session context so the agent knows its current delivery channel.
 	if msg.Adapter != "" && msg.ExternalID != "" {

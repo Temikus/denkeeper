@@ -1521,6 +1521,7 @@ func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc ag
 
 	applySupervisorKnobs(e, ac)
 	e.SetLocation(agentLocation(abc.cfg, ac))
+	e.SetSkillIndex(ac.EffectiveSkillIndex(abc.cfg.Skills.IndexEnabled()))
 	e.SetReplyGuard(replyGuardFrom(abc.cfg))
 	// Nil-check before boxing: a typed-nil *eval.Store in the TraceSink
 	// interface reads as non-nil, which would turn every capture into a nil
@@ -1756,6 +1757,8 @@ func buildReviewerEngine(ctx context.Context, ac config.AgentInstanceConfig, par
 		revLogger,
 	)
 	revEngine.SetLocation(agentLocation(abc.cfg, ac))
+	// The reviewer holds a build-time skill snapshot and no scheduler, so its index would be stale.
+	revEngine.SetSkillIndex(false)
 
 	revCMCP := configmcp.New(reviewerConfigDeps(ac.Name, parent, revEngine.PermissionTier, abc.memory, revLogger))
 	session, err := revCMCP.Connect(ctx)
@@ -2470,6 +2473,7 @@ func buildReloadFunc(path string, cfgHolder *config.Holder, dispatcher *agent.Di
 			reconcileSupervisor(e, ac, dispatcher, logger)
 			applySupervisorKnobs(e, ac)
 			e.SetLocation(agentLocation(cfg, ac))
+			e.SetSkillIndex(ac.EffectiveSkillIndex(cfg.Skills.IndexEnabled()))
 			e.SetReplyGuard(replyGuardFrom(cfg))
 			e.SetTraceCapture(cfg.Eval.Capture, cfg.Eval.TraceBytesCap())
 			warnUnadvertisedAutoApprove(ac.Name, ac.AutoApproveTools, e.ToolNames(), logger)
