@@ -148,6 +148,72 @@ func TestApplySkillCreate_RefusesALeftoverFolder(t *testing.T) {
 	}
 }
 
+// After an edit, memory still knows the skill lives in a folder, so its
+// sub-files stay readable.
+func TestSkillPatch_DirectorySkillKeepsItsSubFiles(t *testing.T) {
+	call, _, mem := dirSkillServer(t, "kelos")
+	if text, isErr := call("skill_patch", map[string]any{
+		"name": "kelos", "old_string": "Old body.", "new_string": "Patched body.",
+	}); isErr {
+		t.Fatalf("skill_patch: %s", text)
+	}
+	if sk := mem["kelos"]; sk.Dir == "" || len(sk.SubFileNames) != 1 {
+		t.Errorf("after patch: Dir %q, sub-files %v", sk.Dir, sk.SubFileNames)
+	}
+	text, isErr := call("skill_read_file", map[string]any{"skill": "kelos", "file_path": "references/notes.md"})
+	if isErr || !strings.Contains(text, "keep me") {
+		t.Errorf("skill_read_file after patch = %q (error %v)", text, isErr)
+	}
+}
+
+// A rename must not land on a name that is already taken on disk, loaded or
+// not: an unloaded flat file would be overwritten, a folder written into.
+func TestApplySkillRename_RefusesATakenDestination(t *testing.T) {
+	for _, taken := range []string{"other.md", "other"} {
+		dir := t.TempDir()
+		writeSkill(t, dir, "kelos", yamlSkillFile)
+		target := filepath.Join(dir, taken)
+		if taken == "other" {
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		} else if err := os.WriteFile(target, []byte("not loaded"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		payload := strings.Replace(yamlSkillFile, "name: kelos", "name: other", 1)
+		err := configmcp.ApplySkillRename(dir, func(string) bool { return true }, func(skill.Skill) {}, ioTestLogger(), "kelos", payload, 0)
+		if !errors.Is(err, configmcp.ErrSkillExists) {
+			t.Errorf("rename onto %s = %v, want ErrSkillExists", taken, err)
+		}
+		if data, _ := os.ReadFile(filepath.Join(dir, "kelos.md")); string(data) != yamlSkillFile {
+			t.Errorf("rename onto %s changed kelos.md", taken)
+		}
+		if taken == "other.md" {
+			if data, _ := os.ReadFile(target); string(data) != "not loaded" {
+				t.Errorf("unloaded destination file overwritten: %q", data)
+			}
+		} else if _, err := os.Stat(filepath.Join(target, "SKILL.md")); !os.IsNotExist(err) {
+			t.Errorf("SKILL.md written into the destination folder: %v", err)
+		}
+	}
+}
+
+// Only a folder is a leftover: a plain file called <name> does not block a
+// create.
+func TestApplySkillCreate_ExtensionlessFileIsNotALeftoverFolder(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "kelos"), []byte("notes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if exists, err := configmcp.SkillFileExists(dir, "kelos"); err != nil || exists {
+		t.Errorf("SkillFileExists = %v, %v; want false for a plain file", exists, err)
+	}
+	payload := configmcp.BuildSkillPayload("kelos", "d", "1", nil, "body", 0, 0, nil)
+	if err := configmcp.ApplySkillCreate(dir, func(skill.Skill) {}, ioTestLogger(), payload, 0); err != nil {
+		t.Errorf("create beside a plain file = %v", err)
+	}
+}
+
 func TestRemoveSkillFile_RemovesADirectorySkillsSKILLmd(t *testing.T) {
 	dir := t.TempDir()
 	seedDirSkill(t, dir, "kelos")

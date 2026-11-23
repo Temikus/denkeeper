@@ -160,6 +160,11 @@ func (e *Effector) Update(ctx context.Context, sa SkillAccess, tid, name, payloa
 // oldName, journaling both the old name and the bytes it held.
 func (e *Effector) Rename(ctx context.Context, sa SkillAccess, tid, oldName, payload, actor string, maxBytes int) error {
 	if newName, version, ok := e.parseTracked(payload); ok && validName(newName) && validName(oldName) {
+		// Refuse before journaling: a revision for a rename that never
+		// happens would give skill_revert a spurious inverse to apply.
+		if err := configmcp.CheckSkillRename(sa.SkillsDir(), oldName, newName); err != nil {
+			return err
+		}
 		prior, err := e.readPrior(sa, oldName)
 		if err != nil {
 			return err

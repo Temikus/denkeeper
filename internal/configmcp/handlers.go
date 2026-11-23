@@ -1954,6 +1954,16 @@ func skillFileRel(root *os.Root, name string) (string, error) {
 	return flat, nil
 }
 
+// setDirMeta gives s the folder and sub-files the loader would, when name's
+// file lives in a folder. A payload parses without them, so without this an
+// edit would leave memory treating the skill as flat.
+func setDirMeta(root *os.Root, agentSkillsDir, name string, s *skill.Skill) {
+	if rel, err := skillFileRel(root, name); err == nil && rel != name+".md" {
+		s.Dir = filepath.Join(agentSkillsDir, name)
+		s.SubFileNames = skill.ScanSubFiles(s.Dir)
+	}
+}
+
 // writeSkillFileAtomic writes payload to name's skill file within root
 // (skillFileRel) via a randomized temp-file + rename, so a partial write never
 // replaces a good file and two concurrent writers to the same skill name
@@ -2071,19 +2081,28 @@ func skillPresence(agentSkillsDir, name string) (skillOnDisk, error) {
 	}
 	defer func() { _ = root.Close() }()
 
-	for _, p := range []string{name + ".md", name + "/SKILL.md"} {
-		if _, err := root.Lstat(p); err == nil {
-			return skillFilePresent, nil
-		} else if !os.IsNotExist(err) {
-			return skillAbsent, fmt.Errorf("checking skill file %s: %w", p, err)
-		}
-	}
-	if _, err := root.Lstat(name); err == nil {
-		return skillFolderOnly, nil
+	if _, err := root.Lstat(name + ".md"); err == nil {
+		return skillFilePresent, nil
 	} else if !os.IsNotExist(err) {
+		return skillAbsent, fmt.Errorf("checking skill file %s.md: %w", name, err)
+	}
+	// Only a real folder counts: a plain file called <name> is not a skill.
+	fi, err := root.Lstat(name)
+	if os.IsNotExist(err) {
+		return skillAbsent, nil
+	}
+	if err != nil {
 		return skillAbsent, fmt.Errorf("checking skill folder %s: %w", name, err)
 	}
-	return skillAbsent, nil
+	if !fi.IsDir() {
+		return skillAbsent, nil
+	}
+	if _, err := root.Lstat(name + "/SKILL.md"); err == nil {
+		return skillFilePresent, nil
+	} else if !os.IsNotExist(err) {
+		return skillAbsent, fmt.Errorf("checking skill file %s/SKILL.md: %w", name, err)
+	}
+	return skillFolderOnly, nil
 }
 
 // SkillFileExists reports whether name is taken on disk: a skill file in
@@ -2172,11 +2191,7 @@ func applySkillCreate(agentSkillsDir string, appendSkill func(skill.Skill), logg
 	if err := writeSkillFileAtomic(root, s.Name, payload); err != nil {
 		return err
 	}
-	// Written into a folder (a restore): memory carries it as the loader would.
-	if fi, err := root.Lstat(s.Name); err == nil && fi.IsDir() {
-		s.Dir = filepath.Join(agentSkillsDir, s.Name)
-		s.SubFileNames = skill.ScanSubFiles(s.Dir)
-	}
+	setDirMeta(root, agentSkillsDir, s.Name, s)
 
 	appendSkill(*s)
 	logger.Info("skill created via config MCP", "name", s.Name, "file", filepath.Join(agentSkillsDir, s.Name+".md"))
@@ -2206,10 +2221,42 @@ func ApplySkillUpdate(agentSkillsDir string, updateSkill func(string, skill.Skil
 	if err := writeSkillFileAtomic(root, name, payload); err != nil {
 		return err
 	}
+	setDirMeta(root, agentSkillsDir, name, s)
 
 	updateSkill(name, *s)
 	logger.Info("skill updated via config MCP", "name", name, "file", filepath.Join(agentSkillsDir, name+".md"))
 	return nil
+}
+
+// CheckSkillRename refuses a rename that cannot be done or undone safely: a
+// directory-form source (the journal cannot move a folder back), or a new
+// name already taken on disk, loaded or not, the same check a create makes.
+// The tracked writer runs it before journaling, so a refused rename leaves no
+// revision; ApplySkillRename runs it again for untracked writes.
+func CheckSkillRename(agentSkillsDir, oldName, newName string) error {
+	if err := ValidateSkillName(oldName); err != nil {
+		return err
+	}
+	root, err := os.OpenRoot(agentSkillsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("opening skills directory: %w", err)
+	}
+	oldRel, err := skillFileRel(root, oldName)
+	_ = root.Close()
+	if err != nil {
+		return err
+	}
+	if oldRel != oldName+".md" {
+		return fmt.Errorf("skill %q keeps its files in the %s folder: rename its folder by hand, then "+
+			"change the name field in its SKILL.md (%w)", oldName, oldName, ErrSkillNotEditable)
+	}
+	if newName == oldName {
+		return nil
+	}
+	return RefuseExistingSkill(agentSkillsDir, newName)
 }
 
 // ApplySkillRename writes the skill under its new name, removes the old file,
@@ -2229,30 +2276,23 @@ func ApplySkillRename(agentSkillsDir string, removeSkill func(string) bool, appe
 		return err
 	}
 
+	if err := CheckSkillRename(agentSkillsDir, oldName, s.Name); err != nil {
+		return err
+	}
+
 	root, err := openSkillRoot(agentSkillsDir)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = root.Close() }()
 
-	// A directory skill would have to move its folder and sub-files, which a
-	// revert cannot undo, so it is refused before anything is written.
-	oldRel, err := skillFileRel(root, oldName)
-	if err != nil {
-		return err
-	}
-	if oldRel != oldName+".md" {
-		return fmt.Errorf("skill %q keeps its files in the %s folder: rename its folder by hand, then "+
-			"change the name field in its SKILL.md (%w)", oldName, oldName, ErrSkillNotEditable)
-	}
-
 	// Write new file first (crash-safe: worst case both files exist).
 	if err := writeSkillFileAtomic(root, s.Name, payload); err != nil {
 		return err
 	}
 
-	// Remove old file (confined to root).
-	if err := root.Remove(oldRel); err != nil && !os.IsNotExist(err) {
+	// Remove old file (confined to root). CheckSkillRename made it flat.
+	if err := root.Remove(oldName + ".md"); err != nil && !os.IsNotExist(err) {
 		logger.Info("old skill file removal failed (new file written successfully)", "old", oldName, "new", s.Name, "error", err)
 	}
 

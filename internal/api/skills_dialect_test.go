@@ -165,6 +165,31 @@ func TestUpdateSkill_DirectorySkillWritesItsSKILLmd(t *testing.T) {
 	}
 }
 
+// A rename onto a name taken on disk but not loaded is a conflict, refused
+// before anything is written.
+func TestUpdateSkill_RenameOntoUnloadedFileIs409(t *testing.T) {
+	srv, path, _ := yamlSkillAPI(t)
+	taken := filepath.Join(filepath.Dir(path), "taken.md")
+	if err := os.WriteFile(taken, []byte("not loaded"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/skills/default/kelos", strings.NewReader(`{"name":"taken"}`))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("rename onto an unloaded file: status = %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if got := readFile(t, taken); got != "not loaded" {
+		t.Errorf("unloaded file overwritten: %q", got)
+	}
+	if got := readFile(t, path); got != apiYAMLSkill {
+		t.Errorf("kelos.md changed after a refused rename:\n%s", got)
+	}
+}
+
 func TestUpdateSkill_DirectorySkillRenameIs422(t *testing.T) {
 	srv, path := dirSkillAPI(t)
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/skills/default/kelos", strings.NewReader(`{"name":"kelos-two"}`))

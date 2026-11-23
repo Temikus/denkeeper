@@ -335,10 +335,14 @@ func (s *Server) buildSkillUpdate(newName string, existing skill.Skill, input sk
 }
 
 // skillRenderStatus is 422 when the edit cannot be written to this skill's
-// file and the person must edit it by hand, else 500.
+// file and the person must edit it by hand, 409 when a rename's new name is
+// already taken on disk, else 500.
 func skillRenderStatus(err error) int {
-	if errors.Is(err, skill.ErrUnknownKeysChanged) || errors.Is(err, configmcp.ErrSkillNotEditable) {
+	switch {
+	case errors.Is(err, skill.ErrUnknownKeysChanged), errors.Is(err, configmcp.ErrSkillNotEditable):
 		return http.StatusUnprocessableEntity
+	case errors.Is(err, configmcp.ErrSkillExists):
+		return http.StatusConflict
 	}
 	return http.StatusInternalServerError
 }

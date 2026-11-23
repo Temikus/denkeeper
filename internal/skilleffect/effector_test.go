@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -748,6 +749,48 @@ func TestEffector_Revert_DirectorySkillDeleteRestoresIntoFolder(t *testing.T) {
 	}
 	if sk, ok := sa.GetSkill("kelos"); !ok || sk.Dir != filepath.Join(sa.dir, "kelos") {
 		t.Errorf("restored skill = %+v, want it back in memory with its Dir", sk)
+	}
+}
+
+// A refused rename must leave no revision, or skill_revert would apply an
+// inverse for a change that never happened.
+func TestEffector_RefusedRenameLeavesNoRevision(t *testing.T) {
+	store := newStore(t)
+	sa := newFakeSkills(t)
+	e := newEffector(t, store)
+
+	// A directory skill as the source.
+	path := filepath.Join(sa.dir, "kelos", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(effectorYAMLSkill+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := skill.ParseFile(path, []byte(effectorYAMLSkill))
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed.Dir = filepath.Dir(path)
+	sa.AppendSkill(*parsed)
+	renamed := strings.Replace(effectorYAMLSkill, "name: kelos", "name: kelos-two", 1)
+	if err := e.Rename(context.Background(), sa, "t1", "kelos", renamed, agent.SkillActorUser, 0); !errors.Is(err, configmcp.ErrSkillNotEditable) {
+		t.Fatalf("rename of a directory skill = %v, want ErrSkillNotEditable", err)
+	}
+
+	// A flat source onto a destination already on disk.
+	seed(t, e, sa, "greet", "1.0.0", "body")
+	if err := os.WriteFile(filepath.Join(sa.dir, "taken.md"), []byte("not loaded"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Rename(context.Background(), sa, "t2", "greet", payloadFor("taken", "2.0.0", "body"), agent.SkillActorUser, 0); !errors.Is(err, configmcp.ErrSkillExists) {
+		t.Fatalf("rename onto a taken name = %v, want ErrSkillExists", err)
+	}
+
+	for _, name := range []string{"kelos-two", "taken"} {
+		if rev := latest(t, store, name); rev != nil {
+			t.Errorf("refused rename journaled a revision for %s: %+v", name, rev)
+		}
 	}
 }
 
