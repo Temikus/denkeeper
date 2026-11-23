@@ -4,6 +4,7 @@ import { http, HttpResponse } from 'msw'
 import { server } from '../../test/server.js'
 import { token, authMode } from '../../store.js'
 import DeciderCalibration from '../DeciderCalibration.svelte'
+import { attention } from '../../attention.js'
 
 const review = (id, min, supervisor, extra = {}) => ({
   audit_id: id, time: new Date(Date.now() - 2 * 86400000).toISOString(), conversation_id: 'c1',
@@ -26,6 +27,7 @@ const props = { agent: 'pamela', decider: 'jev', supervisor: 'argus', approveAt:
 beforeEach(() => {
   token.set('test-key')
   authMode.set('token')
+  attention.set({ pendingApprovals: 0, unhealthyTools: [], deciderReviews: {} })
 })
 
 describe('DeciderCalibration', () => {
@@ -226,5 +228,49 @@ describe('DeciderCalibration review mark', () => {
     expect(rows[1]).toHaveClass('reviewed')
     expect(screen.queryByTestId('calibration-new')).toBeNull()
     await waitFor(() => expect(counts).toBe(1))
+  })
+
+  test('says it is waiting when a review still lacks a verdict before a newer disagreement', async () => {
+    const ago = ms => new Date(Date.now() - ms).toISOString()
+    // The mark already sits on the last settled review; a younger one has no
+    // verdict yet, so the newer disagreement cannot be marked past it.
+    const settledAt = ago(20 * 60000)
+    serveReviews([
+      review(1, 0.99, 'DENY', { time: settledAt }),
+      review(2, 0.5, undefined, { time: ago(5 * 60000), supervisor_name: '' }),
+      review(3, 0.99, 'DENY', { time: ago(60000), tool: 'kv_set' }),
+    ], { reviewed_up_to: settledAt, reviewed_by: 'temik' })
+    render(DeciderCalibration, { props })
+
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Waiting on the supervisor for newer calls'))
+    expect(screen.queryByRole('button', { name: 'Mark all reviewed' })).toBeNull()
+    expect(screen.getByTestId('calibration-new')).toHaveTextContent('1 new since')
+  })
+
+  test('the head follows the saved-threshold count while the row keeps its dot', async () => {
+    attention.set({ pendingApprovals: 0, unhealthyTools: [], deciderReviews: { pamela: 0 } })
+    serveReviews([old(), fresh()], { reviewed_up_to: MARK, reviewed_by: 'temik' })
+    render(DeciderCalibration, { props })
+
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Nothing new to review'))
+    expect(screen.queryByRole('button', { name: 'Mark all reviewed' })).toBeNull()
+    expect(screen.queryByTestId('calibration-new')).toBeNull()
+    expect(tableRows()[0].querySelector('.new-dot')).not.toBeNull()
+  })
+
+  test('an unsaved decider falls back to the slider count', async () => {
+    attention.set({ pendingApprovals: 0, unhealthyTools: [], deciderReviews: { pamela: 0 } })
+    serveReviews([old(), fresh()], { reviewed_up_to: MARK, reviewed_by: 'temik' })
+    render(DeciderCalibration, { props: { ...props, saved: false } })
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Mark all reviewed' })).toBeInTheDocument())
+  })
+
+  test('a truncated load cannot be marked and says why', async () => {
+    serveReviews([old(), fresh()], { reviewed_up_to: MARK, reviewed_by: 'temik', truncated: true })
+    render(DeciderCalibration, { props })
+
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Pick a shorter time range'))
+    expect(screen.queryByRole('button', { name: 'Mark all reviewed' })).toBeNull()
   })
 })

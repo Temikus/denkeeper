@@ -2,7 +2,7 @@
   import { tick } from 'svelte'
   import { api } from '../api.js'
   import { relativeTime } from '../relativeTime.js'
-  import { refreshAttention } from '../attention.js'
+  import { attention, refreshAttention } from '../attention.js'
   import {
     DECIDER_APPROVE_DEFAULT, DECIDER_DENY_DEFAULT, CHECK_LABELS, floorScore,
     summarize, histogram, disagreements, suggestion, isFresh, reviewedUpTo,
@@ -82,10 +82,26 @@
   let shown = $derived(ordered.slice(0, SHOWN))
   // Index of the first reviewed row on screen; the divider goes above it.
   let dividerAt = $derived(markUpTo && fresh.length < shown.length ? fresh.length : -1)
-  // Fresh unsafe approvals: what the nav badge counts.
+  // Fresh unsafe approvals at the slider thresholds; these rows get the dot.
   let freshUnsafe = $derived(fresh.filter(d => d.decider_verdict === 'APPROVE').length)
+  // The nav badge's count, at the saved thresholds. The pill, the button and
+  // the status follow it when this panel shows the saved decider, so they
+  // agree with the badge while the sliders hold unsaved values.
+  let serverCount = $derived(saved && Object.hasOwn($attention.deciderReviews || {}, agent)
+    ? Number($attention.deciderReviews[agent]) || 0
+    : null)
+  let toReview = $derived(serverCount ?? freshUnsafe)
   let nextMark = $derived(reviewedUpTo(rows))
-  let canMark = $derived(freshUnsafe > 0 && !!nextMark && isFresh({ time: nextMark }, markUpTo))
+  // A truncated load holds only the newest reviews, so a mark would also
+  // cover older ones nobody was shown.
+  let canMark = $derived(toReview > 0 && !truncated && !!nextMark && isFresh({ time: nextMark }, markUpTo))
+  let statusText = $derived.by(() => {
+    if (marking) return ''
+    if (toReview > 0 && truncated) return 'Too many reviews to load. Pick a shorter time range to mark them reviewed.'
+    if (toReview > 0 && !canMark) return 'Waiting on the supervisor for newer calls'
+    if (toReview === 0 && markUpTo) return 'Nothing new to review'
+    return ''
+  })
   let suggest = $derived(suggestion(rows, A, D))
   let pct = $derived(stats.total ? Math.round((stats.settled / stats.total) * 100) : 0)
   let models = $derived([...new Set(rows.map(r => r.model).filter(Boolean))])
@@ -167,7 +183,8 @@
       const res = await api.markDeciderReviewed(agent, { decider, upTo })
       markUpTo = res?.reviewed_up_to || upTo
       markBy = res?.reviewed_by || markBy
-      refreshAttention()
+      // Awaited so the status reads from the new count, not the old one.
+      await refreshAttention()
       // The button is gone; keep keyboard focus here instead of <body>.
       await tick()
       statusEl?.focus()
@@ -300,8 +317,8 @@
     <div class="cal-dis-head">
       <span class="cal-dis-title">
         <span class="cal-kicker">Disagreements at these thresholds</span>
-        {#if markUpTo && freshUnsafe}
-          <span class="pill cal-new" data-testid="calibration-new">{freshUnsafe} new since {relativeTime(markUpTo)}</span>
+        {#if markUpTo && toReview}
+          <span class="pill cal-new" data-testid="calibration-new">{toReview} new since {relativeTime(markUpTo)}</span>
         {/if}
       </span>
       <span class="cal-dis-actions">
@@ -311,7 +328,7 @@
           </button>
         {/if}
         <!-- Always rendered so the text change is announced, and focusable for after a mark. -->
-        <span class="hint" role="status" tabindex="-1" bind:this={statusEl}>{!canMark && markUpTo && !freshUnsafe ? 'Nothing new to review' : ''}</span>
+        <span class="hint" role="status" tabindex="-1" bind:this={statusEl}>{statusText}</span>
         <a class="cal-link" href="#/audit?agent={encodeURIComponent(agent)}&category=supervisor&range={days}d">Open in audit log →</a>
       </span>
     </div>
