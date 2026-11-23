@@ -57,28 +57,63 @@ func (e *Engine) kvTargetStore() KVTargetStore {
 type writeToolSpec struct {
 	kind   string
 	action string // "" for kv_set: create or update, depending on the key
+	argKey string // the argument the handler reads the target from
 }
 
 // writeTools is keyed by the server-local name of an in-process tool. An
 // external server's kv_set is somebody else's store, so it gets no target.
+// argKey must match the handler's field: skill_write_file reads "skill" and
+// ignores "name", so reading "name" there lets a decoy hide an overwrite.
 var writeTools = map[string]writeToolSpec{
-	"skill_create":     {WriteTargetSkill, WriteActionCreate},
-	"skill_update":     {WriteTargetSkill, WriteActionUpdate},
-	"skill_patch":      {WriteTargetSkill, WriteActionUpdate},
-	"skill_write_file": {WriteTargetSkill, WriteActionUpdate},
-	"skill_delete":     {WriteTargetSkill, WriteActionDelete},
-	"kv_set":           {WriteTargetKVKey, ""},
-	"kv_delete":        {WriteTargetKVKey, WriteActionDelete},
+	"skill_create":     {WriteTargetSkill, WriteActionCreate, "name"},
+	"skill_update":     {WriteTargetSkill, WriteActionUpdate, "name"},
+	"skill_patch":      {WriteTargetSkill, WriteActionUpdate, "name"},
+	"skill_write_file": {WriteTargetSkill, WriteActionUpdate, "skill"},
+	"skill_delete":     {WriteTargetSkill, WriteActionDelete, "name"},
+	"kv_set":           {WriteTargetKVKey, "", "key"},
+	"kv_delete":        {WriteTargetKVKey, WriteActionDelete, "key"},
 }
 
 // The argument structs carry the config MCP handlers' JSON tags, so key case
-// and duplicate keys resolve the way the handler will resolve them.
-type skillTargetArgs struct {
+// and duplicate keys resolve the way the handler will resolve them. Each
+// holds one field, so no other argument can be read as the target.
+type skillNameArgs struct {
 	Name string `json:"name"`
+}
+
+type skillFileArgs struct {
+	Skill string `json:"skill"`
 }
 
 type kvTargetArgs struct {
 	Key string `json:"key"`
+}
+
+// targetArg decodes only the argument named by argKey. "" means the
+// arguments do not parse or the field is empty.
+func targetArg(argKey, arguments string) string {
+	switch argKey {
+	case "name":
+		var a skillNameArgs
+		if json.Unmarshal([]byte(arguments), &a) != nil {
+			return ""
+		}
+		return a.Name
+	case "skill":
+		var a skillFileArgs
+		if json.Unmarshal([]byte(arguments), &a) != nil {
+			return ""
+		}
+		return a.Skill
+	case "key":
+		var a kvTargetArgs
+		if json.Unmarshal([]byte(arguments), &a) != nil {
+			return ""
+		}
+		return a.Key
+	default:
+		return ""
+	}
 }
 
 // builtinLocal returns toolName's local name when an in-process server owns it.
@@ -101,20 +136,16 @@ func (e *Engine) ResolveWriteTarget(ctx context.Context, toolName, arguments str
 	if !ok {
 		return nil
 	}
-	if spec.kind == WriteTargetSkill {
-		var args skillTargetArgs
-		if json.Unmarshal([]byte(arguments), &args) != nil || args.Name == "" {
-			return nil
-		}
-		// skill_update with new_name still reports name; the rename is in the arguments.
-		_, exists := e.GetSkill(args.Name)
-		return &WriteTarget{Kind: spec.kind, Name: args.Name, Action: spec.action, Exists: exists}
-	}
-	var args kvTargetArgs
-	if json.Unmarshal([]byte(arguments), &args) != nil || args.Key == "" {
+	name := targetArg(spec.argKey, arguments)
+	if name == "" {
 		return nil
 	}
-	return e.resolveKVTarget(ctx, spec, args.Key)
+	if spec.kind == WriteTargetSkill {
+		// skill_update with new_name still reports name; the rename is in the arguments.
+		_, exists := e.GetSkill(name)
+		return &WriteTarget{Kind: spec.kind, Name: name, Action: spec.action, Exists: exists}
+	}
+	return e.resolveKVTarget(ctx, spec, name)
 }
 
 func (e *Engine) resolveKVTarget(ctx context.Context, spec writeToolSpec, key string) *WriteTarget {

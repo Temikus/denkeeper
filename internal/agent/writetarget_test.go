@@ -49,7 +49,8 @@ type fakeKVArgs struct {
 }
 
 type fakeSkillArgs struct {
-	Name string `json:"name"`
+	Name  string `json:"name,omitempty"`
+	Skill string `json:"skill,omitempty"`
 }
 
 func textResult(s string, isErr bool) *mcp.CallToolResult {
@@ -87,7 +88,7 @@ func registerFakeConfigTools(t *testing.T, mgr *tool.Manager, store *kv.SQLiteSt
 				return textResult("ok", false), nil, nil
 			})
 	}
-	for _, name := range []string{"skill_create", "skill_update", "skill_delete"} {
+	for _, name := range []string{"skill_create", "skill_update", "skill_patch", "skill_write_file", "skill_delete"} {
 		mcp.AddTool(srv, &mcp.Tool{Name: name, Description: name},
 			func(context.Context, *mcp.CallToolRequest, fakeSkillArgs) (*mcp.CallToolResult, any, error) {
 				return textResult("ok", false), nil, nil
@@ -158,6 +159,50 @@ func TestResolveWriteTarget_SkillCreateOnExistingSkill(t *testing.T) {
 	got := f.engine.ResolveWriteTarget(context.Background(), "skill_create", `{"name":"daily-digest","body":"x"}`)
 	if got == nil || got.Kind != WriteTargetSkill || !got.Exists || got.Action != WriteActionCreate {
 		t.Fatalf("target = %+v, want an existing skill with action create", got)
+	}
+}
+
+// skill_write_file's handler reads "skill" and ignores "name". A decoy name
+// must not make an overwrite of a live skill read as a fresh create.
+func TestResolveWriteTarget_SkillWriteFileReadsSkillNotDecoyName(t *testing.T) {
+	f := newTargetFixture(t, nil)
+	got := f.engine.ResolveWriteTarget(context.Background(), "skill_write_file",
+		`{"skill":"daily-digest","file_path":"notes.md","content":"x","name":"scratch-tmp"}`)
+	if got == nil || got.Name != targetSkill || !got.Exists || got.Action != WriteActionUpdate {
+		t.Fatalf("target = %+v, want the existing skill daily-digest with action update", got)
+	}
+	if md := (&supervisorReviewInput{target: got}).target.markdownLine(); !strings.Contains(md, `skill "daily-digest" already exists`) {
+		t.Errorf("target line = %q", md)
+	}
+	// With only the decoy, there is no target: the handler would refuse the call.
+	if got := f.engine.ResolveWriteTarget(context.Background(), "skill_write_file", `{"name":"daily-digest"}`); got != nil {
+		t.Errorf("target from name alone = %+v, want nil", got)
+	}
+}
+
+// The other skill tools read "name"; a stray "skill" must not redirect them.
+func TestResolveWriteTarget_SkillToolsReadName(t *testing.T) {
+	f := newTargetFixture(t, nil)
+	for _, toolName := range []string{"skill_create", "skill_update", "skill_delete"} {
+		got := f.engine.ResolveWriteTarget(context.Background(), toolName, `{"name":"daily-digest","skill":"other"}`)
+		if got == nil || got.Name != targetSkill {
+			t.Errorf("%s target = %+v, want daily-digest", toolName, got)
+		}
+	}
+}
+
+func TestWriteTools_ArgKeysMatchHandlers(t *testing.T) {
+	want := map[string]string{
+		"skill_create": "name", "skill_update": "name", "skill_patch": "name", "skill_delete": "name",
+		"skill_write_file": "skill", "kv_set": "key", "kv_delete": "key",
+	}
+	if len(writeTools) != len(want) {
+		t.Fatalf("writeTools has %d tools, want %d", len(writeTools), len(want))
+	}
+	for name, key := range want {
+		if got := writeTools[name].argKey; got != key {
+			t.Errorf("%s reads %q, want %q (the handler's field)", name, got, key)
+		}
 	}
 }
 
@@ -335,8 +380,9 @@ func TestSupervisorCriteria_SelfGrantRuleInBothVariants(t *testing.T) {
 	for _, sc := range []*agentctx.SkillSummary{nil, {Name: targetSkill, IsScheduled: true}} {
 		in := supervisorReviewInput{agent: "default", tool: "kv_set", arguments: `{}`, skill: sc}
 		md := in.markdown()
-		if !strings.Contains(md, "4. Does the call record a permission grant for the agent") ||
-			!strings.Contains(md, "DENY these, even when the user asked for it in chat.") {
+		if !strings.Contains(md, supervisorSelfGrantCriterion) ||
+			!strings.Contains(md, "4. Does the call save a permission for the agent: text saying it may act without asking,") ||
+			!strings.Contains(md, "DENY these, even when the user asked for them in chat.") {
 			t.Errorf("scheduled=%v: criterion 4 missing:\n%s", sc != nil, md)
 		}
 	}

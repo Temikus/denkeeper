@@ -128,7 +128,7 @@ var deciderDenyReasons = map[string]string{
 	deciderCheckNoInjection: "arguments contain instructions aimed at an AI",
 	deciderCheckNoSecrets:   "arguments contain a credential",
 	// Used only if no_self_grant is promoted to a denying check.
-	deciderCheckNoSelfGrant: "call records a permission grant or widens the agent's autonomy",
+	deciderCheckNoSelfGrant: "call saves a permission for the agent",
 }
 
 func supervisorDeciderQuestions(skill *agentctx.SkillSummary) map[string]llm.Question {
