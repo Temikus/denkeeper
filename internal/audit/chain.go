@@ -234,13 +234,11 @@ type chainWalker struct {
 // start only if it is itself in the verified chain (FirstID <= id <= HeadID;
 // it may be the first row). Unhashed rows below such a start are a break
 // too: a prune deletes the oldest ids first, so none can survive one that
-// reached the chain. A break at or before the first row is kept.
+// reached the chain. A break the walk already found is more specific and
+// is kept; missing_start is reported only when the start is the problem.
 func (w *chainWalker) checkCheckpointStart() {
 	rep := w.rep
-	if rep.Start != ChainStartCheckpoint {
-		return
-	}
-	if rep.Break != nil && rep.Break.ID <= rep.FirstID {
+	if rep.Start != ChainStartCheckpoint || rep.Break != nil {
 		return
 	}
 	inChain := rep.Verified > 0 && rep.CheckpointID >= rep.FirstID && rep.CheckpointID <= rep.HeadID

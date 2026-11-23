@@ -48,7 +48,8 @@ func newAuditCmd() *cobra.Command {
 		Long: "Walks the audit log in id order and checks every event against its hash and the hash of the event\n" +
 			"before it. Exits non-zero at the first event that was changed, removed, added or reordered.\n" +
 			"Read-only, and safe while denkeeper serve is running. It cannot see removed newest events or a\n" +
-			"full rewrite of the file: keep a copy of the Head line somewhere else to catch those.\n\n" +
+			"full rewrite of the file: keep a copy of the Head line somewhere else and check it later\n" +
+			"(\"Checking a saved Head line\" in the CLI reference) to catch those.\n\n" +
 			"Exit codes: 0 verified (or no events), 1 broken or an error, 2 no event has a hash, so nothing\n" +
 			"could be verified.",
 		Args:         cobra.NoArgs,
@@ -99,7 +100,7 @@ func writeChainReport(w io.Writer, path string, r *audit.ChainReport) {
 	case r.Break != nil:
 		writeBreak(p, r)
 	case r.Start == audit.ChainStartEmpty:
-		p("No audit events. Nothing to verify.")
+		p("No audit events. Nothing to verify. If this log has ever had events, the table was emptied outside denkeeper.")
 	case r.Start == audit.ChainStartNone:
 		p("NOT COVERED: %s (ids %d-%d) have no hash, so none of them can be verified.",
 			events(r.LegacyRows), r.LegacyFirstID, r.LegacyLastID)

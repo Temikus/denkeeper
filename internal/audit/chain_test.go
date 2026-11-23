@@ -416,10 +416,31 @@ func TestVerifyChain_EditedCheckpointDetail(t *testing.T) {
 	}
 	rawExec(t, s, `UPDATE audit_events SET detail = replace(detail, '"pruned_rows":1', '"pruned_rows":0') WHERE action = ?`, ActionPruneCheckpoint)
 
-	// The edited checkpoint fails its own hash, so it cannot vouch for the
-	// start: the earliest problem is the unvouched first row.
-	rep := requireBreakAt(t, verifyChain(t, s), 2, BreakMissingStart)
-	if rep.Verified != 0 || rep.Unchecked != 1 {
+	// The walk's own, more specific break is reported, not missing_start.
+	rep := requireBreakAt(t, verifyChain(t, s), 3, BreakHashMismatch)
+	if rep.Verified != 1 || rep.Unchecked != 0 {
+		t.Fatalf("report = %+v", rep)
+	}
+}
+
+// An older binary writes unhashed events after chained ones. Once retention
+// has pruned the chained events before them, they read as a not-covered
+// prefix and the chain verifies again.
+func TestVerifyChain_RollbackBreakHealsAfterRetention(t *testing.T) {
+	s := newChainStore(t)
+	insertAt(t, s, eventAt(pruneOld, "old 1"), eventAt(pruneOld, "old 2"))
+	now := time.Now().UTC()
+	for range 2 {
+		rawExec(t, s, `INSERT INTO audit_events (timestamp, category, action, summary) VALUES (?, 'tool_call', 'execute', 'old binary')`,
+			now.Format(time.RFC3339Nano))
+	}
+	insertAt(t, s, eventAt(now, "new binary again"))
+	requireBreak(t, verifyChain(t, s), 3, BreakUnhashedRow)
+
+	prune(t, s, pruneCutoff)
+	rep := verifyChain(t, s)
+	requireIntact(t, rep)
+	if rep.Start != ChainStartGenesis || rep.LegacyRows != 2 || rep.FirstID != 5 {
 		t.Fatalf("report = %+v", rep)
 	}
 }

@@ -62,10 +62,10 @@ What the chain does not catch:
 - **A forged checkpoint.** For the same reason, someone can delete the oldest events and write a matching checkpoint. It stays visible, with a cutoff and a count you can compare with `retention_days`.
 - **Edits to older events** without a hash.
 
-To catch the first two, keep a copy of verify's `Head` line somewhere other than this machine.
+To catch the first two, keep a copy of verify's `Head` line somewhere other than this machine and check it later, as described in [Checking a saved Head line](/docs/reference/cli/#checking-a-saved-head-line).
 
 {{< callout context="caution" >}}
-Do not run an older denkeeper against an upgraded `audit.db`. It writes events with no hash, which breaks the chain permanently at the first of them: verify reports that event as `unhashed_row` and leaves every later event unchecked.
+Do not run an older denkeeper against an upgraded `audit.db`. It writes events with no hash, which breaks the chain at the first of them: verify reports that event as `unhashed_row` and leaves every later event unchecked, until retention removes the chained events written before them. After that, the unhashed events show as not covered and age out in turn.
 {{< /callout >}}
 
 ## Tool-call telemetry

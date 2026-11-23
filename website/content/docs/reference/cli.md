@@ -244,7 +244,7 @@ Chain start: event 1 is the first chained event.
 Head: id 48211 hash 9f2c…
 ```
 
-A broken one, which names the first event that fails:
+A broken one (older events were pruned), which names the first event that fails:
 
 ```
 Audit log: /home/me/.denkeeper/data/audit.db
@@ -265,7 +265,26 @@ Events written before this version have no hash. They are reported as not covere
 | `1` | The chain is broken, or the command failed (for example, no `audit.db`) |
 | `2` | No event has a hash, so nothing was verified |
 
-What the chain cannot catch, and the [Observability](/docs/concepts/observability/#integrity) page explains: removing the newest events, a full rewrite of the file with recomputed hashes, and a forged prune checkpoint. Keep a copy of the `Head` line somewhere other than this machine; a later `Head` that no longer extends it is evidence of a rewrite.
+Exit code `1` covers both a broken chain and a command that could not run. To tell them apart in a script, check whether the output contains `BROKEN`.
+
+An empty log also exits `0`. If the log has ever had events, an empty table means it was emptied outside denkeeper.
+
+What the chain cannot catch, as the [Observability](/docs/concepts/observability/#integrity) page explains: removing the newest events, a full rewrite of the file with recomputed hashes, and a forged prune checkpoint. A saved `Head` line covers the first two.
+
+#### Checking a saved Head line
+
+Copy the `Head` line somewhere other than this machine, then check it on a later run:
+
+1. Run `denkeeper audit verify`. The new `Head` id must be at least the saved id.
+2. The saved event must still exist with the same hash:
+
+   ```bash
+   sqlite3 ~/.denkeeper/data/audit.db "SELECT hash FROM audit_events WHERE id = <saved id>"
+   ```
+
+   The output must equal the saved hash. A different hash, or a smaller `Head` id, means events were rewritten or removed after you saved the line.
+
+Once retention has pruned the saved event, this check no longer works. A prune checkpoint records only the last event it removed (`pruned_through_id` and `pruned_through_hash` in its detail), so it matches your saved line only if that was the same event. Save a new `Head` line more often than `[audit] retention_days` (weekly, with the default 30 days).
 
 ## `denkeeper passwd`
 

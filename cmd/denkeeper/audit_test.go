@@ -36,7 +36,7 @@ func assertReport(t *testing.T, r *audit.ChainReport, want string) {
 
 func TestWriteChainReport_Empty(t *testing.T) {
 	assertReport(t, &audit.ChainReport{Start: audit.ChainStartEmpty},
-		"Audit log: "+reportPath+"\nNo audit events. Nothing to verify.\n")
+		"Audit log: "+reportPath+"\nNo audit events. Nothing to verify. If this log has ever had events, the table was emptied outside denkeeper.\n")
 }
 
 func TestWriteChainReport_OnlyLegacy(t *testing.T) {
