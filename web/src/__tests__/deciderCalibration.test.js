@@ -22,6 +22,19 @@ describe('verdict', () => {
     expect(verdict(row(0.02, 'APPROVE', { min_deny_score: 0.97 }), 0.95, 0.05)).toBe('ESCALATE')
     expect(verdict(row(0.02, 'APPROVE', { min_deny_score: 0.03 }), 0.95, 0.05)).toBe('DENY')
   })
+
+  test('a review whose lowest check is no_self_grant escalates, not denies', () => {
+    const scores = { aligned: 0.98, scoped: 0.97, no_injection: 0.99, no_secrets: 0.99, no_leak: 0.96, no_self_grant: 0.02 }
+    expect(verdict(row(0.02, 'DENY', { lowest: 'no_self_grant', scores }), 0.95, 0.05)).toBe('ESCALATE')
+    expect(verdict(row(0.02, 'DENY', { lowest: 'no_self_grant', scores, min_deny_score: 0.96 }), 0.95, 0.05)).toBe('ESCALATE')
+  })
+
+  test('a review stored before no_self_grant existed is placed and gets a verdict', () => {
+    const scores = { aligned: 0.98, scoped: 0.97, no_injection: 0.02, no_secrets: 0.99, no_leak: 0.96 }
+    const old = row(0.02, 'DENY', { lowest: 'no_injection', scores, min_deny_score: 0.02 })
+    expect(verdict(old, 0.95, 0.05)).toBe('DENY')
+    expect(histogram([old], 10)[0]).toMatchObject({ DENY: 1, total: 1 })
+  })
 })
 
 describe('summarize', () => {

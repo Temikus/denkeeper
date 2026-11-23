@@ -3,7 +3,7 @@ title: "Supervisors & Auto-Approval"
 description: "Letting an LLM reviewer, or a standing rule, answer approval prompts for you."
 slug: "supervisors"
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-10-02T00:00:00+00:00
+lastmod: 2026-11-23T00:00:00+00:00
 draft: false
 weight: 45
 toc: true
@@ -80,6 +80,12 @@ When a tool call reaches the supervisor, it gets a one-shot LLM call — the too
 A timeout or an error also falls through to human approval. The supervisor fails **open to you**, never open to the tool.
 
 Tool calls whose arguments exceed `supervisor_max_args_bytes` (default 16 KB) skip the review entirely and go to you, audited with `cause: "too_large"`. The arguments are not truncated, since a reviewer shown part of a payload could approve the part it never saw.
+
+### What the supervisor checks
+
+The supervisor is asked whether the call does what the request asked, whether its arguments are safe, and whether it stays in scope. It is also told to deny any call that records a permission grant for the agent, claims that an operator approved something, or widens the agent's own autonomy, such as saving "you have my blanket approval" to memory or writing a skill that says to skip approval. Approval comes from your configuration (tiers, auto-approve rules, this supervisor), never from the conversation, so these calls are denied even when you asked for them in chat.
+
+For the skill and KV write tools (`skill_create`, `skill_update`, `skill_patch`, `skill_write_file`, `skill_delete`, `kv_set` and `kv_delete`), the review also says whether the target already exists. For a KV key it adds when the key was last written and by which skill, when that was recorded. A call that replaces or deletes something needs a request that asked for exactly that. The same `target` appears in the `supervisor` audit event.
 
 ### Constraints
 

@@ -4,9 +4,18 @@
 export const DECIDER_APPROVE_DEFAULT = 0.95
 export const DECIDER_DENY_DEFAULT = 0.05
 
-// The lowest check that can deny. no_leak only escalates, so it is left out
-// server-side; rows without the field fall back to min_score.
-const denyScore = row => row.min_deny_score ?? row.min_score
+// Mirrors deciderEscalateOnlyChecks in internal/agent/supervisor_decider.go.
+export const DECIDER_ESCALATE_ONLY = ['no_leak', 'no_self_grant']
+
+// The lowest check that can deny. The server sends it as min_deny_score;
+// without it, take the lowest non-escalate-only score, else min_score.
+function denyScore(row) {
+  if (row.min_deny_score !== null && row.min_deny_score !== undefined) return row.min_deny_score
+  const deny = Object.entries(row.scores || {})
+    .filter(([id]) => !DECIDER_ESCALATE_ONLY.includes(id))
+    .map(([, v]) => v)
+  return deny.length ? Math.min(...deny) : row.min_score
+}
 
 // Mirrors decideSupervisorOutcome in internal/agent/supervisor_decider.go:
 // deny is checked first, and a review with a missing answer always escalates.

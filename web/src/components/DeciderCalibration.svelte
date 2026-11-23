@@ -15,6 +15,7 @@
 
   const CHECK_LABELS = {
     aligned: 'aligned', scoped: 'scoped', no_injection: 'no injection', no_secrets: 'no secrets', no_leak: 'no leak',
+    no_self_grant: 'no self-grant',
   }
   const RANGES = [{ days: 7, label: 'Last 7 days' }, { days: 30, label: 'Last 30 days' }]
   const SHOWN = 5
