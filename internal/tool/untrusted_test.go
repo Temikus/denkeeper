@@ -323,6 +323,43 @@ func TestRuntimeRefusals_PointAtTheConfigFile(t *testing.T) {
 	}
 }
 
+// Proxies with disabled TLS checks, git's own commands and config, the rest
+// of the Python and Node option families, npm and corepack settings, and
+// BROWSER each let a pinned launcher fetch or run something else.
+func TestValidateRuntimeEnv_RefusesWiderFamilies(t *testing.T) {
+	for _, name := range []string{
+		"NODE_TLS_REJECT_UNAUTHORIZED", "node_tls_reject_unauthorized", "NODE_REPL_EXTERNAL_MODULE",
+		"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "ALL_PROXY", "all_proxy", "FTP_PROXY",
+		"GIT_SSH_COMMAND", "git_ssh_command", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_COUNT", "GIT_EXEC_PATH",
+		"PYTHONWARNINGS", "pythonwarnings", "PYTHONBREAKPOINT", "PYTHONINSPECT", "PYTHON_COLORS",
+		"NPM_TOKEN", "npm_execpath", "COREPACK_NPM_REGISTRY", "corepack_home",
+		"BROWSER", "browser", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+	} {
+		err := ValidateRuntimeEnv(map[string]string{name: "v"})
+		if err == nil {
+			t.Errorf("%s: accepted, want rejection", name)
+			continue
+		}
+		if !strings.Contains(err.Error(), name) {
+			t.Errorf("%s: error %q does not name the variable", name, err)
+		}
+	}
+}
+
+// Harmless members of the refused families stay allowed: they change output,
+// not what runs or where it comes from.
+func TestValidateRuntimeEnv_AllowsHarmlessFamilyMembers(t *testing.T) {
+	for _, name := range []string{
+		"NODE_ENV", "node_env", "NODE_NO_WARNINGS",
+		"PYTHONUNBUFFERED", "pythonunbuffered", "PYTHONIOENCODING", "PYTHONDONTWRITEBYTECODE",
+		"NO_PROXY", "no_proxy",
+	} {
+		if err := ValidateRuntimeEnv(map[string]string{name: "1"}); err != nil {
+			t.Errorf("%s: refused: %v", name, err)
+		}
+	}
+}
+
 func TestValidateRuntimeEnv_AllowsOrdinaryNames(t *testing.T) {
 	env := map[string]string{
 		"GITHUB_TOKEN": "x", "PYTHONUNBUFFERED": "1", "NODE_ENV": "production",

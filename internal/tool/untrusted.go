@@ -71,22 +71,37 @@ func (m *Manager) checkRuntimeCommand(cfg config.ToolConfig) error {
 // answer). cfg.Env wins over the inherited env (buildStdioEnv), so without
 // this a pin or an allowlisted command could still run anything.
 var runtimeEnvRefused = flagSet(
-	"NODE_OPTIONS", "NODE_PATH", "NODE_EXTRA_CA_CERTS",
-	"PYTHONPATH", "PYTHONSTARTUP", "PYTHONHOME", "PYTHONUSERBASE",
 	"GCONV_PATH", "LOCPATH", "NLSPATH", // glibc loads iconv modules and locale data from these
-	"BASH_ENV", "ENV",
+	"BASH_ENV", "ENV", "BROWSER",
 	"JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS",
 	"PERL5OPT", "PERL5LIB", "RUBYOPT", "RUBYLIB",
 	"PATH", "HOME", "PREFIX", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
-	"SSL_CERT_FILE", "SSL_CERT_DIR",
+	"SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
 )
 
-// runtimeEnvRefusedPrefixes cover launchers whose every setting is also an
-// env variable (npm, pip, uv), the Linux and macOS loaders, and the XDG base
-// dirs, where npm, pip and uv look for config and cache (uv also installs
-// tools there). uv alone has dozens that move the index or the interpreter,
-// so whole families are refused.
-var runtimeEnvRefusedPrefixes = []string{"NPM_CONFIG_", "PIP_", "UV_", "LD_", "DYLD_", "XDG_"}
+// runtimeEnvRefusedPrefixes cover whole families that load code or move a
+// package's source: the Node and Python option families (NODE_OPTIONS,
+// NODE_TLS_REJECT_UNAUTHORIZED, PYTHONPATH, PYTHONWARNINGS and the rest), npm,
+// corepack, pip and uv settings, git (npm and uv fetch git dependencies, and
+// GIT_SSH_COMMAND runs a command), the Linux and macOS loaders, and the XDG
+// base dirs where npm, pip and uv keep config and cache. Refusing a family
+// beats naming its members: uv alone has dozens that move the index.
+var runtimeEnvRefusedPrefixes = []string{
+	"NODE_", "NPM_", "COREPACK_", "PYTHON", "PIP_", "UV_", "GIT_", "LD_", "DYLD_", "XDG_",
+}
+
+// runtimeEnvRefusedSuffixes: any proxy setting (HTTPS_PROXY, ALL_PROXY, …)
+// lets a proxy answer for the registry, which with a CA override or disabled
+// TLS checks serves anything under a pinned version.
+var runtimeEnvRefusedSuffixes = []string{"_PROXY"}
+
+// runtimeEnvAllowed are harmless members of the refused families: they
+// change output or bypass a proxy, never what runs or where it comes from.
+var runtimeEnvAllowed = flagSet(
+	"NODE_ENV", "NODE_NO_WARNINGS",
+	"PYTHONUNBUFFERED", "PYTHONIOENCODING", "PYTHONDONTWRITEBYTECODE",
+	"NO_PROXY",
+)
 
 // runtimeRefusalFix ends every runtime refusal. The checks apply to admin
 // callers too, so the fix is the config file, not a permission.
@@ -102,16 +117,33 @@ func ValidateRuntimeEnv(env map[string]string) error {
 	}
 	slices.Sort(names) // the same input names the same variable every time
 	for _, name := range names {
-		upper := strings.ToUpper(name)
-		refused := runtimeEnvRefused[upper]
-		for _, p := range runtimeEnvRefusedPrefixes {
-			refused = refused || strings.HasPrefix(upper, p)
-		}
-		if refused {
+		if runtimeEnvRefusedName(strings.ToUpper(name)) {
 			return fmt.Errorf("env %s can make the tool run other code or fetch its package from elsewhere; tools added at runtime can't set it, so %s", name, runtimeRefusalFix)
 		}
 	}
 	return nil
+}
+
+// runtimeEnvRefusedName reports whether an upper-cased env name is refused:
+// an exact name, a refused family or suffix, unless it is a harmless member.
+func runtimeEnvRefusedName(upper string) bool {
+	if runtimeEnvAllowed[upper] {
+		return false
+	}
+	if runtimeEnvRefused[upper] {
+		return true
+	}
+	for _, p := range runtimeEnvRefusedPrefixes {
+		if strings.HasPrefix(upper, p) {
+			return true
+		}
+	}
+	for _, s := range runtimeEnvRefusedSuffixes {
+		if strings.HasSuffix(upper, s) {
+			return true
+		}
+	}
+	return false
 }
 
 // ValidatePinnedPackageArgs rejects npx and uvx invocations whose package is
