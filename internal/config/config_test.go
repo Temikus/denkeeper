@@ -5758,6 +5758,21 @@ on_leaked_tool_call = "hold"
 	}
 }
 
+// Listing trusted keys signals that signatures matter, so an unset
+// allow_unsigned then requires them.
+func TestParse_SecurityConfig_TrustedKeysDefaultToSigned(t *testing.T) {
+	cfg, err := Parse([]byte(baseConfig + `
+[security]
+trusted_keys = ["~/.denkeeper/keys/pub1.pub"]
+`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Security.AllowUnsigned == nil || *cfg.Security.AllowUnsigned {
+		t.Error("expected AllowUnsigned to default to false when trusted_keys is set")
+	}
+}
+
 func TestSkillIndex_OnWithoutSkillsSection(t *testing.T) {
 	cfg, err := Parse([]byte(baseConfig))
 	if err != nil {

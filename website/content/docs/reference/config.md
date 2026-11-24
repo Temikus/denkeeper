@@ -566,7 +566,7 @@ Subprocess plugins run as child processes with direct MCP stdio. Docker plugins 
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `trusted_keys` | string[] | — | Paths to PEM-encoded Ed25519 public key files |
-| `allow_unsigned` | bool | `true` | Allow unsigned subprocess plugin binaries |
+| `allow_unsigned` | bool | `true` without `trusted_keys`, `false` with them | Allow unsigned subprocess plugin binaries |
 
 When `allow_unsigned = false`, all subprocess plugin binaries must have a valid Ed25519 signature from one of the trusted keys.
 
@@ -638,6 +638,7 @@ Global settings that apply to all MCP tool servers.
 | `init_retry_backoff` | string | `"2s"` | Base backoff duration between initial-connection retries |
 | `sse_keep_alive_secs` | int | `15` | TCP keepalive interval for SSE connections (overridable per server) |
 | `env_passthrough` | string[] | — | Extra parent-process environment variable names forwarded to stdio server subprocesses, on top of the built-in non-secret allowlist. `DENKEEPER_*` and other denylisted names are always blocked, even here |
+| `allowed_commands` | string[] | — | Exact stdio commands a tool added or changed at runtime (Config MCP `tool_add`, REST) may run, compared on the full string (`"npx"` does not admit `/tmp/x/npx`). Tools in this file are not checked. Only `npx` and `uvx` packages are checked for a pinned version, so listing another launcher (`uv`, `npm`, `pnpm`, `bunx`, `pipx`) lets it fetch unpinned packages. Empty means no allowlist, but then a REST key without the `admin` scope cannot add a stdio tool or change its command line or `env`. Restart-only |
 
 Removing, disabling, restarting or reconfiguring a tool server tears it down in
 two phases. The server stops being offered immediately — its tools leave the
@@ -675,6 +676,15 @@ per-tool-call timeout, so a call that was going to succeed gets to.
 **SSE security**: SSRF protection blocks localhost, link-local (169.254.x.x), and cloud metadata endpoints. `${NAME}` placeholders in `url` and `headers` are resolved from environment but secrets matching `DENKEEPER_*_SECRET`, `DENKEEPER_*_PASSWORD*`, and related patterns are denied. URL and header values are redacted in API responses.
 
 **Untrusted writers**: a tool or plugin added by an agent (`tool_add`, `plugin_add`), or through the REST API without the `admin` scope, cannot reference host variables. `env` values may not contain `$` references, `url` and `headers` placeholders must name a key of the tool's own `env`, and REST rejects `env_passthrough`. Tools in this file are unchanged: `env` expands any variable, and the denylist above covers only `url` and `headers`.
+
+**Code a runtime tool may run**:
+
+- **Approval.** Every Config MCP `tool_add` and `plugin_add` call waits for a one-off operator approval, in every tier. No auto-approve rule, decider or supervisor can answer it, and the approval has no "15 min" or "Always" option. With no adapter to ask through (a headless schedule), the call is denied.
+- **Plugins.** An agent's `plugin_add` may not use `type = "subprocess"`, a `host` or `container:` network, or volumes, and neither may a REST key without `admin`.
+- **Commands.** A stdio tool added or changed at runtime, by anyone, must use a command from `[mcp] allowed_commands` when that is set.
+- **Pinning.** An `npx` or `uvx` package must be pinned to an exact version (`@scope/name@1.2.3`, `name==1.2.3`). `npx -c`, `uvx --with-requirements`, registry and index overrides (`npx --registry`, `uvx --index-url`, `--find-links` and similar), uvx overrides, constraints, config-file, directory, project and cache-dir options, a `uvx --python` that is not a bare version such as `3.12`, and any launcher option Denkeeper does not recognise are refused. Only `npx` and `uvx` are checked: other launchers (`uv tool run`, `npm exec`, `pnpm dlx`, `bunx`, `pipx`) fetch whatever they are given.
+- **Environment.** A runtime stdio tool may not set env that loads other code or moves where a package comes from: `NODE_OPTIONS`, `NODE_PATH`, `PYTHONPATH`, `GCONV_PATH`, `PATH`, `HOME`, `PREFIX`, `APPDATA` and similar, or any `npm_config_*`, `PIP_*`, `UV_*`, `LD_*`, `DYLD_*` or `XDG_*` name. The refusal names the variable. These checks apply to every caller, admin keys included: to set one of these variables, put the tool in the config file.
+- **Edits.** An edit that leaves the command line unchanged is not re-checked, except that a changed `env` is checked against the environment rule.
 
 Tools can also be added and removed at runtime via the REST API (`tools:write` scope) or the Config MCP server (`tool_add`/`tool_remove`). Runtime changes are persisted to the TOML config file.
 
