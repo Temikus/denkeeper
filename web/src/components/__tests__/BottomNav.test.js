@@ -49,5 +49,12 @@ describe('BottomNav', () => {
 
     expect(tab.querySelector('.badge')).toHaveTextContent('2')
     expect(tab).toHaveTextContent('2 to review')
+
+    // "Only while": once the reviews are marked, the badge goes.
+    attention.set({ pendingApprovals: 0, unhealthyTools: [], deciderReviews: { default: 0 } })
+    await Promise.resolve()
+
+    expect(tab.querySelector('.badge')).toBeNull()
+    expect(tab).not.toHaveTextContent('to review')
   })
 })

@@ -9,7 +9,8 @@ export const CHECK_LABELS = {
   no_self_grant: 'no self-grant',
 }
 
-// Rounded down so a shown score never passes a threshold the real one misses.
+// Rounded down, so a shown score never meets an approve threshold the real one
+// misses. On the deny side it can: 0.0501 shows as 0.05 against a 0.05 deny.
 export const floorScore = v => (Math.floor(v * 100 + 1e-9) / 100).toFixed(2)
 
 // Fraction digits past the millisecond, padded so two in the same millisecond
@@ -33,6 +34,8 @@ export function isFresh(row, reviewedUpTo) {
 // verdict, a failed supervisor review (supervisor_name and no verdict), or is
 // older than the pairing window. Returns the row's own time string, never
 // re-formatted: a Date would cut it to milliseconds. null when nothing is settled.
+// Pass the server's time as `now` (the reviews response's `until`): the server
+// does the pairing, so its clock decides what can still pair.
 export function reviewedUpTo(rows, now = Date.now()) {
   const settled = row => !!row.supervisor || !!row.supervisor_name || now - new Date(row.time) > PAIR_WINDOW_MS
   const sorted = [...rows].sort((a, b) => compareTime(a.time, b.time))

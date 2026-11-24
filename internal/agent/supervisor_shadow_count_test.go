@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -100,6 +101,31 @@ func (c countStore) count(after time.Time, approveAt float64) int {
 }
 
 var countT = time.Now().Add(-time.Hour)
+
+// The badge must not undercount an agent with more supervisor events than the
+// reviews list's scan cap: the count reads every page.
+func TestCountUnsafeApprovals_CountsPastTheReviewsScanCap(t *testing.T) {
+	c := newCountStore(t)
+	pairs := shadowReviewsMaxScan/2 + 1 // two events each, so the scan cap is passed
+	start := time.Now().Add(-4 * time.Hour)
+	verdict, _ := json.Marshal(map[string]any{"tool": "echo", "arguments": "{}", "decision": "DENY", "supervisor": "argus"})
+	events := make([]audit.Event, 0, 2*pairs)
+	for i := range pairs {
+		at := start.Add(time.Duration(2*i) * time.Second).UTC()
+		conv := fmt.Sprintf("c%d", i)
+		events = append(events,
+			audit.Event{Timestamp: at, Category: audit.CategorySupervisor, Action: "review", Agent: "pamela",
+				Status: audit.StatusOK, Source: "decider:jev", ConversationID: conv, Detail: countShadowDetail(answersWith(nil))},
+			audit.Event{Timestamp: at.Add(time.Second), Category: audit.CategorySupervisor, Action: "review", Agent: "pamela",
+				Status: audit.StatusOK, Source: "supervisor:argus", ConversationID: conv, Detail: string(verdict)})
+	}
+	if err := c.s.InsertBatch(context.Background(), events); err != nil {
+		t.Fatal(err)
+	}
+	if n := c.count(time.Time{}, 0.95); n != pairs {
+		t.Fatalf("count = %d, want all %d", n, pairs)
+	}
+}
 
 func TestCountUnsafeApprovals_DeniedAndEscalated(t *testing.T) {
 	c := newCountStore(t)

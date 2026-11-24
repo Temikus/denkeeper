@@ -403,7 +403,7 @@
                         }
                     },
                     "400": {
-                        "description": "Missing, invalid or future up_to, or no decider named and none set on the agent",
+                        "description": "Missing, invalid, future or out-of-range (before 1677-09-21) up_to, or no decider named and none set on the agent",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {

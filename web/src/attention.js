@@ -2,6 +2,8 @@ import { writable } from 'svelte/store'
 import { api } from './api.js'
 import { panicStatus } from './wsStore.js'
 
+const EMPTY = () => ({ pendingApprovals: 0, unhealthyTools: [], deciderReviews: {} })
+
 /**
  * What needs the operator: pending approvals, broken tool servers and shadow
  * decider approvals the supervisor did not make. Feeds the sidebar and tab-bar
@@ -11,8 +13,6 @@ import { panicStatus } from './wsStore.js'
  * own: a key without the approvals, tools or audit scope keeps that part at
  * its default rather than hiding the others.
  */
-const EMPTY = () => ({ pendingApprovals: 0, unhealthyTools: [], deciderReviews: {} })
-
 export const attention = writable(EMPTY())
 
 // Sum of deciderReviews ({agent: n}). Tolerates a store set without the key.

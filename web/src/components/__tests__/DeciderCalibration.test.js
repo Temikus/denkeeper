@@ -17,7 +17,8 @@ function serveReviews(reviews, extra = {}) {
   let query = null
   server.use(http.get('/api/v1/agents/:name/decider-reviews', ({ request }) => {
     query = new URL(request.url).searchParams
-    return HttpResponse.json({ agent: 'pamela', decider: 'jev', supervisor: 'argus', reviews, failed: 0, truncated: false, ...extra })
+    return HttpResponse.json({ agent: 'pamela', decider: 'jev', supervisor: 'argus', reviews, failed: 0, truncated: false,
+      until: new Date().toISOString(), ...extra })
   }))
   return () => query
 }
@@ -273,6 +274,45 @@ describe('DeciderCalibration review mark', () => {
     render(DeciderCalibration, { props: { ...props, saved: false } })
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Mark all reviewed' })).toBeInTheDocument())
+  })
+
+  // A client clock ahead of the server must not settle a review the server
+  // could still pair: the pairing window is measured on the server's clock.
+  test('the pairing window uses the server time, not the browser clock', async () => {
+    const ago = ms => new Date(Date.now() - ms).toISOString()
+    const settledAt = ago(60 * 60000)
+    serveReviews([
+      review(1, 0.99, 'DENY', { time: settledAt }),
+      // 20 min old by this browser, 10 by the server: still pairable.
+      review(2, 0.5, undefined, { time: ago(20 * 60000), supervisor_name: '' }),
+      review(3, 0.99, 'DENY', { time: ago(19 * 60000), tool: 'kv_set' }),
+    ], { reviewed_up_to: settledAt, reviewed_by: 'temik', until: ago(10 * 60000) })
+    render(DeciderCalibration, { props })
+
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Waiting on the supervisor for newer calls'))
+    expect(screen.queryByRole('button', { name: 'Mark all reviewed' })).toBeNull()
+  })
+
+  // While another agent loads, the panel still holds the previous agent's rows;
+  // a mark then would send that panel's time for the new agent.
+  test('the button is gone while a different agent loads', async () => {
+    let release
+    server.use(http.get('/api/v1/agents/:name/decider-reviews', async ({ params }) => {
+      if (params.name === 'other') await new Promise(r => { release = r })
+      return HttpResponse.json({ agent: params.name, decider: 'jev', supervisor: 'argus', reviews: [old(), fresh()],
+        failed: 0, truncated: false, until: new Date().toISOString(), reviewed_up_to: MARK, reviewed_by: 'temik' })
+    }))
+    const bodies = serveMark(body => HttpResponse.json({ agent: 'other', decider: 'jev', reviewed_up_to: body.up_to }))
+    const { rerender } = render(DeciderCalibration, { props })
+    await waitFor(() => screen.getByRole('button', { name: 'Mark all reviewed' }))
+
+    await rerender({ ...props, agent: 'other' })
+    await waitFor(() => expect(release).toBeTypeOf('function'))
+    expect(screen.queryByRole('button', { name: 'Mark all reviewed' })).toBeNull()
+    expect(bodies).toHaveLength(0)
+
+    release()
+    await waitFor(() => screen.getByRole('button', { name: 'Mark all reviewed' }))
   })
 
   test('a truncated load cannot be marked and says why', async () => {

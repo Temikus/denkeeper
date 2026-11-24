@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 )
 
@@ -30,8 +31,27 @@ func (s *SQLiteStore) ReviewMark(ctx context.Context, agent, decider string) (Re
 	}, true, nil
 }
 
+// ErrReviewMarkOutOfRange is returned for a mark time UnixNano cannot hold.
+var ErrReviewMarkOutOfRange = errors.New("review mark time out of range")
+
+// Marks are stored as Unix nanoseconds, which hold 1677-09-21 to 2262-04-11.
+var (
+	minReviewMark = time.Unix(0, math.MinInt64)
+	maxReviewMark = time.Unix(0, math.MaxInt64)
+)
+
+// ReviewMarkInRange reports whether t can be stored as a mark. Outside the
+// range UnixNano wraps around, so 1000 AD would store as about 2169 and the
+// forward-only upsert would then refuse every real mark.
+func ReviewMarkInRange(t time.Time) bool {
+	return !t.Before(minReviewMark) && !t.After(maxReviewMark)
+}
+
 // SetReviewMark implements Store. The upsert only ever moves the mark forward.
 func (s *SQLiteStore) SetReviewMark(ctx context.Context, m ReviewMark) (ReviewMark, error) {
+	if !ReviewMarkInRange(m.ReviewedUpTo) {
+		return ReviewMark{}, fmt.Errorf("storing review mark at %s: %w", m.ReviewedUpTo.Format(time.RFC3339), ErrReviewMarkOutOfRange)
+	}
 	if m.UpdatedAt.IsZero() {
 		m.UpdatedAt = time.Now().UTC()
 	}

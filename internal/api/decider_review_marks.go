@@ -72,6 +72,7 @@ func (s *Server) handleDeciderReviewCounts(w http.ResponseWriter, r *http.Reques
 func (s *Server) unreviewedCount(ctx context.Context, name, decider string, cfg agent.DeciderStageConfig) (int, error) {
 	s.deciderCountMu.Lock()
 	c, ok := s.deciderCounts[name]
+	gen := s.deciderCountGen[name]
 	s.deciderCountMu.Unlock()
 	if ok && c.decider == decider && c.approveAt == cfg.ApproveAt && c.denyAt == cfg.DenyAt && time.Since(c.at) < deciderCountTTL {
 		return c.count, nil
@@ -85,11 +86,16 @@ func (s *Server) unreviewedCount(ctx context.Context, name, decider string, cfg 
 		return 0, err
 	}
 	s.deciderCountMu.Lock()
+	defer s.deciderCountMu.Unlock()
+	// A mark that landed while counting makes n stale: answer with it, but do
+	// not cache it, or the cleared badge would come back for a whole TTL.
+	if s.deciderCountGen[name] != gen {
+		return n, nil
+	}
 	if s.deciderCounts == nil {
 		s.deciderCounts = map[string]deciderCountEntry{}
 	}
 	s.deciderCounts[name] = deciderCountEntry{decider: decider, approveAt: cfg.ApproveAt, denyAt: cfg.DenyAt, count: n, at: time.Now()}
-	s.deciderCountMu.Unlock()
 	return n, nil
 }
 
@@ -108,7 +114,7 @@ type markReviewedInput struct {
 // @Param name path string true "Agent name"
 // @Param body body markReviewedInput true "Decider (optional) and up_to (RFC3339)"
 // @Success 200 {object} deciderReviewMarkResponse
-// @Failure 400 {object} map[string]string "Missing, invalid or future up_to, or no decider named and none set on the agent"
+// @Failure 400 {object} map[string]string "Missing, invalid, future or out-of-range (before 1677-09-21) up_to, or no decider named and none set on the agent"
 // @Failure 404 {object} map[string]string "Agent not found"
 // @Failure 500 {object} map[string]string "Internal server error"
 // @Failure 503 {object} map[string]string "Audit not configured"
@@ -149,6 +155,10 @@ func (s *Server) handleMarkDeciderReviewed(w http.ResponseWriter, r *http.Reques
 	}
 	s.deciderCountMu.Lock()
 	delete(s.deciderCounts, name)
+	if s.deciderCountGen == nil {
+		s.deciderCountGen = map[string]uint64{}
+	}
+	s.deciderCountGen[name]++
 	s.deciderCountMu.Unlock()
 	writeJSON(w, http.StatusOK, deciderReviewMarkResponse{
 		Agent: m.Agent, Decider: m.Decider, ReviewedUpTo: m.ReviewedUpTo, ReviewedBy: m.ReviewedBy,
@@ -167,6 +177,9 @@ func parseUpTo(v string) (time.Time, string) {
 	}
 	if t.After(time.Now()) {
 		return time.Time{}, "up_to is in the future"
+	}
+	if !audit.ReviewMarkInRange(t) {
+		return time.Time{}, "up_to is out of range: it must be after 1677-09-21"
 	}
 	return t.UTC(), ""
 }

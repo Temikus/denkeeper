@@ -378,7 +378,9 @@ Marks the agent's shadow reviews as reviewed up to a time. This is "Mark all rev
 {"decider": "jev", "up_to": "2026-11-23T10:00:00.123456789Z"}
 ```
 
-`decider` is optional and defaults as for the list above. `up_to` is the time of the newest review you have seen, never "now". The mark only moves forward: an older `up_to` leaves the stored mark in place. The response is the stored mark, `{"agent", "decider", "reviewed_up_to", "reviewed_by"}`, where `reviewed_by` is the API key name or login that made the call. Returns `400` for a missing, malformed or future `up_to`, or when no decider is named and none is set on the agent.
+`decider` is optional and defaults as for the list above. `up_to` is the time of the newest review you have seen, never "now". The mark only moves forward: an older `up_to` leaves the stored mark in place. The response is the stored mark, `{"agent", "decider", "reviewed_up_to", "reviewed_by"}`, where `reviewed_by` is the API key name or login that made the call. Returns `400` for a missing, malformed, future or out-of-range `up_to` (before 1677-09-21), or when no decider is named and none is set on the agent.
+
+The scope is `agents:write`, so a key with it can clear the badge that `GET /decider-reviews/unreviewed` shows to `audit:read` keys, without being able to read the reviews themselves. The mark is not written to the audit log yet; the stored row keeps who moved it and when.
 
 ### `GET /api/v1/decider-reviews/unreviewed`
 

@@ -3,10 +3,12 @@
 package integration
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/llm"
@@ -81,6 +83,36 @@ func TestShadowEvent_SSEStreamsShadowVerdict(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("no supervisor_approved event streamed")
+	}
+}
+
+// An escalated call reaches the person as a pending card, which the chat
+// renders first, so it must carry the same verdict as the escalation event.
+func TestShadowEvent_SSEPendingEventCarriesTheSameVerdict(t *testing.T) {
+	turn := shadowTurn()
+	turn[1] = &llm.ChatResponse{Content: "ESCALATE: needs a human", FinishReason: "stop", TokensUsed: llm.TokenUsage{Total: 10}, Model: "test-model"}
+	h := supervisorHarness(t, turn)
+	h.Dispatcher.Agent("default").SetSupervisorDecider(newJevDecider(denyingDecider{}), agent.DeciderStageConfig{
+		Mode: "shadow", ApproveAt: 0.95, DenyAt: 0.05,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go approvalWorker(ctx, h, true)
+
+	var escalated, pending json.RawMessage
+	for _, ev := range streamApprovalEvents(t, h) {
+		switch status := string(ev["approval_status"]); {
+		case status == `"supervisor_escalated"`:
+			escalated = ev["shadow"]
+		case (status == "" || status == `""`) && len(ev["approval_id"]) > 0:
+			pending = ev["shadow"]
+		}
+	}
+	if len(escalated) == 0 || len(pending) == 0 {
+		t.Fatalf("shadow on escalated = %s, on pending = %s; want both set", escalated, pending)
+	}
+	if string(pending) != string(escalated) {
+		t.Errorf("pending shadow = %s, want the escalation's %s", pending, escalated)
 	}
 }
 

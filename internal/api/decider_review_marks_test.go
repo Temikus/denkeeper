@@ -15,14 +15,20 @@ import (
 	"github.com/Temikus/denkeeper/internal/config"
 )
 
-// countingStore counts List calls on a real store.
+// countingStore counts List calls on a real store. onList, when set, runs once
+// inside the next List call, to interleave a request with a count.
 type countingStore struct {
 	*audit.SQLiteStore
-	lists atomic.Int32
+	lists  atomic.Int32
+	onList func()
 }
 
 func (s *countingStore) List(ctx context.Context, opts audit.ListOpts) ([]audit.Event, int, error) {
 	s.lists.Add(1)
+	if hook := s.onList; hook != nil {
+		s.onList = nil
+		hook()
+	}
 	return s.SQLiteStore.List(ctx, opts)
 }
 
@@ -141,6 +147,25 @@ func TestUnreviewedCount_MemoizedUntilMark(t *testing.T) {
 	}
 }
 
+// A count that was already reading when a mark landed must not put its stale
+// result back in the cache the mark just cleared.
+func TestUnreviewedCount_ACountRacingAMarkDoesNotCacheItsStaleResult(t *testing.T) {
+	at := time.Now().Add(-time.Hour).UTC()
+	deps, store := unsafeReviewDeps(t, at)
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	store.onList = func() {
+		if rec := postMark(t, srv, "default", map[string]string{"up_to": at.Format(time.RFC3339Nano)}); rec.Code != http.StatusOK {
+			t.Errorf("mark status %d: %s", rec.Code, rec.Body.String())
+		}
+	}
+	getCounts(t, srv) // reads past the mark's moment, so its result is stale
+
+	if _, counts := getCounts(t, srv); counts["default"] != 0 {
+		t.Fatalf("counts after the mark = %v, want default: 0 (the stale count was cached)", counts)
+	}
+}
+
 func TestUnreviewedCount_RequiresAuditRead(t *testing.T) {
 	deps, _ := unsafeReviewDeps(t, time.Now().Add(-time.Hour))
 	key := config.APIKeyConfig{Name: "chat-only", Key: "dk-test-key", Scopes: []string{"chat"}}
@@ -187,11 +212,16 @@ func TestMarkReviewed_BadRequests(t *testing.T) {
 		"missing up_to": {},
 		"future up_to":  {"up_to": time.Now().Add(time.Hour).Format(time.RFC3339Nano)},
 		"bad up_to":     {"up_to": "yesterday"},
+		// UnixNano wraps before 1677; stored, this would block every later mark.
+		"ancient up_to": {"up_to": "1000-01-01T00:00:00Z"},
 	}
 	for name, body := range cases {
 		if rec := postMark(t, srv, "default", body); rec.Code != http.StatusBadRequest {
 			t.Errorf("%s: status %d, want 400", name, rec.Code)
 		}
+	}
+	if _, ok, err := deps.AuditStore.ReviewMark(context.Background(), "default", "jev"); err != nil || ok {
+		t.Errorf("a bad request stored a mark (ok=%v err=%v)", ok, err)
 	}
 	plain := testDeps()
 	plain.AuditStore = deps.AuditStore

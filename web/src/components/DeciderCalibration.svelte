@@ -39,6 +39,14 @@
   let marking = $state(false)
   let markError = $state('')
   let statusEl = $state(null)
+  // The server's time when the rows were read (the response's `until`). The
+  // pairing window is measured on it: a browser clock running ahead would
+  // settle a review the server can still pair. NaN until a load lands, which
+  // settles only reviews that already have a verdict.
+  let serverNow = $state(NaN)
+  // Which agent and decider the rows belong to; a mark for any other is refused.
+  let loadedFor = $state('')
+  const panelKey = () => `${agent}\u0000${decider}`
 
   let seq = 0
   async function load() {
@@ -55,6 +63,8 @@
       markUpTo = res.reviewed_up_to || null
       markBy = res.reviewed_by || ''
       markError = ''
+      serverNow = Date.parse(res.until)
+      loadedFor = panelKey()
     } catch (e) {
       if (mine !== seq) return
       // Without audit:read the panel has nothing to show; the form still works.
@@ -91,10 +101,12 @@
     ? Number($attention.deciderReviews[agent]) || 0
     : null)
   let toReview = $derived(serverCount ?? freshUnsafe)
-  let nextMark = $derived(reviewedUpTo(rows))
+  let nextMark = $derived(reviewedUpTo(rows, serverNow))
   // A truncated load holds only the newest reviews, so a mark would also
-  // cover older ones nobody was shown.
-  let canMark = $derived(toReview > 0 && !truncated && !!nextMark && isFresh({ time: nextMark }, markUpTo))
+  // cover older ones nobody was shown. While a load runs the rows may be the
+  // previous agent's, so there is no button until it lands.
+  let canMark = $derived(!loading && loadedFor === panelKey() && toReview > 0 && !truncated &&
+    !!nextMark && isFresh({ time: nextMark }, markUpTo))
   let statusText = $derived.by(() => {
     if (marking) return ''
     if (toReview > 0 && truncated) return 'Too many reviews to load. Pick a shorter time range to mark them reviewed.'
@@ -176,7 +188,8 @@
   // sent as the server's own string.
   async function markReviewed() {
     const upTo = nextMark
-    if (!upTo || marking) return
+    // Rechecked here: a click can land between a prop change and the redraw.
+    if (!upTo || marking || loading || loadedFor !== panelKey()) return
     marking = true
     markError = ''
     try {

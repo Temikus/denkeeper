@@ -2,6 +2,7 @@ package audit
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -74,21 +75,58 @@ func TestReviewMark_SeparatePerAgentAndDecider(t *testing.T) {
 	s := marksStore(t)
 	setMark(t, s, "pamela", "jev", markBase, "a")
 	ctx := context.Background()
-	if _, ok, _ := s.ReviewMark(ctx, "argus", "jev"); ok {
-		t.Error("mark leaked to another agent")
-	}
-	if _, ok, _ := s.ReviewMark(ctx, "pamela", "other"); ok {
-		t.Error("mark leaked to another decider")
+	for _, key := range [][2]string{{"argus", "jev"}, {"pamela", "other"}} {
+		_, ok, err := s.ReviewMark(ctx, key[0], key[1])
+		if err != nil {
+			t.Fatalf("ReviewMark(%s, %s): %v", key[0], key[1], err)
+		}
+		if ok {
+			t.Errorf("mark leaked to %s/%s", key[0], key[1])
+		}
 	}
 }
 
+// Prune must actually delete something here, or the test proves nothing about
+// whether marks survive a sweep.
 func TestReviewMark_PruneLeavesMarks(t *testing.T) {
 	s := marksStore(t)
+	ctx := context.Background()
 	setMark(t, s, "pamela", "jev", markBase, "a")
-	if _, err := s.PruneBefore(context.Background(), time.Now().Add(time.Hour)); err != nil {
+	if err := s.Insert(ctx, Event{Timestamp: markBase.Add(-48 * time.Hour), Category: CategorySupervisor,
+		Action: "review", Agent: "pamela", Status: StatusOK}); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok, _ := s.ReviewMark(context.Background(), "pamela", "jev"); !ok {
+	pruned, err := s.PruneBefore(ctx, markBase.Add(-24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pruned == 0 {
+		t.Fatal("prune deleted nothing; the test must reach the delete path")
+	}
+	_, ok, err := s.ReviewMark(ctx, "pamela", "jev")
+	if err != nil {
+		t.Fatalf("ReviewMark: %v", err)
+	}
+	if !ok {
 		t.Fatal("prune removed the mark")
+	}
+}
+
+// UnixNano overflows before 1677-09-21 and wraps to the far future, which
+// would store a mark nothing can ever move past.
+func TestReviewMark_OutOfRangeTimeIsRefused(t *testing.T) {
+	s := marksStore(t)
+	ctx := context.Background()
+	for _, at := range []time.Time{time.Date(1000, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2300, 1, 1, 0, 0, 0, 0, time.UTC)} {
+		if _, err := s.SetReviewMark(ctx, ReviewMark{Agent: "pamela", Decider: "jev", ReviewedUpTo: at}); !errors.Is(err, ErrReviewMarkOutOfRange) {
+			t.Errorf("SetReviewMark(%v) err = %v, want ErrReviewMarkOutOfRange", at, err)
+		}
+	}
+	_, ok, err := s.ReviewMark(ctx, "pamela", "jev")
+	if err != nil || ok {
+		t.Fatalf("ok=%v err=%v, want nothing stored", ok, err)
+	}
+	if !ReviewMarkInRange(markBase) || ReviewMarkInRange(time.Date(1000, 1, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Error("ReviewMarkInRange disagrees with SetReviewMark")
 	}
 }

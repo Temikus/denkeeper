@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -228,13 +229,14 @@ func (r ShadowReview) UnsafeApproval(approveAt, denyAt float64) bool {
 // review mark, or zero) that the decider would approve and the supervisor did
 // not. `after` is raised to DefaultShadowReviewWindow ago. Reviews load from
 // shadowPairWindow before it, so a verdict on an earlier call cannot pair with
-// a later identical one.
+// a later identical one. Unlike the reviews list it reads every page, so a busy
+// agent is never undercounted; the window and the endpoint's cache bound it.
 func CountUnsafeApprovals(ctx context.Context, store audit.Store, agentName, decider string, after time.Time, approveAt, denyAt float64) (int, error) {
 	now := time.Now().UTC()
 	if floor := now.Add(-DefaultShadowReviewWindow); after.Before(floor) {
 		after = floor
 	}
-	set, err := LoadShadowReviews(ctx, store, agentName, decider, after.Add(-shadowPairWindow), now)
+	set, err := loadShadowReviews(ctx, store, agentName, decider, after.Add(-shadowPairWindow), now, math.MaxInt)
 	if err != nil {
 		return 0, err
 	}

@@ -124,9 +124,11 @@ type Server struct {
 	wsHub *WSHub
 
 	// deciderCounts memoizes unreviewed decider-review counts per agent for
-	// deciderCountTTL; a review mark deletes the agent's entry.
-	deciderCountMu sync.Mutex
-	deciderCounts  map[string]deciderCountEntry
+	// deciderCountTTL; a review mark deletes the agent's entry and bumps its
+	// deciderCountGen, so a count that started before the mark is not stored.
+	deciderCountMu  sync.Mutex
+	deciderCounts   map[string]deciderCountEntry
+	deciderCountGen map[string]uint64
 
 	// pairing marks chat-app types with a pairing long poll in progress; only
 	// one may poll a bot's updates at a time.
