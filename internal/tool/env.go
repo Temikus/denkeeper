@@ -115,9 +115,35 @@ func buildStdioEnv(cfgEnv map[string]string, passthrough []string, logger *slog.
 	}
 
 	// Tool-specific env is explicit config and wins; appended last so the child
-	// process (last-value-wins semantics) uses it over any inherited value.
+	// process (last-value-wins semantics) uses it over any inherited value. A
+	// name that is not an identifier is dropped: the OS reads up to the first
+	// "=", so "PATH=/x" would set PATH, and NUL or a space breaks the entry.
 	for k, v := range cfgEnv {
+		if !validEnvName(k) {
+			if logger != nil {
+				logger.Warn("tool env name is not a valid identifier; not passing it to the MCP subprocess", "var", k)
+			}
+			continue
+		}
 		env = append(env, k+"="+v)
 	}
 	return env
+}
+
+// validEnvName reports whether name is a portable identifier,
+// [A-Za-z_][A-Za-z0-9_]*. Anything else can smuggle another name past a
+// check (an "=") or break the entry (NUL, whitespace).
+func validEnvName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i, c := range name {
+		switch {
+		case c == '_', c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z':
+		case c >= '0' && c <= '9' && i > 0:
+		default:
+			return false
+		}
+	}
+	return true
 }

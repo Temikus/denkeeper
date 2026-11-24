@@ -38,6 +38,29 @@ func TestBuildStdioEnv_IncludesAllowlistedAndCfgEnv(t *testing.T) {
 	}
 }
 
+// A TOML tool's env is not checked by ValidateRuntimeEnv, so the builder must
+// never emit an entry whose name is not an identifier: "PATH=/x" plus "=y"
+// would reach the child as PATH.
+func TestBuildStdioEnv_NeverEmitsMalformedName(t *testing.T) {
+	t.Setenv("PATH", "/usr/bin:/bin")
+	cfgEnv := map[string]string{"PATH=/attacker/bin": "y", "=C:": "z", "BAD NAME": "w", "MY_TOOL_FLAG": "on"}
+	env := buildStdioEnv(cfgEnv, nil, testLogger())
+
+	for _, kv := range env {
+		name := kv[:strings.IndexByte(kv, '=')]
+		if !validEnvName(name) {
+			t.Errorf("emitted entry %q has a malformed name", kv)
+		}
+	}
+	got := envToMap(t, env)
+	if got["PATH"] != "/usr/bin:/bin" {
+		t.Errorf("PATH = %q, want the inherited value untouched", got["PATH"])
+	}
+	if got["MY_TOOL_FLAG"] != "on" {
+		t.Errorf("valid cfg.Env entry dropped: %q", got["MY_TOOL_FLAG"])
+	}
+}
+
 func TestBuildStdioEnv_ExcludesDenkeeperSecrets(t *testing.T) {
 	t.Setenv("PATH", "/usr/bin")
 	t.Setenv("DENKEEPER_LLM_ANTHROPIC_API_KEY", "sk-secret")
