@@ -134,6 +134,28 @@ describe('Approvals page', () => {
     expect(screen.queryByText('Show payload')).not.toBeInTheDocument()
   })
 
+  test('a high-risk row shows the warning and flagged arguments above the call', async () => {
+    const args = JSON.stringify({ name: 'nightly', session_tier: 'autonomous' })
+    server.use(
+      http.get('/api/v1/approvals', () => HttpResponse.json([{
+        id: 'appr-hr', agent_name: 'default', kind: 'tool_call', status: 'pending',
+        summary: `Execute tool "schedule_update" with args: ${args}`, payload: args,
+        created_at: '2026-01-01T10:00:00Z', expires_at: '2026-01-01T11:00:00Z',
+        risk: { level: 'high', warning: 'Sets the permission tier this schedule runs at.', flagged: [{ name: 'session_tier', value: '"autonomous"' }] },
+      }]))
+    )
+
+    render(Approvals)
+    await waitFor(() => {
+      expect(screen.getByText('High risk')).toBeInTheDocument()
+    })
+    expect(screen.getByText('Sets the permission tier this schedule runs at.', { exact: false })).toBeInTheDocument()
+    expect(screen.getByText('"autonomous"', { selector: '.approval-risk code' })).toBeInTheDocument()
+    expect(screen.getByText('schedule_update')).toBeInTheDocument()
+    // The Approve/Deny instruction belongs to the chat prompts, not this table.
+    expect(screen.queryByText('Approve once or deny.')).not.toBeInTheDocument()
+  })
+
   test('empty state message when no approvals', async () => {
     server.use(
       http.get('/api/v1/approvals', () => HttpResponse.json([]))
@@ -245,6 +267,49 @@ describe('Approvals page', () => {
     expect(screen.getByText('TOML-managed')).toBeInTheDocument()
     // Only the permanent rule is revocable.
     expect(screen.getAllByText('Revoke')).toHaveLength(1)
+  })
+
+  test('a rule for a high-risk tool is marked inactive', async () => {
+    server.use(
+      http.get('/api/v1/auto-approve', () =>
+        HttpResponse.json([
+          { id: 'rule-1', agent_name: 'default', tool_name: 'web_search', scope: 'permanent', created_at: '2026-01-01T00:00:00Z', created_by: 'api' },
+          { id: 'rule-2', agent_name: 'default', tool_name: 'set_fallback', scope: 'permanent', created_at: '2026-01-01T00:00:00Z', created_by: 'api', inert: true },
+        ])
+      )
+    )
+
+    render(Approvals)
+    await waitFor(() => {
+      expect(screen.getByText('set_fallback')).toBeInTheDocument()
+    })
+    expect(screen.getAllByText('inactive (high-risk tool)')).toHaveLength(1)
+    expect(screen.getByText('set_fallback').closest('tr').textContent).toContain('inactive (high-risk tool)')
+  })
+
+  test('the add-rule form shows the server refusal', async () => {
+    server.use(
+      http.post('/api/v1/auto-approve', () =>
+        HttpResponse.json({ error: 'set_fallback is high-risk and cannot be auto-approved; each call will ask for approval' }, { status: 400 })
+      )
+    )
+
+    render(Approvals)
+    await waitFor(() => {
+      expect(screen.getByText('Run tool: web_search')).toBeInTheDocument()
+    })
+    await fireEvent.click(screen.getByText('+ Add Rule'))
+    await waitFor(() => {
+      const options = screen.getByText('Select agent…').closest('select').querySelectorAll('option')
+      expect(options.length).toBeGreaterThan(1)
+    })
+    await fireEvent.change(screen.getByText('Select agent…').closest('select'), { target: { value: 'default' } })
+    await fireEvent.input(screen.getByPlaceholderText('Tool name'), { target: { value: 'set_fallback' } })
+    await fireEvent.click(screen.getByText('Add'))
+
+    await waitFor(() => {
+      expect(screen.getByText('set_fallback is high-risk and cannot be auto-approved; each call will ask for approval')).toBeInTheDocument()
+    })
   })
 
   test('polling every 10s calls approvals endpoint', async () => {

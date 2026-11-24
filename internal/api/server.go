@@ -1704,7 +1704,7 @@ func (s *Server) approvalNotConfigured(w http.ResponseWriter) {
 
 // handleListApprovals godoc
 // @Summary List approval requests
-// @Description Returns approval requests optionally filtered by status (pending, approved, denied, expired).
+// @Description Returns approval requests optionally filtered by status (pending, approved, denied, expired). A row whose tool call is high-risk carries risk: a fixed warning and the arguments that make it risky, in full.
 // @Tags approvals
 // @Produce json
 // @Security BearerAuth
@@ -1740,7 +1740,7 @@ func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
 
 // handleGetApproval godoc
 // @Summary Get an approval request
-// @Description Returns a single approval request by ID.
+// @Description Returns a single approval request by ID, with risk set when its tool call is high-risk.
 // @Tags approvals
 // @Produce json
 // @Security BearerAuth
@@ -1769,15 +1769,20 @@ func (s *Server) handleGetApproval(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, req)
 }
 
+// highRiskRuleRefusal is the 400 body for a standing rule asked on a
+// high-risk call, on REST and WS alike.
+const highRiskRuleRefusal = "this is a high-risk call and cannot be auto-approved; approve it once or deny it"
+
 // handleResolveApproval godoc
 // @Summary Approve or deny an approval request
-// @Description Resolves a pending approval request. Used for both /approve and /deny endpoints. Optionally creates an auto-approve rule when auto_approve query param is set.
+// @Description Resolves a pending approval request. Used for both /approve and /deny endpoints. Optionally creates an auto-approve rule when auto_approve query param is set. A high-risk call (the request's risk field is set) can only be approved once: approving it with auto_approve answers 400 and leaves the request pending.
 // @Tags approvals
 // @Produce json
 // @Security BearerAuth
 // @Param id path string true "Approval request ID"
 // @Param auto_approve query string false "Create auto-approve rule: 'session' or 'permanent'"
 // @Success 200 {object} approval.Request "Resolved request"
+// @Failure 400 {object} map[string]string "auto_approve on a high-risk call; the request stays pending"
 // @Failure 404 {object} map[string]string
 // @Failure 409 {object} map[string]string "Already resolved"
 // @Failure 500 {object} map[string]string
@@ -1791,6 +1796,9 @@ func (s *Server) handleResolveApproval(approved bool) http.HandlerFunc {
 			return
 		}
 		id := r.PathValue("id")
+		if approved && !s.allowStandingRule(w, r, id) {
+			return
+		}
 		resolved, err := s.deps.Approvals.Resolve(r.Context(), id, approved, "api")
 		if err != nil {
 			switch err {
@@ -1812,7 +1820,9 @@ func (s *Server) handleResolveApproval(approved bool) http.HandlerFunc {
 				if toolName != "" && resolved.Kind == approval.ActionKindToolCall {
 					switch autoScope {
 					case "session":
-						s.deps.Approvals.AddSessionRule(r.Context(), resolved.AgentName, toolName, resolved.ConversationID, "api")
+						if aaErr := s.deps.Approvals.AddSessionRule(r.Context(), resolved.AgentName, toolName, resolved.ConversationID, "api"); aaErr != nil {
+							s.logger.Warn("session auto-approve rule not created via approval", "tool", toolName, "error", aaErr)
+						}
 					case "permanent":
 						if _, aaErr := s.deps.Approvals.AddPermanentRule(r.Context(), resolved.AgentName, toolName, "api"); aaErr != nil {
 							s.logger.Error("creating auto-approve rule via approval", "error", aaErr)
@@ -1830,9 +1840,37 @@ func (s *Server) handleResolveApproval(approved bool) http.HandlerFunc {
 	}
 }
 
+// allowStandingRule refuses ?auto_approve= on a high-risk call before the
+// request resolves, so it stays pending for a plain approve or deny. It writes
+// the response and returns false on a refusal or a lookup failure.
+func (s *Server) allowStandingRule(w http.ResponseWriter, r *http.Request, id string) bool {
+	var scope approval.AutoApproveScope
+	switch r.URL.Query().Get("auto_approve") {
+	case "session":
+		scope = approval.ScopeSession
+	case "permanent":
+		scope = approval.ScopePermanent
+	default:
+		return true // no rule asked for, or a value no rule is made for
+	}
+	err := s.deps.Approvals.CheckStandingRule(r.Context(), id, scope, "api")
+	switch {
+	case err == nil:
+		return true
+	case errors.Is(err, approval.ErrHighRisk):
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": highRiskRuleRefusal})
+	case errors.Is(err, approval.ErrNotFound):
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+	default:
+		s.logger.Error("checking auto-approve rule", "id", id, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+	}
+	return false
+}
+
 // handleListAutoApprove godoc
 // @Summary List auto-approve rules
-// @Description Returns all auto-approve rules (session, permanent and config scopes), optionally filtered by agent name. Config-scoped rules come from the server TOML and carry an empty id — they cannot be deleted via this API.
+// @Description Returns all auto-approve rules (session, permanent and config scopes), optionally filtered by agent name. Config-scoped rules come from the server TOML and carry an empty id — they cannot be deleted via this API. A rule for a high-risk tool (tool_add, plugin_add, set_fallback) carries inert: true; it is kept but never applies.
 // @Tags approvals
 // @Produce json
 // @Security BearerAuth
@@ -1858,7 +1896,7 @@ func (s *Server) handleListAutoApprove(w http.ResponseWriter, r *http.Request) {
 
 // handleCreateAutoApprove godoc
 // @Summary Create auto-approve rule
-// @Description Creates a new auto-approve rule for a specific agent and tool. Scope can be 'session' (requires conversation_id) or 'permanent'. The third scope, 'config', is declared in the server TOML (agents.auto_approve_tools) and is rejected here with 400.
+// @Description Creates a new auto-approve rule for a specific agent and tool. Scope can be 'session' (requires conversation_id) or 'permanent'. The third scope, 'config', is declared in the server TOML (agents.auto_approve_tools) and is rejected here with 400. A tool every call to which is high-risk (tool_add, plugin_add, set_fallback) is rejected with 400: those calls are approved one at a time.
 // @Tags approvals
 // @Accept json
 // @Produce json
@@ -1888,14 +1926,9 @@ func (s *Server) handleCreateAutoApprove(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "agent and tool are required"})
 		return
 	}
-	if tool.IsHumanOnlyToolName(body.Tool) {
-		// The engine never consults rules for these, so a rule would be inert;
-		// refusing it says so instead of listing a rule that does nothing.
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": body.Tool + " adds a tool server or plugin the agent can use, so it always needs a one-off approval; it cannot be auto-approved",
-		})
-		return
-	}
+	// The manager refuses a rule for an always-high tool (tool_add and
+	// plugin_add included) with ErrHighRisk; one message for all of them.
+	highRisk := map[string]string{"error": body.Tool + " is high-risk and cannot be auto-approved; each call will ask for approval"}
 
 	switch body.Scope {
 	case "session":
@@ -1903,10 +1936,17 @@ func (s *Server) handleCreateAutoApprove(w http.ResponseWriter, r *http.Request)
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "conversation_id required for session scope"})
 			return
 		}
-		s.deps.Approvals.AddSessionRule(r.Context(), body.Agent, body.Tool, body.ConversationID, "api")
+		if err := s.deps.Approvals.AddSessionRule(r.Context(), body.Agent, body.Tool, body.ConversationID, "api"); errors.Is(err, approval.ErrHighRisk) {
+			writeJSON(w, http.StatusBadRequest, highRisk)
+			return
+		}
 		writeJSON(w, http.StatusCreated, map[string]string{"status": "created", "scope": "session"})
 	case "permanent", "":
 		rule, err := s.deps.Approvals.AddPermanentRule(r.Context(), body.Agent, body.Tool, "api")
+		if errors.Is(err, approval.ErrHighRisk) {
+			writeJSON(w, http.StatusBadRequest, highRisk)
+			return
+		}
 		if err != nil {
 			s.logger.Error("creating auto-approve rule", "error", err)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})

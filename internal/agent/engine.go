@@ -22,6 +22,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/security"
 	"github.com/Temikus/denkeeper/internal/skill"
 	"github.com/Temikus/denkeeper/internal/tool"
+	"github.com/Temikus/denkeeper/internal/toolrisk"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -1928,6 +1929,11 @@ type ChatEvent struct {
 	// answer can settle (tool_add, plugin_add): adapters and the dashboard
 	// must not offer the session/always auto-approve buttons for it.
 	ApprovalHumanOnly bool `json:"approval_human_only,omitempty"`
+
+	// ApprovalRisk is set on a pending approval for a high-risk call
+	// (toolrisk.Classify): no session/always answer may cover it, and the UIs
+	// show its warning and flagged arguments. Absent for every other event.
+	ApprovalRisk *toolrisk.Risk `json:"approval_risk,omitempty"`
 }
 
 // ChatEventFunc is called for each intermediate pipeline event.
@@ -3585,7 +3591,7 @@ func (o approvalOutcome) afterReviewerError(reviewer string) approvalOutcome {
 // supervisor review → human approval.
 func (e *Engine) resolveSupervisedApproval(ctx context.Context, tc llm.ToolCall, round int, convID string, run turnRun, onEvent ChatEventFunc) approvalOutcome {
 	// Stage 1: Auto-approve rules.
-	if autoApproved, scope := e.approvals.ShouldAutoApprove(ctx, e.name, tc.Function.Name, convID); autoApproved {
+	if autoApproved, scope := e.approvals.ShouldAutoApprove(ctx, e.name, tc.Function.Name, []byte(tc.Function.Arguments), convID); autoApproved {
 		e.logger.Info("tool auto-approved", "tool", tc.Function.Name, "scope", scope)
 		if onEvent != nil {
 			onEvent(ChatEvent{
@@ -3842,6 +3848,7 @@ func (e *Engine) requestToolApproval(ctx context.Context, tc llm.ToolCall, round
 			ApprovalID:        req.ID,
 			ApprovalCallback:  req.CallbackData,
 			ApprovalHumanOnly: humanOnly,
+			ApprovalRisk:      toolrisk.Classify(tc.Function.Name, []byte(tc.Function.Arguments)),
 		})
 
 		approvalCtx, approvalCancel := context.WithTimeout(ctx, e.approvalTimeout)

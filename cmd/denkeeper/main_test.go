@@ -708,6 +708,21 @@ func TestBuildWebFetcher_DomainListsWired(t *testing.T) {
 	}
 }
 
+// A TOML rule for an always-high tool never applies (#586), so startup says so.
+func TestWarnHighRiskAutoApprove_NamesEntriesThatCannotApply(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	warnHighRiskAutoApprove("default", []string{"set_fallback", "kv_get"}, logger)
+	out := buf.String()
+	if strings.Count(out, "level=WARN") != 1 || !strings.Contains(out, "tool=set_fallback") {
+		t.Errorf("want one Warn naming set_fallback, got: %s", out)
+	}
+	if strings.Contains(out, "kv_get") {
+		t.Errorf("kv_get must not warn, got: %s", out)
+	}
+}
+
 // [web.fetch] is global, so the opt-in warning is logged once at startup by
 // warnWebFetchOptIns, never by the per-agent buildWebFetcher.
 func TestWarnWebFetchOptIns_WarnsOnceWhenOptInOn(t *testing.T) {

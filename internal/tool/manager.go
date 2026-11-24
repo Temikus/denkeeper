@@ -24,6 +24,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/audit"
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/llm"
+	"github.com/Temikus/denkeeper/internal/toolrisk"
 )
 
 var (
@@ -989,28 +990,13 @@ var builtinReadOnlyTools = map[string]bool{
 	"web_search":           true,
 }
 
-// builtinHumanOnlyTools names in-process tools that start code on the host:
-// tool_add spawns a stdio MCP server, plugin_add a plugin. Every call to one
-// needs a one-off human approval in every tier — no auto-approve rule, decider
-// or supervisor may answer it (DEN-82). Keyed by MCP tool name; consulted only
-// for session-registered (in-process) servers.
-var builtinHumanOnlyTools = map[string]bool{
-	"plugin_add": true,
-	"tool_add":   true,
-}
-
 // IsHumanOnlyToolName reports whether name, bare or collision-qualified
-// ("<server>__tool_add"), is one of the human-only tool names. It is the
-// name-only check for surfaces that see no server, such as auto-approve rule
-// creation; the engine uses Manager.RequiresHumanApproval.
+// ("<server>__tool_add"), is one of the human-only tool names in
+// toolrisk.HumanOnly (tool_add, plugin_add: every call needs a one-off human
+// approval in every tier, DEN-82). It is the name-only check for surfaces that
+// see no server; the engine uses Manager.RequiresHumanApproval.
 func IsHumanOnlyToolName(name string) bool {
-	if builtinHumanOnlyTools[name] {
-		return true
-	}
-	if i := strings.LastIndex(name, "__"); i >= 0 {
-		return builtinHumanOnlyTools[name[i+2:]]
-	}
-	return false
+	return toolrisk.HumanOnly(name)
 }
 
 // toolClass is everything a classification decision reads about one tool,
@@ -1125,8 +1111,8 @@ func (m *Manager) IsReadOnly(toolName string) bool {
 }
 
 // RequiresHumanApproval reports whether every call to toolName must be
-// approved by a human, whatever the agent's tier: the in-process tools in
-// builtinHumanOnlyTools. An ambiguous name answers true when either owner
+// approved by a human, whatever the agent's tier: the in-process tools
+// toolrisk.HumanOnly names. An ambiguous name answers true when either owner
 // would, so a collision cannot be used to dodge the gate.
 func (m *Manager) RequiresHumanApproval(toolName string) bool {
 	class, parent, err := m.classify(toolName)
@@ -1139,7 +1125,7 @@ func (m *Manager) RequiresHumanApproval(toolName string) bool {
 		}
 		return false
 	}
-	return class.inProcess && builtinHumanOnlyTools[class.local]
+	return class.inProcess && toolrisk.HumanOnly(class.local)
 }
 
 // ToolDescription returns the MCP description for the named tool, or ""

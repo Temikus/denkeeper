@@ -41,6 +41,10 @@ type AutoApproveRule struct {
 	ExpiresAt      *time.Time       `db:"-"               json:"expires_at,omitempty"`
 	CreatedAt      time.Time        `db:"created_at"      json:"created_at,omitzero"`
 	CreatedBy      string           `db:"created_by"      json:"created_by"`
+
+	// Inert marks a rule for a tool every call to which is high-risk
+	// (toolrisk.AlwaysHigh): it is kept but never applies. Derived, never stored.
+	Inert bool `db:"-" json:"inert,omitempty"`
 }
 
 // AutoApproveStore defines the persistence interface for permanent auto-approve rules.

@@ -29,6 +29,25 @@ Every capability in Denkeeper is opt-in. The agent starts with zero permissions 
 
 Every consequential decision — tool calls, approvals, supervisor verdicts, config changes — is recorded in the audit log. See [Observability](/docs/concepts/observability/) for what is captured and how to query it.
 
+## High-risk tool calls
+
+Some calls change what the agent can do, not just what it does. These count as high-risk:
+
+- adding a tool server or plugin (`tool_add`, `plugin_add`);
+- replacing the LLM fallback rules (`set_fallback`);
+- setting or clearing a schedule's permission tier (`schedule_add` or `schedule_update` with `session_tier`);
+- rewriting the agent's soul or identity (`persona_update`).
+
+A high-risk call is approved one at a time:
+
+- No auto-approve rule covers it, whether the rule was made in chat, through the API or with `auto_approve_tools` in TOML.
+- The prompt offers only Approve and Deny (or only Deny, with a pointer to the dashboard, when the flagged values are too long for a chat message).
+- A request to make a rule from it is refused, and the call stays pending.
+- Startup warns about an `auto_approve_tools` entry that can never apply.
+- The prompt shows a fixed warning and the arguments that make the call risky, in full.
+
+A supervisor can still approve one (except `tool_add` and `plugin_add`, which always need a person), so an unattended schedule keeps working.
+
 ## Adapter security
 
 Both adapters enforce user allowlists:

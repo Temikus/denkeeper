@@ -9,6 +9,7 @@
   import KebabMenu from '../components/KebabMenu.svelte'
   import SaveTestCase from '../components/SaveTestCase.svelte'
   import ToolCallArgs from '../components/ToolCallArgs.svelte'
+  import ApprovalRisk from '../components/ApprovalRisk.svelte'
   import { parseToolCall, shadowLine } from '../approvalFormat.js'
 
   const HUMAN_ONLY_HINT = 'Adds a tool server or plugin the agent can use, so it needs your approval every time.'
@@ -481,6 +482,9 @@
           <span class="sr-only">pending</span>
           <div class="pending-info">
             <span><span class="tool-name">{label}</span>{#if call?.retry} <span class="pill">{call.retry}</span>{/if}</span>
+            {#if appr.risk}
+              <ApprovalRisk risk={appr.risk} id="banner-risk-{appr.id}" pending />
+            {/if}
             {#if call?.args === null || call?.args?.length}
               <details class="pending-args">
                 <summary>Show arguments</summary>
@@ -488,18 +492,21 @@
               </details>
             {/if}
             <span class="pending-meta">{appr.agent_name} · {appr.adapter_name}:{appr.external_id?.slice(0, 8)}</span>
-            {#if appr.kind === 'install_tool'}
+            <!-- The risk block explains a high-risk tool_add/plugin_add, so the
+                 human-only hint shows only without one. -->
+            {#if appr.kind === 'install_tool' && !appr.risk}
               <span class="hint">{HUMAN_ONLY_HINT}</span>
             {/if}
           </div>
           <div class="approval-actions">
-            <button class="btn-appr btn-ok" onclick={() => resolvePending(appr, true)} disabled={appr._resolving} aria-label="Approve tool {label}">Approve</button>
+            <button class="btn-appr btn-ok" onclick={() => resolvePending(appr, true)} disabled={appr._resolving} aria-label="Approve tool {label}" aria-describedby={appr.risk ? `banner-risk-${appr.id}` : undefined}>Approve</button>
             <button class="btn-appr btn-bad" onclick={() => resolvePending(appr, false)} disabled={appr._resolving} aria-label="Deny tool {label}">Deny</button>
             <!-- Auto-approve rules exist for tool calls only; a tool_add or
                  plugin_add request (kind install_tool) is approved one at a time.
                  This banner reads the REST row's kind, since the row has no
-                 human-only field; the inline card reads the event's humanOnly. -->
-            {#if appr.kind === 'tool_call'}
+                 human-only field; the inline card reads the event's humanOnly.
+                 A high-risk call (#586) is never auto-approved either. -->
+            {#if appr.kind === 'tool_call' && !appr.risk}
               <button class="btn-appr btn-session" onclick={() => resolvePending(appr, true, 'session')} disabled={appr._resolving} title="Auto-approve this tool for the next 15 minutes" aria-label="Approve {label} for 15 minutes">15 min</button>
               <button class="btn-appr btn-auto" onclick={() => resolvePending(appr, true, 'permanent')} disabled={appr._resolving} title="Permanently auto-approve this tool for this agent" aria-label="Always approve {label}">Always</button>
             {/if}
@@ -582,17 +589,20 @@
                     <span class="sr-only">{appr.execStatus || approvalStatusLabel(appr.status, appr.text)}</span>
                     <span class="tool-name">{appr.tool}</span>
                     {#if appr.status === 'pending'}
+                      {#if appr.risk}
+                        <div class="card-risk"><ApprovalRisk risk={appr.risk} id="card-risk-{appr.id}" pending /></div>
+                      {/if}
                       <!-- Evidence goes before the decision it informs. -->
                       {#if line}{@render shadowRow(line)}{/if}
                       <div class="approval-actions">
-                        <button class="btn-appr btn-ok" onclick={() => resolveApproval(appr, true)} disabled={appr.resolving} aria-label="Approve {appr.tool}">Approve</button>
+                        <button class="btn-appr btn-ok" onclick={() => resolveApproval(appr, true)} disabled={appr.resolving} aria-label="Approve {appr.tool}" aria-describedby={appr.risk ? `card-risk-${appr.id}` : undefined}>Approve</button>
                         <button class="btn-appr btn-bad" onclick={() => resolveApproval(appr, false)} disabled={appr.resolving} aria-label="Deny {appr.tool}">Deny</button>
-                        {#if !appr.humanOnly}
+                        {#if !appr.humanOnly && !appr.risk}
                           <button class="btn-appr btn-session" onclick={() => resolveApproval(appr, true, 'session')} disabled={appr.resolving} title="Auto-approve this tool for the next 15 minutes" aria-label="Approve {appr.tool} for 15 minutes">15 min</button>
                           <button class="btn-appr btn-auto" onclick={() => resolveApproval(appr, true, 'permanent')} disabled={appr.resolving} title="Permanently auto-approve this tool for this agent" aria-label="Always approve {appr.tool}">Always</button>
                         {/if}
                       </div>
-                      {#if appr.humanOnly}
+                      {#if appr.humanOnly && !appr.risk}
                         <span class="hint human-only-hint">{HUMAN_ONLY_HINT}</span>
                       {/if}
                     {:else}
@@ -942,6 +952,8 @@
   .approval-card.pending { border-color: var(--accent); background: rgba(99,102,241,0.06); }
   /* The card wraps; the hint takes its own row under the buttons. */
   .human-only-hint { width: 100%; }
+  /* The high-risk block takes its own row above the buttons. */
+  .card-risk { width: 100%; }
   /* A shadow decider's line (shared .hint type) takes its own row too. Local:
      no shared class is dashed, and the dash sets a disagreement apart. */
   .shadow-line {

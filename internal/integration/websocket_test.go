@@ -301,6 +301,51 @@ func TestWebSocket_ApprovalsWriteScopeResolvesApprovals(t *testing.T) {
 	}
 }
 
+// A standing rule for a high-risk call is refused before the request
+// resolves, so it stays pending; a plain approve then resolves it.
+func TestWebSocket_AutoAlwaysOnHighRiskRefusedThenApproveResolves(t *testing.T) {
+	h := NewHarness(t, &HarnessOpts{Scopes: []string{"chat", "approvals:write"}})
+	conn := wsDialKey(t, h)
+	req, err := h.Approvals.Submit(context.Background(), "default", approval.ActionKindToolCall,
+		`Execute tool "set_fallback" with args: {"rules":[]}`, `{"rules":[]}`, "chat-1", "api", "session-1",
+		func(context.Context, string) error { return nil })
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	if err := conn.WriteJSON(map[string]any{
+		"type": "approval_response", "approval_id": req.ID, "action": "auto_always",
+	}); err != nil {
+		t.Fatalf("ws write: %v", err)
+	}
+	if code := wsReadError(t, conn); code != "high_risk" {
+		t.Fatalf("error code = %q, want high_risk", code)
+	}
+	got, err := h.Approvals.Get(context.Background(), req.ID)
+	if err != nil || got.Status != approval.StatusPending {
+		t.Fatalf("after auto_always: %+v, %v; want pending", got, err)
+	}
+	if rules, _ := h.Approvals.ListAutoApproveRules(context.Background(), "default"); len(rules) != 0 {
+		t.Errorf("rules = %+v, want none", rules)
+	}
+
+	// Frames are handled in order, so the second approve is answered only
+	// after the first has resolved the request.
+	for i := 0; i < 2; i++ {
+		if err := conn.WriteJSON(map[string]any{
+			"type": "approval_response", "approval_id": req.ID, "action": "approve",
+		}); err != nil {
+			t.Fatalf("ws write: %v", err)
+		}
+	}
+	if code := wsReadError(t, conn); code != "already_resolved" {
+		t.Fatalf("error code = %q, want already_resolved after the first approve resolved it", code)
+	}
+	if got, _ := h.Approvals.Get(context.Background(), req.ID); got.Status != approval.StatusApproved {
+		t.Errorf("status = %q, want approved", got.Status)
+	}
+}
+
 func TestWebSocket_ChatScopeCannotPanic(t *testing.T) {
 	h := NewHarness(t, &HarnessOpts{Scopes: []string{"chat", "approvals:write"}})
 	conn := wsDialKey(t, h)

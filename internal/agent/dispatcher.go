@@ -16,6 +16,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/adapter"
 	"github.com/Temikus/denkeeper/internal/audit"
 	"github.com/Temikus/denkeeper/internal/llm"
+	"github.com/Temikus/denkeeper/internal/toolrisk"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -1463,10 +1464,99 @@ func (d *Dispatcher) handleToolApproval(ctx context.Context, a adapter.Adapter, 
 		return
 	}
 	if alog != nil {
-		alog.setPendingApproval(ctx, evt.Tool, evt.Text, evt.ApprovalCallback, evt.ApprovalHumanOnly)
+		alog.setPendingApproval(ctx, evt.Tool, evt.Text, evt.ApprovalCallback, evt.ApprovalHumanOnly, evt.ApprovalRisk)
 		return
 	}
 	d.sendStandaloneApprovalPrompt(ctx, a, msg, evt)
+}
+
+// promptButtons is approvalButtons for a pending prompt that may be high-risk.
+// A high-risk call gets Approve and Deny only, like a human-only one. One whose
+// flagged arguments could not be shown gets Deny only: nobody should approve a
+// call they were not shown.
+func promptButtons(callback string, humanOnly bool, risk *riskBlock, sessionLabel, alwaysLabel string) ([]adapter.KeyboardButton, []int) {
+	if risk != nil && risk.tooLong {
+		return []adapter.KeyboardButton{{Label: "❌ Deny", CallbackData: callback + ":deny"}}, []int{1}
+	}
+	return approvalButtons(callback, humanOnly || risk != nil, sessionLabel, alwaysLabel)
+}
+
+// riskTooLongLine replaces the flagged arguments when they do not fit
+// approvalRiskMaxBytes. Flagged values are never cut: a partial value could
+// hide the part that makes the call risky.
+const riskTooLongLine = "The arguments that make this call risky are too long to show here. Review it in the dashboard under Approvals, or deny it here."
+
+// breakBackticks puts a zero-width space between adjacent backticks, so text
+// inside a markdown code fence can never close it: a ``` in a value would
+// otherwise let Discord render the rest as markdown (a fake "approve" line, a
+// masked link). Single backticks are left alone. Every fenced block on the
+// debug path goes through it.
+// zeroWidthSpace is U+200B, written as a number so no editor turns it into
+// an invisible literal in the source.
+const zeroWidthSpace = rune(0x200B)
+
+func breakBackticks(s string) string {
+	if !strings.Contains(s, "``") {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) + len(s)/2)
+	prev := rune(0)
+	for _, r := range s {
+		if r == '`' && prev == '`' {
+			b.WriteRune(zeroWidthSpace)
+		}
+		b.WriteRune(r)
+		prev = r
+	}
+	return b.String()
+}
+
+// riskBlock is a high-risk prompt's warning and flagged lines, rendered once
+// for the HTML and markdown paths. tooLong holds when either rendering is over
+// approvalRiskMaxBytes: HTML escaping grows <, > and &, and breakBackticks
+// grows backtick runs in the markdown, so neither bounds the other.
+type riskBlock struct {
+	html, markdown string
+	tooLong        bool
+}
+
+// newRiskBlock returns nil for a call that is not high-risk.
+func newRiskBlock(r *toolrisk.Risk) *riskBlock {
+	if r == nil {
+		return nil
+	}
+	lead := "⚠️ <b>High risk.</b> " + html.EscapeString(r.Warning)
+	var b strings.Builder
+	b.WriteString(lead + " Approve once or deny.")
+	for _, f := range r.Flagged {
+		fmt.Fprintf(&b, "\n<b>%s:</b> <code>%s</code>", html.EscapeString(f.Name), html.EscapeString(f.Value))
+	}
+	md := "⚠️ **High risk.** " + r.Warning + " Approve once or deny."
+	if len(r.Flagged) > 0 {
+		lines := make([]string, 0, len(r.Flagged))
+		for _, f := range r.Flagged {
+			lines = append(lines, f.Name+": "+f.Value)
+		}
+		md += "\n```\n" + breakBackticks(strings.Join(lines, "\n")) + "\n```"
+	}
+	if b.Len() > approvalRiskMaxBytes || len(md) > approvalRiskMaxBytes {
+		return &riskBlock{
+			html:     lead + "\n" + riskTooLongLine,
+			markdown: "⚠️ **High risk.** " + r.Warning + "\n" + riskTooLongLine,
+			tooLong:  true,
+		}
+	}
+	return &riskBlock{html: b.String(), markdown: md}
+}
+
+// approvalArgsBudget is the arguments block's share: a high-risk prompt gives
+// approvalRiskMaxBytes of it to the risk block, so the section's ceiling holds.
+func approvalArgsBudget(risk *riskBlock) int {
+	if risk != nil {
+		return approvalArgsMaxBytes - approvalRiskMaxBytes
+	}
+	return approvalArgsMaxBytes
 }
 
 // approvalButtons builds the inline keyboard for a pending approval: Approve
@@ -1591,16 +1681,31 @@ func (d *Dispatcher) routeApprovalStatus(ctx context.Context, a adapter.Adapter,
 // sites in this file, losing an approval prompt stalls the turn until the
 // approval times out.
 func (d *Dispatcher) sendDebugApprovalPrompt(ctx context.Context, a adapter.Adapter, msg adapter.IncomingMessage, evt ChatEvent) {
+	risk := newRiskBlock(evt.ApprovalRisk)
 	// The debug prompt has always used the adapter's default layout.
-	buttons, _ := approvalButtons(evt.ApprovalCallback, evt.ApprovalHumanOnly, "🔄 Auto (15 min)", "♾️ Auto (always)")
-	ask := "Approve?"
-	if evt.ApprovalHumanOnly {
-		ask = humanOnlyApprovalNote + "\nApprove?"
+	buttons, _ := promptButtons(evt.ApprovalCallback, evt.ApprovalHumanOnly, risk, "🔄 Auto (15 min)", "♾️ Auto (always)")
+	// The question goes when only Deny is offered. The human-only note goes
+	// when the risk block is shown, which already says the same.
+	var ask []string
+	if evt.ApprovalHumanOnly && risk == nil {
+		ask = append(ask, humanOnlyApprovalNote)
+	}
+	riskText := ""
+	if risk != nil {
+		riskText = "\n\n" + risk.markdown
+	}
+	if risk == nil || !risk.tooLong {
+		ask = append(ask, "Approve?")
+	}
+	// Broken before the cut, so the zero-width spaces count toward the budget.
+	text := fmt.Sprintf("Agent wants to execute tool **%s**%s\n\n```\n%s\n```",
+		truncateEscaped(evt.Tool, toolNameMaxBytes), riskText,
+		truncateEscaped(breakBackticks(evt.Text), approvalArgsBudget(risk)))
+	if len(ask) > 0 {
+		text += "\n\n" + strings.Join(ask, "\n")
 	}
 	err := a.Send(ctx, adapter.OutgoingMessage{
-		Text: fmt.Sprintf("Agent wants to execute tool **%s**\n\n```\n%s\n```\n\n%s",
-			truncateEscaped(evt.Tool, toolNameMaxBytes),
-			truncateEscaped(evt.Text, approvalArgsMaxBytes), ask),
+		Text:       text,
 		ExternalID: msg.ExternalID,
 		Adapter:    msg.Adapter,
 		Buttons:    buttons,
@@ -1616,12 +1721,14 @@ func (d *Dispatcher) sendDebugApprovalPrompt(ctx context.Context, a adapter.Adap
 // sendDebugApprovalPrompt for why the payload is budgeted and the send error
 // is logged at Error.
 func (d *Dispatcher) sendStandaloneApprovalPrompt(ctx context.Context, a adapter.Adapter, msg adapter.IncomingMessage, evt ChatEvent) {
+	risk := newRiskBlock(evt.ApprovalRisk)
 	text := renderApprovalSection(
 		truncateEscaped(evt.Tool, toolNameMaxBytes),
-		truncateEscaped(evt.Text, approvalArgsMaxBytes),
+		truncateEscaped(evt.Text, approvalArgsBudget(risk)),
 		evt.ApprovalHumanOnly,
+		risk,
 	)
-	buttons, layout := approvalButtons(evt.ApprovalCallback, evt.ApprovalHumanOnly, "🔄 15 min", "♾️ Always")
+	buttons, layout := promptButtons(evt.ApprovalCallback, evt.ApprovalHumanOnly, risk, "🔄 15 min", "♾️ Always")
 	err := a.Send(ctx, adapter.OutgoingMessage{
 		Text:         text,
 		ParseMode:    "HTML",
@@ -1703,7 +1810,8 @@ type pendingApproval struct {
 	tool      string
 	args      string
 	callback  string
-	humanOnly bool // no session/always buttons (ChatEvent.ApprovalHumanOnly)
+	humanOnly bool       // no session/always buttons (ChatEvent.ApprovalHumanOnly)
+	risk      *riskBlock // nil unless the call is high-risk (ChatEvent.ApprovalRisk)
 }
 
 // Message-size budgets for the Telegram activity log.
@@ -1745,6 +1853,11 @@ const (
 	// approvalArgsMaxBytes caps the escaped width of a tool-argument payload
 	// rendered in an approval prompt.
 	approvalArgsMaxBytes = 2000
+	// approvalRiskMaxBytes caps a high-risk prompt's warning and flagged lines,
+	// markup included. It is carved out of approvalArgsMaxBytes (the arguments
+	// block gets the rest), so approvalSectionMaxBytes and every bound derived
+	// from it are unchanged. Flagged lines that do not fit are replaced, not cut.
+	approvalRiskMaxBytes = 1400
 	// approvalSectionOverheadBytes covers the approval section's fixed markup
 	// (header, expandable blockquote tags, separator newline), the ellipsis
 	// each truncated field may append, and a human-only prompt's note line.
@@ -1807,16 +1920,27 @@ func truncateEscaped(s string, maxBytes int) string {
 	return s
 }
 
-// renderApprovalSection builds the approval header plus the expandable args
-// block. tool and args must already be truncated to their escaped-width
-// budgets; the result is then bounded by approvalSectionMaxBytes.
-func renderApprovalSection(tool, args string, humanOnly bool) string {
+// renderApprovalSection builds the approval header, a high-risk prompt's risk
+// block, then the expandable args block. tool and args must already be
+// truncated to their escaped-width budgets (approvalArgsBudget for args); the
+// result is then bounded by approvalSectionMaxBytes.
+func renderApprovalSection(tool, args string, humanOnly bool, risk *riskBlock) string {
+	// The risk block already says why only Approve and Deny are offered, so
+	// a human-only call (always high-risk) does not repeat it with the note.
 	note := ""
-	if humanOnly {
+	switch {
+	case risk != nil:
+		note = "\n" + risk.html
+	case humanOnly:
 		note = "\n" + humanOnlyApprovalNote
 	}
-	return fmt.Sprintf("🔧 <b>%s</b> — approve?%s\n<blockquote expandable>%s</blockquote>",
-		html.EscapeString(tool), note, html.EscapeString(args))
+	// Over a Deny-only keyboard the header must not ask for approval.
+	ask := "approve?"
+	if risk != nil && risk.tooLong {
+		ask = "review in the dashboard"
+	}
+	return fmt.Sprintf("🔧 <b>%s</b> — %s%s\n<blockquote expandable>%s</blockquote>",
+		html.EscapeString(tool), ask, note, html.EscapeString(args))
 }
 
 // humanOnlyApprovalNote explains a human-only prompt's missing auto-approve
@@ -1852,7 +1976,7 @@ func (l *activityLog) renderChunk(c *logChunk, isLast bool) string {
 	if !isLast || l.pending == nil {
 		return lines
 	}
-	approval := renderApprovalSection(l.pending.tool, l.pending.args, l.pending.humanOnly)
+	approval := renderApprovalSection(l.pending.tool, l.pending.args, l.pending.humanOnly, l.pending.risk)
 	if lines == "" {
 		return approval
 	}
@@ -1889,7 +2013,7 @@ func (l *activityLog) flush(ctx context.Context) {
 		Silent:     l.pending == nil,
 	}
 	if l.pending != nil {
-		msg.Buttons, msg.ButtonLayout = approvalButtons(l.pending.callback, l.pending.humanOnly, "🔄 15 min", "♾️ Always")
+		msg.Buttons, msg.ButtonLayout = promptButtons(l.pending.callback, l.pending.humanOnly, l.pending.risk, "🔄 15 min", "♾️ Always")
 	}
 
 	if last.messageID == "" {
@@ -2056,17 +2180,19 @@ func (l *activityLog) toolDenied(ctx context.Context, tool string) {
 // and push it over Telegram's cap, which drops the message — and with it the
 // inline keyboard — entirely.
 func (l *activityLog) setPending(ctx context.Context, tool, args, callback string) {
-	l.setPendingApproval(ctx, tool, args, callback, false)
+	l.setPendingApproval(ctx, tool, args, callback, false, nil)
 }
 
-// setPendingApproval is setPending with the human-only switch: a human-only
-// approval gets Approve and Deny only.
-func (l *activityLog) setPendingApproval(ctx context.Context, tool, args, callback string, humanOnly bool) {
+// setPendingApproval is setPending with the human-only switch and the call's
+// risk: a human-only or high-risk approval gets Approve and Deny only.
+func (l *activityLog) setPendingApproval(ctx context.Context, tool, args, callback string, humanOnly bool, risk *toolrisk.Risk) {
+	block := newRiskBlock(risk)
 	l.pending = &pendingApproval{
 		tool:      truncateEscaped(tool, toolNameMaxBytes),
-		args:      truncateEscaped(args, approvalArgsMaxBytes),
+		args:      truncateEscaped(args, approvalArgsBudget(block)),
 		callback:  callback,
 		humanOnly: humanOnly,
+		risk:      block,
 	}
 	c := l.ensureChunk()
 	if c.messageID != "" || len(l.renderLines(c)) > activityChunkWithApprovalMaxBytes {

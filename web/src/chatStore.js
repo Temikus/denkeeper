@@ -188,6 +188,8 @@ function handleToolEvent(agentMsg, evt) {
         status: 'pending', resolving: false,
         // tool_add / plugin_add: one-off approval only, no auto-approve buttons.
         humanOnly: !!evt.approval_human_only,
+        // High-risk call (#586): no auto-approve buttons; warning and flagged args shown.
+        risk: evt.approval_risk || null,
         shadow: evt.shadow || null,
       }]
     }

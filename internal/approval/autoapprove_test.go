@@ -10,7 +10,7 @@ func TestShouldAutoApprove_NoRules(t *testing.T) {
 	m := newTestManager(t)
 	ctx := context.Background()
 
-	ok, _ := m.ShouldAutoApprove(ctx, "default", "web_search", "conv1")
+	ok, _ := m.ShouldAutoApprove(ctx, "default", "web_search", nil, "conv1")
 	if ok {
 		t.Error("expected no auto-approve with no rules")
 	}
@@ -20,9 +20,9 @@ func TestShouldAutoApprove_SessionRule(t *testing.T) {
 	m := newTestManager(t)
 	ctx := context.Background()
 
-	m.AddSessionRule(ctx, "default", "web_search", "conv1", "test")
+	mustOK(t, m.AddSessionRule(ctx, "default", "web_search", "conv1", "test"))
 
-	ok, scope := m.ShouldAutoApprove(ctx, "default", "web_search", "conv1")
+	ok, scope := m.ShouldAutoApprove(ctx, "default", "web_search", nil, "conv1")
 	if !ok {
 		t.Fatal("expected auto-approve to match session rule")
 	}
@@ -35,9 +35,9 @@ func TestShouldAutoApprove_SessionRuleDifferentConversation(t *testing.T) {
 	m := newTestManager(t)
 	ctx := context.Background()
 
-	m.AddSessionRule(ctx, "default", "web_search", "conv1", "test")
+	mustOK(t, m.AddSessionRule(ctx, "default", "web_search", "conv1", "test"))
 
-	ok, _ := m.ShouldAutoApprove(ctx, "default", "web_search", "conv2")
+	ok, _ := m.ShouldAutoApprove(ctx, "default", "web_search", nil, "conv2")
 	if ok {
 		t.Error("session rule should not match different conversation")
 	}
@@ -52,7 +52,7 @@ func TestShouldAutoApprove_PermanentRule(t *testing.T) {
 		t.Fatalf("AddPermanentRule: %v", err)
 	}
 
-	ok, scope := m.ShouldAutoApprove(ctx, "default", "web_search", "any-conv")
+	ok, scope := m.ShouldAutoApprove(ctx, "default", "web_search", nil, "any-conv")
 	if !ok {
 		t.Fatal("expected auto-approve to match permanent rule")
 	}
@@ -65,13 +65,13 @@ func TestShouldAutoApprove_SessionTakesPrecedence(t *testing.T) {
 	m := newTestManager(t)
 	ctx := context.Background()
 
-	m.AddSessionRule(ctx, "default", "web_search", "conv1", "test")
+	mustOK(t, m.AddSessionRule(ctx, "default", "web_search", "conv1", "test"))
 	if _, err := m.AddPermanentRule(ctx, "default", "web_search", "test"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Session should be checked first.
-	ok, scope := m.ShouldAutoApprove(ctx, "default", "web_search", "conv1")
+	ok, scope := m.ShouldAutoApprove(ctx, "default", "web_search", nil, "conv1")
 	if !ok {
 		t.Fatal("expected match")
 	}
@@ -125,7 +125,7 @@ func TestRemoveAutoApproveRule(t *testing.T) {
 		t.Fatalf("RemoveAutoApproveRule: %v", err)
 	}
 
-	ok, _ := m.ShouldAutoApprove(ctx, "default", "web_search", "conv1")
+	ok, _ := m.ShouldAutoApprove(ctx, "default", "web_search", nil, "conv1")
 	if ok {
 		t.Error("rule should no longer match after removal")
 	}
@@ -145,22 +145,22 @@ func TestClearSessionRules(t *testing.T) {
 	m := newTestManager(t)
 	ctx := context.Background()
 
-	m.AddSessionRule(ctx, "default", "tool_a", "conv1", "test")
-	m.AddSessionRule(ctx, "default", "tool_b", "conv1", "test")
-	m.AddSessionRule(ctx, "default", "tool_a", "conv2", "test")
+	mustOK(t, m.AddSessionRule(ctx, "default", "tool_a", "conv1", "test"))
+	mustOK(t, m.AddSessionRule(ctx, "default", "tool_b", "conv1", "test"))
+	mustOK(t, m.AddSessionRule(ctx, "default", "tool_a", "conv2", "test"))
 
 	m.ClearSessionRules("conv1")
 
-	ok, _ := m.ShouldAutoApprove(ctx, "default", "tool_a", "conv1")
+	ok, _ := m.ShouldAutoApprove(ctx, "default", "tool_a", nil, "conv1")
 	if ok {
 		t.Error("conv1 tool_a should be cleared")
 	}
-	ok, _ = m.ShouldAutoApprove(ctx, "default", "tool_b", "conv1")
+	ok, _ = m.ShouldAutoApprove(ctx, "default", "tool_b", nil, "conv1")
 	if ok {
 		t.Error("conv1 tool_b should be cleared")
 	}
 	// conv2 should be unaffected.
-	ok, _ = m.ShouldAutoApprove(ctx, "default", "tool_a", "conv2")
+	ok, _ = m.ShouldAutoApprove(ctx, "default", "tool_a", nil, "conv2")
 	if !ok {
 		t.Error("conv2 rule should still be active")
 	}
@@ -170,7 +170,7 @@ func TestListAutoApproveRules_CombinesSessionAndPermanent(t *testing.T) {
 	m := newTestManager(t)
 	ctx := context.Background()
 
-	m.AddSessionRule(ctx, "default", "tool_a", "conv1", "test")
+	mustOK(t, m.AddSessionRule(ctx, "default", "tool_a", "conv1", "test"))
 	if _, err := m.AddPermanentRule(ctx, "default", "tool_b", "test"); err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +254,7 @@ func TestResolveByCallback_ApproveSession_CreatesSessionRule(t *testing.T) {
 	}
 
 	// Session rule should now exist.
-	ok, scope := m.ShouldAutoApprove(ctx, "default", "web_search", "conv1")
+	ok, scope := m.ShouldAutoApprove(ctx, "default", "web_search", nil, "conv1")
 	if !ok {
 		t.Error("expected session auto-approve rule to be created")
 	}
@@ -281,7 +281,7 @@ func TestResolveByCallback_ApproveAlways_CreatesPermanentRule(t *testing.T) {
 	}
 
 	// Permanent rule should exist (matches any conversation).
-	ok, scope := m.ShouldAutoApprove(ctx, "default", "send_email", "any-conv")
+	ok, scope := m.ShouldAutoApprove(ctx, "default", "send_email", nil, "any-conv")
 	if !ok {
 		t.Error("expected permanent auto-approve rule to be created")
 	}
@@ -363,7 +363,7 @@ func TestAutoResolvePending_SessionRule(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m.AddSessionRule(ctx, "default", "web_search", "conv1", "test")
+	mustOK(t, m.AddSessionRule(ctx, "default", "web_search", "conv1", "test"))
 
 	if !resolved {
 		t.Error("expected pending approval to be auto-resolved by session rule")
@@ -378,7 +378,7 @@ func TestShouldAutoApprove_SessionRuleExpired(t *testing.T) {
 	key := sessionRuleKey("default", "conv1", "web_search")
 	m.sessionRules.Store(key, time.Now().Add(-1*time.Minute))
 
-	ok, _ := m.ShouldAutoApprove(ctx, "default", "web_search", "conv1")
+	ok, _ := m.ShouldAutoApprove(ctx, "default", "web_search", nil, "conv1")
 	if ok {
 		t.Error("expired session rule should not match")
 	}
@@ -394,7 +394,7 @@ func TestListAutoApproveRules_ExcludesExpired(t *testing.T) {
 	ctx := context.Background()
 
 	// Add one active and one expired session rule.
-	m.AddSessionRule(ctx, "default", "tool_active", "conv1", "test")
+	mustOK(t, m.AddSessionRule(ctx, "default", "tool_active", "conv1", "test"))
 
 	expiredKey := sessionRuleKey("default", "conv1", "tool_expired")
 	m.sessionRules.Store(expiredKey, time.Now().Add(-1*time.Minute))

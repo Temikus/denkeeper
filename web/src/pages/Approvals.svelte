@@ -4,6 +4,7 @@
   import ErrorBanner from '../components/ErrorBanner.svelte'
   import StatusBadge from '../components/StatusBadge.svelte'
   import ToolCallArgs from '../components/ToolCallArgs.svelte'
+  import ApprovalRisk from '../components/ApprovalRisk.svelte'
   import { parseToolCall } from '../approvalFormat.js'
 
   let filter = 'pending'
@@ -132,6 +133,9 @@
           <td class="id">{a.id.slice(0, 8)}…</td>
           <td>{a.kind}</td>
           <td class="summary">
+            {#if a.risk}
+              <div class="summary-risk"><ApprovalRisk risk={a.risk} /></div>
+            {/if}
             {#if call}
               <ToolCallArgs {call} />
             {:else}
@@ -185,7 +189,7 @@
     <tbody>
       {#each autoRules as rule}
         <tr>
-          <td class="tool-name-cell"><code>{rule.tool_name}</code></td>
+          <td class="tool-name-cell"><code>{rule.tool_name}</code>{#if rule.inert} <span class="muted">inactive (high-risk tool)</span>{/if}</td>
           <td>{rule.agent_name}</td>
           <td><span class="scope-badge" class:session={rule.scope === 'session'} class:config={rule.scope === 'config'}>{rule.scope}</span></td>
           <td class="date">{fmtDate(rule.created_at)}</td>
@@ -241,6 +245,7 @@
   .filter-btn.active { color: var(--accent); border-color: var(--accent); background: rgba(var(--accent-rgb), 0.1); }
   .id { font-family: monospace; color: var(--text-muted); white-space: nowrap; }
   .summary { max-width: 560px; }
+  .summary-risk { margin-bottom: 6px; }
   @media (min-width: 768px) { .summary { min-width: 240px; } }
   .payload-details {
     margin-top: 4px;

@@ -49,6 +49,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/skilleffect"
 	"github.com/Temikus/denkeeper/internal/task"
 	"github.com/Temikus/denkeeper/internal/tool"
+	"github.com/Temikus/denkeeper/internal/toolrisk"
 	openaivoice "github.com/Temikus/denkeeper/internal/voice/openai"
 	"github.com/Temikus/denkeeper/internal/web"
 	"github.com/Temikus/denkeeper/internal/webfetch"
@@ -1418,6 +1419,18 @@ func warnUnadvertisedAutoApprove(agentName string, want, advertised []string, lo
 	}
 }
 
+// warnHighRiskAutoApprove logs a warning for every auto_approve_tools entry
+// naming a tool every call to which is high-risk (toolrisk.AlwaysHigh): no
+// rule covers those calls (#586), so the entry has no effect. It is kept.
+func warnHighRiskAutoApprove(agentName string, want []string, logger *slog.Logger) {
+	for _, name := range want {
+		if toolrisk.AlwaysHigh(name) {
+			logger.Warn("auto_approve_tools entry names a high-risk tool and has no effect: each call is approved once or denied",
+				"agent", agentName, "tool", name)
+		}
+	}
+}
+
 func buildAllAgents(ctx context.Context, agents []config.AgentInstanceConfig, abc agentBuildCtx) (map[string]*agent.Engine, []agent.Binding, error) {
 	engines := make(map[string]*agent.Engine, len(agents))
 	var bindings []agent.Binding
@@ -1564,6 +1577,7 @@ func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc ag
 	agentRouter.SetTools(agentToolMgr.ToolDefs)
 
 	warnUnadvertisedAutoApprove(ac.Name, ac.AutoApproveTools, agentToolMgr.ToolNames(), abc.logger)
+	warnHighRiskAutoApprove(ac.Name, ac.AutoApproveTools, abc.logger)
 
 	wireNudgeAndReviewer(ctx, ac, e, p, abc)
 
@@ -2488,6 +2502,7 @@ func buildReloadFunc(path string, cfgHolder *config.Holder, dispatcher *agent.Di
 			e.SetReplyGuard(replyGuardFrom(cfg))
 			e.SetTraceCapture(cfg.Eval.Capture, cfg.Eval.TraceBytesCap())
 			warnUnadvertisedAutoApprove(ac.Name, ac.AutoApproveTools, e.ToolNames(), logger)
+			warnHighRiskAutoApprove(ac.Name, ac.AutoApproveTools, logger)
 		}
 
 		logger.Info("config reloaded from disk", "path", path)
