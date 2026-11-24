@@ -72,7 +72,8 @@ func (m *Manager) checkRuntimeCommand(cfg config.ToolConfig) error {
 // this a pin or an allowlisted command could still run anything.
 var runtimeEnvRefused = flagSet(
 	"GCONV_PATH", "LOCPATH", "NLSPATH", // glibc loads iconv modules and locale data from these
-	"BASH_ENV", "ENV", "BROWSER",
+	"BASH_ENV", "ENV", "BROWSER", "COMSPEC", // COMSPEC is npm's Windows script shell
+	"VIRTUAL_ENV", "CONDA_PREFIX", // uv finds its interpreter through these
 	"JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS",
 	"PERL5OPT", "PERL5LIB", "RUBYOPT", "RUBYLIB",
 	"PATH", "HOME", "PREFIX", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
@@ -83,11 +84,12 @@ var runtimeEnvRefused = flagSet(
 // package's source: the Node and Python option families (NODE_OPTIONS,
 // NODE_TLS_REJECT_UNAUTHORIZED, PYTHONPATH, PYTHONWARNINGS and the rest), npm,
 // corepack, pip and uv settings, git (npm and uv fetch git dependencies, and
-// GIT_SSH_COMMAND runs a command), the Linux and macOS loaders, and the XDG
-// base dirs where npm, pip and uv keep config and cache. Refusing a family
-// beats naming its members: uv alone has dozens that move the index.
+// GIT_SSH_COMMAND runs a command), OpenSSL (OPENSSL_CONF can load an engine
+// or provider library), the Linux and macOS loaders, and the XDG base dirs
+// where npm, pip and uv keep config and cache. Refusing a family beats naming
+// its members: uv alone has dozens that move the index.
 var runtimeEnvRefusedPrefixes = []string{
-	"NODE_", "NPM_", "COREPACK_", "PYTHON", "PIP_", "UV_", "GIT_", "LD_", "DYLD_", "XDG_",
+	"NODE_", "NPM_", "COREPACK_", "PYTHON", "PIP_", "UV_", "GIT_", "OPENSSL_", "LD_", "DYLD_", "XDG_",
 }
 
 // runtimeEnvRefusedSuffixes: any proxy setting (HTTPS_PROXY, ALL_PROXY, …)
@@ -117,6 +119,11 @@ func ValidateRuntimeEnv(env map[string]string) error {
 	}
 	slices.Sort(names) // the same input names the same variable every time
 	for _, name := range names {
+		// Checked before the lists: "PATH=/x" is not on any list, but the OS
+		// reads it as PATH.
+		if !validEnvName(name) {
+			return fmt.Errorf("env name %q is not a valid identifier (letters, digits and _, not starting with a digit); tools added at runtime can't set it, so %s", name, runtimeRefusalFix)
+		}
 		if runtimeEnvRefusedName(strings.ToUpper(name)) {
 			return fmt.Errorf("env %s can make the tool run other code or fetch its package from elsewhere; tools added at runtime can't set it, so %s", name, runtimeRefusalFix)
 		}

@@ -346,6 +346,33 @@ func TestValidateRuntimeEnv_RefusesWiderFamilies(t *testing.T) {
 	}
 }
 
+// The OS splits an env entry at its first "=", so a key such as
+// "PATH=/attacker/bin" would set PATH while getting past every exact-name
+// check. Only identifier names are accepted.
+func TestValidateRuntimeEnv_RefusesNamesThatAreNotIdentifiers(t *testing.T) {
+	for _, name := range []string{
+		"PATH=/x", "HOME=/x", "ENV=x", "=C:", "BAD\x00NAME", "MY VAR", "", "9LIVES", "A-B",
+	} {
+		if err := ValidateRuntimeEnv(map[string]string{name: "v"}); err == nil {
+			t.Errorf("%q: accepted, want rejection", name)
+		}
+	}
+	if err := ValidateRuntimeEnv(map[string]string{"_PRIVATE": "1", "Mixed_Case9": "1"}); err != nil {
+		t.Errorf("identifier names refused: %v", err)
+	}
+}
+
+// OpenSSL config can load an engine or provider library, COMSPEC is npm's
+// Windows script shell, and uv finds its interpreter through VIRTUAL_ENV and
+// CONDA_PREFIX.
+func TestValidateRuntimeEnv_RefusesOpenSSLShellAndInterpreterNames(t *testing.T) {
+	for _, name := range []string{"OPENSSL_CONF", "openssl_modules", "COMSPEC", "comspec", "VIRTUAL_ENV", "CONDA_PREFIX", "conda_prefix"} {
+		if err := ValidateRuntimeEnv(map[string]string{name: "v"}); err == nil {
+			t.Errorf("%s: accepted, want rejection", name)
+		}
+	}
+}
+
 // Harmless members of the refused families stay allowed: they change output,
 // not what runs or where it comes from.
 func TestValidateRuntimeEnv_AllowsHarmlessFamilyMembers(t *testing.T) {
