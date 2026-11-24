@@ -3,10 +3,13 @@ package audit
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -33,9 +36,35 @@ CREATE INDEX IF NOT EXISTS idx_audit_agent ON audit_events(agent, timestamp DESC
 CREATE INDEX IF NOT EXISTS idx_audit_conversation ON audit_events(conversation_id, timestamp DESC);
 `
 
+// auditMigrations add the hash-chain columns. A constant default does not
+// rewrite rows, so this is safe on a database another process is using.
+var auditMigrations = []string{
+	`ALTER TABLE audit_events ADD COLUMN prev_hash TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE audit_events ADD COLUMN hash TEXT NOT NULL DEFAULT ''`,
+}
+
+func initAuditDB(db *sqlx.DB) error {
+	if _, err := db.Exec(auditSchema); err != nil {
+		return fmt.Errorf("initializing audit schema: %w", err)
+	}
+	for _, m := range auditMigrations {
+		if _, err := db.Exec(m); err != nil && !isDuplicateColumn(err) {
+			return fmt.Errorf("migrating audit schema: %w", err)
+		}
+	}
+	return nil
+}
+
+func isDuplicateColumn(err error) bool {
+	return strings.Contains(err.Error(), "duplicate column name")
+}
+
 // SQLiteStore implements Store using SQLite.
 type SQLiteStore struct {
 	db *sqlx.DB
+	// chainMu orders this process's chain writers (the flush goroutine and
+	// the retention worker). _txlock=immediate orders other processes.
+	chainMu sync.Mutex
 }
 
 // Compile-time check.
@@ -48,16 +77,35 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 		return nil, fmt.Errorf("creating audit database directory: %w", err)
 	}
 
-	db, err := sqlx.Open("sqlite", dbPath+"?_pragma=journal_mode(wal)&_pragma=busy_timeout(5000)")
+	// _txlock=immediate: a write transaction takes the write lock before it
+	// reads the chain head, so two processes cannot both extend the same head.
+	db, err := sqlx.Open("sqlite", dbPath+"?_pragma=journal_mode(wal)&_pragma=busy_timeout(5000)&_txlock=immediate")
 	if err != nil {
 		return nil, fmt.Errorf("opening audit database: %w", err)
 	}
 
-	if _, err := db.Exec(auditSchema); err != nil {
+	if err := initAuditDB(db); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("initializing audit schema: %w", err)
+		return nil, err
 	}
 
+	return &SQLiteStore{db: db}, nil
+}
+
+// OpenSQLiteStoreReadOnly opens an existing audit database for reading only:
+// no schema setup, no migration, and a missing file is an error.
+func OpenSQLiteStoreReadOnly(dbPath string) (*SQLiteStore, error) {
+	if _, err := os.Stat(dbPath); err != nil {
+		return nil, fmt.Errorf("opening audit database read-only: %w", err)
+	}
+	db, err := sqlx.Open("sqlite", dbPath+"?_pragma=query_only(1)&_pragma=busy_timeout(5000)")
+	if err != nil {
+		return nil, fmt.Errorf("opening audit database read-only: %w", err)
+	}
+	if err := db.Ping(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("opening audit database read-only: %w", err)
+	}
 	return &SQLiteStore{db: db}, nil
 }
 
@@ -67,7 +115,10 @@ func NewInMemoryStore() (*SQLiteStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := db.Exec(auditSchema); err != nil {
+	// Each pooled connection to ":memory:" is a separate, empty database,
+	// so a second connection would see no audit_events table.
+	db.SetMaxOpenConns(1)
+	if err := initAuditDB(db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -76,37 +127,18 @@ func NewInMemoryStore() (*SQLiteStore, error) {
 
 // Insert persists a single audit event.
 func (s *SQLiteStore) Insert(ctx context.Context, event Event) error {
-	const q = `INSERT INTO audit_events (timestamp, category, action, agent, summary, detail, status, duration_ms, source, conversation_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-
-	ts := event.Timestamp
-	if ts.IsZero() {
-		ts = time.Now().UTC()
-	}
-
-	_, err := s.db.ExecContext(ctx, q,
-		ts.Format(time.RFC3339Nano),
-		event.Category,
-		event.Action,
-		event.Agent,
-		event.Summary,
-		event.Detail,
-		event.Status,
-		event.DurationMs,
-		event.Source,
-		event.ConversationID,
-	)
-	if err != nil {
-		return fmt.Errorf("inserting audit event: %w", err)
-	}
-	return nil
+	return s.InsertBatch(ctx, []Event{event})
 }
 
-// InsertBatch persists multiple audit events in a single transaction.
+// InsertBatch persists multiple audit events in a single transaction, each
+// chained to the row before it.
 func (s *SQLiteStore) InsertBatch(ctx context.Context, events []Event) error {
 	if len(events) == 0 {
 		return nil
 	}
+
+	s.chainMu.Lock()
+	defer s.chainMu.Unlock()
 
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
@@ -114,32 +146,74 @@ func (s *SQLiteStore) InsertBatch(ctx context.Context, events []Event) error {
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	const q = `INSERT INTO audit_events (timestamp, category, action, agent, summary, detail, status, duration_ms, source, conversation_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-
-	stmt, err := tx.PrepareContext(ctx, q)
+	_, headHash, _, err := readChainHead(ctx, tx)
 	if err != nil {
-		return fmt.Errorf("preparing audit batch statement: %w", err)
+		return err
 	}
-	defer stmt.Close() //nolint:errcheck
+	if err := appendChained(ctx, tx, headHash, events); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing audit batch: %w", err)
+	}
+	return nil
+}
+
+// readChainHead returns the newest row's id and hash. ok is false for an
+// empty table. Read on every append: nothing caches the head.
+func readChainHead(ctx context.Context, tx *sqlx.Tx) (id int64, hash string, ok bool, err error) {
+	err = tx.QueryRowContext(ctx, `SELECT id, hash FROM audit_events ORDER BY id DESC LIMIT 1`).Scan(&id, &hash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, "", false, nil
+	}
+	if err != nil {
+		return 0, "", false, fmt.Errorf("reading audit chain head: %w", err)
+	}
+	return id, hash, true, nil
+}
+
+// appendChained inserts events after a head whose hash is prevHash. Every
+// append goes through here, under chainMu, in a write transaction.
+func appendChained(ctx context.Context, tx *sqlx.Tx, prevHash string, events []Event) error {
+	ins, err := tx.PrepareContext(ctx, `INSERT INTO audit_events
+		(timestamp, category, action, agent, summary, detail, status, duration_ms, source, conversation_id, prev_hash, hash)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '')`)
+	if err != nil {
+		return fmt.Errorf("preparing audit insert: %w", err)
+	}
+	defer ins.Close() //nolint:errcheck
+	upd, err := tx.PrepareContext(ctx, `UPDATE audit_events SET hash = ? WHERE id = ?`)
+	if err != nil {
+		return fmt.Errorf("preparing audit hash update: %w", err)
+	}
+	defer upd.Close() //nolint:errcheck
 
 	for _, event := range events {
 		ts := event.Timestamp
 		if ts.IsZero() {
 			ts = time.Now().UTC()
 		}
-		_, err := stmt.ExecContext(ctx, ts.Format(time.RFC3339Nano),
-			event.Category, event.Action, event.Agent, event.Summary,
-			event.Detail, event.Status, event.DurationMs, event.Source,
-			event.ConversationID,
-		)
-		if err != nil {
-			return fmt.Errorf("inserting audit event in batch: %w", err)
+		// Format once: the stored text and the hashed text must be the same bytes.
+		r := chainRow{
+			Timestamp: ts.Format(time.RFC3339Nano), Category: event.Category, Action: event.Action,
+			Agent: event.Agent, Summary: event.Summary, Detail: event.Detail, Status: event.Status,
+			DurationMs: event.DurationMs, Source: event.Source, ConversationID: event.ConversationID,
+			PrevHash: prevHash,
 		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("committing audit batch: %w", err)
+		res, err := ins.ExecContext(ctx, r.Timestamp, r.Category, r.Action, r.Agent, r.Summary,
+			r.Detail, r.Status, r.DurationMs, r.Source, r.ConversationID, r.PrevHash)
+		if err != nil {
+			return fmt.Errorf("inserting audit event: %w", err)
+		}
+		if r.ID, err = res.LastInsertId(); err != nil {
+			return fmt.Errorf("reading audit event id: %w", err)
+		}
+		hash := chainHash(r)
+		if _, err := upd.ExecContext(ctx, hash, r.ID); err != nil {
+			return fmt.Errorf("storing audit event hash: %w", err)
+		}
+		prevHash = hash
 	}
 	return nil
 }
@@ -315,17 +389,98 @@ func (s *SQLiteStore) Stats(ctx context.Context, opts StatsOpts) (*Stats, error)
 	return st, nil
 }
 
-// PruneBefore deletes audit events older than the given time.
-// Returns the number of deleted rows.
+// checkpointPayload is the detail of a prune checkpoint row.
+type checkpointPayload struct {
+	PrunedRows        int64  `json:"pruned_rows"`
+	PrunedThroughID   int64  `json:"pruned_through_id"`
+	PrunedThroughHash string `json:"pruned_through_hash"`
+	Cutoff            string `json:"cutoff"`
+}
+
+// PruneBefore deletes the oldest events, up to but not including the first
+// event (by id) still inside retention, and appends a checkpoint row that
+// accounts for them. Deleting an id prefix keeps the chain free of holes, so
+// an out-of-order old row stays until the rows before it age out. Returns
+// the number of deleted rows; the checkpoint is not counted.
 func (s *SQLiteStore) PruneBefore(ctx context.Context, before time.Time) (int, error) {
-	res, err := s.db.ExecContext(ctx,
-		"DELETE FROM audit_events WHERE timestamp < ?",
-		before.Format(time.RFC3339Nano))
+	s.chainMu.Lock()
+	defer s.chainMu.Unlock()
+
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("beginning audit prune transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	headID, headHash, ok, err := readChainHead(ctx, tx)
+	if err != nil || !ok {
+		return 0, err
+	}
+	cutoff := before.Format(time.RFC3339Nano)
+	keep, err := firstKeptID(ctx, tx, cutoff, headID)
+	if err != nil {
+		return 0, err
+	}
+	var last struct {
+		ID   int64  `db:"id"`
+		Hash string `db:"hash"`
+	}
+	err = tx.GetContext(ctx, &last, `SELECT id, hash FROM audit_events WHERE id < ? ORDER BY id DESC LIMIT 1`, keep)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("reading last pruned audit event: %w", err)
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM audit_events WHERE id < ?`, keep)
 	if err != nil {
 		return 0, fmt.Errorf("pruning audit events: %w", err)
 	}
 	n, _ := res.RowsAffected()
+
+	cp, err := checkpointEvent(n, last.ID, last.Hash, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	if err := appendChained(ctx, tx, headHash, []Event{cp}); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("committing audit prune: %w", err)
+	}
 	return int(n), nil
+}
+
+// firstKeptID is the lowest id still inside retention, or headID+1 when
+// every row is older than the cutoff.
+func firstKeptID(ctx context.Context, tx *sqlx.Tx, cutoff string, headID int64) (int64, error) {
+	var keep int64
+	err := tx.GetContext(ctx, &keep, `SELECT id FROM audit_events WHERE timestamp >= ? ORDER BY id LIMIT 1`, cutoff)
+	if errors.Is(err, sql.ErrNoRows) {
+		return headID + 1, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("finding first retained audit event: %w", err)
+	}
+	return keep, nil
+}
+
+func checkpointEvent(pruned, throughID int64, throughHash, cutoff string) (Event, error) {
+	detail, err := json.Marshal(checkpointPayload{
+		PrunedRows: pruned, PrunedThroughID: throughID, PrunedThroughHash: throughHash, Cutoff: cutoff,
+	})
+	if err != nil {
+		return Event{}, fmt.Errorf("encoding prune checkpoint: %w", err)
+	}
+	return Event{
+		Timestamp: time.Now().UTC(),
+		Category:  CategoryAudit,
+		Action:    ActionPruneCheckpoint,
+		Summary:   fmt.Sprintf("Retention pruned %d events up to id %d", pruned, throughID),
+		Detail:    string(detail),
+		Status:    StatusOK,
+		Source:    "retention",
+	}, nil
 }
 
 // Close closes the database connection.

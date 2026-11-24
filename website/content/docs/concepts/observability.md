@@ -2,7 +2,7 @@
 title: "Observability"
 description: "The audit log, tool-call telemetry, cost tracking, and OpenTelemetry."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-21T00:00:00+00:00
+lastmod: 2026-11-23T00:00:00+00:00
 draft: false
 weight: 60
 toc: true
@@ -21,7 +21,7 @@ retention_days = 30
 buffer_size = 1000
 ```
 
-Auditing is deliberately best-effort: emission never blocks an agent turn, so if a burst overruns the buffer the excess events are dropped with a warning log rather than stalling the agent.
+Emission never blocks an agent turn, so if a burst overruns the buffer the excess events are dropped rather than stalling the agent. Drops are counted, along with events lost to a failed write, and once the buffer drains the log gets one `audit`/`dropped_events` event (status `error`) with the counts and the time window, so the gap is on record.
 
 Events are grouped into categories:
 
@@ -39,11 +39,33 @@ Events are grouped into categories:
 | `mcp` | Tool-server health and lifecycle |
 | `safety` | Panic and resume |
 | `eval` | Dry-run and eval lifecycle |
+| `audit` | The log's own records: prune checkpoints and counts of lost events |
 
 Query them via `GET /api/v1/audit` — filterable by category, agent, status, source, free text, and time range — or from the dashboard's Audit Log page.
 
 {{< callout context="note" >}}
 Health-check failures for **remote** (SSE/HTTP) tool servers only emit a `health_fail` event after `health_fail_threshold` consecutive failures, default 3. A remote server blipping once is not worth waking you for. Stdio servers emit on the first failure, because a local subprocess dying is unambiguous.
+{{< /callout >}}
+
+### Integrity
+
+The audit log is tamper-evident, not tamper-proof. Each event stores a hash of all its fields and of the event before it, so the events form a chain. `denkeeper audit verify` ([CLI reference](/docs/reference/cli/#denkeeper-audit-verify)) walks the chain and reports the first place it breaks. For a changed event, that is the event itself. A removed event cannot be named, since it is gone, so verify names the first event after the gap; added and reordered events show the same way.
+
+- **Retention:** pruning removes the oldest events and writes an `audit`/`prune_checkpoint` event that records what it removed, so the chain still verifies afterwards. The checkpoint counts only when it is itself part of the verified chain.
+- **Lost events:** a `dropped_events` event (above) marks where events never reached the log.
+- **Older events:** events written before this version have no hash. Verify reports them as not covered, and they age out with `retention_days`.
+
+What the chain does not catch:
+
+- **Removing the newest events.** Nothing after them disagrees. Neither does wiping the table or restoring an older copy of the file.
+- **A full rewrite.** The hash has no secret, so anyone who can write `audit.db` can change an event and recompute every hash after it.
+- **A forged checkpoint.** For the same reason, someone can delete the oldest events and write a matching checkpoint. It stays visible, with a cutoff and a count you can compare with `retention_days`.
+- **Edits to older events** without a hash.
+
+To catch the first two, keep a copy of verify's `Head` line somewhere other than this machine and check it later, as described in [Checking a saved Head line](/docs/reference/cli/#checking-a-saved-head-line). It covers events only up to the saved one: events written after it, then removed, need a later saved line to catch.
+
+{{< callout context="caution" >}}
+Do not run an older denkeeper against an upgraded `audit.db`. It writes events with no hash, which breaks the chain at the first of them: verify reports that event as `unhashed_row` and leaves every later event unchecked, until retention removes the chained events written before them. After that, the unhashed events show as not covered and age out in turn.
 {{< /callout >}}
 
 ## Tool-call telemetry

@@ -132,6 +132,7 @@ Subsystem-specific invariants live in `.claude/rules/*.md`, each scoped with `pa
 | `pricing.md` | Cost tracking, pricing registry, lookup priority | `internal/llm/**` |
 | `config.md` | TOML writer semantics, shared validators | `internal/config/**` |
 | `adapters.md` | Telegram activity-log size budgets | `internal/adapter/**` |
+| `audit.md` | Audit hash chain (frozen preimage), prune checkpoints, verify limits, counted drops | `internal/audit/**` |
 | `release.md` | Release pipeline, released-PR stamping | `.github/**` |
 
 CI/CD: golangci-lint, gosec, govulncheck, Grype, Gitleaks, GoReleaser, Homebrew tap, Docker (ghcr.io) with cosign + SLSA, GitHub Pages docs, released-PR stamping.
