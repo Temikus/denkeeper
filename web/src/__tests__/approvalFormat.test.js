@@ -1,5 +1,52 @@
 import { describe, test, expect } from 'vitest'
-import { parseToolCall } from '../approvalFormat.js'
+import { parseToolCall, shadowLine } from '../approvalFormat.js'
+
+const shadowOf = (verdict, extra = {}) => ({ agent: 'pamela', decider: 'jev', verdict, lowest: 'scoped', score: 0.978, ...extra })
+const card = (status, shadow) => ({ status, shadow })
+
+describe('shadowLine', () => {
+  test('a pending card with a score shows the lowest check as evidence, floored', () => {
+    expect(shadowLine(card('pending', shadowOf('ESCALATE')))).toEqual({ kind: 'evidence', text: 'jev lowest check: scoped 0.97' })
+    expect(shadowLine(card('pending', shadowOf('APPROVE', { lowest: 'no_self_grant', score: 0.991 }))))
+      .toEqual({ kind: 'evidence', text: 'jev lowest check: no self-grant 0.99' })
+  })
+
+  test('a pending card with no score shows nothing', () => {
+    expect(shadowLine(card('pending', shadowOf('ESCALATE', { lowest: '', score: undefined })))).toBeNull()
+  })
+
+  test('would have approved, when the call was denied or escalated', () => {
+    for (const status of ['supervisor_denied', 'supervisor_escalated', 'denied']) {
+      expect(shadowLine(card(status, shadowOf('APPROVE')))).toMatchObject({ kind: 'disagree', text: 'jev would have approved' })
+    }
+  })
+
+  test('would have denied, when the call was approved', () => {
+    for (const status of ['supervisor_approved', 'approved']) {
+      expect(shadowLine(card(status, shadowOf('DENY')))).toMatchObject({ kind: 'disagree', text: 'jev would have denied' })
+    }
+  })
+
+  test('nothing when the verdicts agree, the decider would escalate, or there is no shadow', () => {
+    expect(shadowLine(card('supervisor_approved', shadowOf('APPROVE')))).toBeNull()
+    expect(shadowLine(card('supervisor_denied', shadowOf('DENY')))).toBeNull()
+    expect(shadowLine(card('supervisor_denied', shadowOf('ESCALATE')))).toBeNull()
+    expect(shadowLine(card('approved', shadowOf('ESCALATE')))).toBeNull()
+    expect(shadowLine(card('supervisor_denied', null))).toBeNull()
+    expect(shadowLine(card('pending', undefined))).toBeNull()
+  })
+
+  test('the link names the reviewed agent, URL-encoded', () => {
+    const line = shadowLine(card('supervisor_denied', shadowOf('APPROVE', { agent: 'ops/bot #1' })))
+    expect(line.href).toBe('#/agents/ops%2Fbot%20%231?card=permission')
+  })
+
+  test('a disagreement with no agent keeps its text but has no link', () => {
+    const line = shadowLine(card('supervisor_denied', shadowOf('APPROVE', { agent: '' })))
+    expect(line.text).toBe('jev would have approved')
+    expect(line.href).toBeNull()
+  })
+})
 
 const args = JSON.stringify({
   code: 'var a = 1;\nreturn a;',

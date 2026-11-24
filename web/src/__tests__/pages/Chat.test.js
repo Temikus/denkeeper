@@ -242,6 +242,56 @@ describe('Chat page', () => {
     expect(screen.getByText('Adds a tool server or plugin the agent can use, so it needs your approval every time.')).toBeInTheDocument()
   })
 
+  describe('shadow decider line', () => {
+    async function streamCards(events) {
+      server.use(
+        http.post('/api/v1/chat', () => {
+          const encoder = new TextEncoder()
+          const stream = new ReadableStream({
+            start(controller) {
+              for (const e of events) controller.enqueue(encoder.encode(`data: ${JSON.stringify(e)}\n\n`))
+            },
+          })
+          return new HttpResponse(stream, { headers: { 'Content-Type': 'text/event-stream' } })
+        })
+      )
+      render(Chat)
+      await waitFor(() => expect(screen.getByPlaceholderText(/Type a message/)).toBeInTheDocument())
+      await fireEvent.input(screen.getByPlaceholderText(/Type a message/), { target: { value: 'save it' } })
+      await fireEvent.click(document.querySelector('.btn-send'))
+    }
+    const shadow = verdict => ({ agent: 'pamela bot', decider: 'jev', verdict, lowest: 'scoped', score: 0.978 })
+
+    test('a pending card shows the decider evidence and no link', async () => {
+      await streamCards([{ type: 'tool_approval', approval_id: 'a1', tool: 'kv_set', text: 'set', shadow: shadow('ESCALATE') }])
+      const line = await screen.findByText('jev lowest check: scoped 0.97')
+      expect(line.closest('.approval-card')).toHaveClass('pending')
+      expect(screen.queryByRole('link', { name: /Calibration/ })).not.toBeInTheDocument()
+    })
+
+    test('a supervisor denial the decider would approve links to calibration', async () => {
+      await streamCards([{ type: 'tool_approval', tool: 'kv_set', tool_id: 'tc-1', text: 'Denied by supervisor (argus): no', approval_status: 'supervisor_denied', shadow: shadow('APPROVE') }])
+      const line = await screen.findByText('jev would have approved')
+      const link = screen.getByRole('link', { name: 'Calibration for jev' })
+      expect(link).toHaveAttribute('href', '#/agents/pamela%20bot?card=permission')
+      // Not faded like a settled denial: the line must keep its contrast.
+      expect(line.closest('.approval-card')).not.toHaveClass('denied')
+    })
+
+    test('a supervisor approval the decider would deny is not faded', async () => {
+      await streamCards([{ type: 'tool_approval', tool: 'kv_set', tool_id: 'tc-1', text: 'Approved by supervisor (argus): ok', approval_status: 'supervisor_approved', shadow: shadow('DENY') }])
+      const line = await screen.findByText('jev would have denied')
+      expect(line.closest('.approval-card')).not.toHaveClass('auto')
+    })
+
+    test('a card with no shadow has no decider line', async () => {
+      await streamCards([{ type: 'tool_approval', tool: 'kv_set', tool_id: 'tc-1', text: 'Denied by supervisor (argus): no', approval_status: 'supervisor_denied' }])
+      await screen.findByText('Denied by supervisor (argus): no')
+      expect(document.querySelector('.shadow-line')).toBeNull()
+      expect(screen.queryByRole('link', { name: /Calibration/ })).not.toBeInTheDocument()
+    })
+  })
+
   test('labels a decider approval as the decider, with its reason', async () => {
     server.use(
       http.post('/api/v1/chat', () => {

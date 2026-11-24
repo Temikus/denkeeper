@@ -9,7 +9,7 @@
   import KebabMenu from '../components/KebabMenu.svelte'
   import SaveTestCase from '../components/SaveTestCase.svelte'
   import ToolCallArgs from '../components/ToolCallArgs.svelte'
-  import { parseToolCall } from '../approvalFormat.js'
+  import { parseToolCall, shadowLine } from '../approvalFormat.js'
 
   const HUMAN_ONLY_HINT = 'Adds a tool server or plugin the agent can use, so it needs your approval every time.'
 
@@ -556,7 +556,9 @@
             {#if msg.approvals?.length > 0}
               <div class="approval-cards">
                 {#each msg.approvals as appr}
-                  <div class="approval-card" class:pending={appr.status === 'pending'} class:auto={appr.status === 'auto_approved' || appr.status === 'supervisor_approved'} class:denied={appr.status === 'supervisor_denied' || appr.status === 'auto_denied'} class:running={appr.execStatus === 'running'} class:error={appr.execStatus === 'error'}>
+                  {@const line = shadowLine(appr)}
+                  <!-- A disagreement is not faded: .auto and .denied would drop its line below 4.5:1. -->
+                  <div class="approval-card" class:pending={appr.status === 'pending'} class:auto={line?.kind !== 'disagree' && (appr.status === 'auto_approved' || appr.status === 'supervisor_approved')} class:denied={line?.kind !== 'disagree' && (appr.status === 'supervisor_denied' || appr.status === 'auto_denied')} class:running={appr.execStatus === 'running'} class:error={appr.execStatus === 'error'}>
                     <span class="approval-icon" aria-hidden="true">{appr.execStatus ? toolStatusIcon(appr.execStatus) : approvalStatusIcon(appr.status)}</span>
                     <span class="sr-only">{appr.execStatus || approvalStatusLabel(appr.status, appr.text)}</span>
                     <span class="tool-name">{appr.tool}</span>
@@ -587,6 +589,11 @@
                     {/if}
                     {#if appr.execError}
                       <span class="tool-error">{appr.execError}</span>
+                    {/if}
+                    {#if line}
+                      <span class="hint shadow-line" class:disagree={line.kind === 'disagree'}>
+                        {line.text}{#if line.href}<a href={line.href} aria-label="Calibration for {line.decider}">Calibration <span aria-hidden="true">→</span></a>{/if}
+                      </span>
                     {/if}
                   </div>
                 {/each}
@@ -918,6 +925,18 @@
   .approval-card.pending { border-color: var(--accent); background: rgba(99,102,241,0.06); }
   /* The card wraps; the hint takes its own row under the buttons. */
   .human-only-hint { width: 100%; }
+  /* A shadow decider's line (shared .hint type) takes its own row too. Local:
+     no shared class is dashed, and the dash sets a disagreement apart. */
+  .shadow-line {
+    width: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 8px;
+    margin-top: 2px;
+    overflow-wrap: anywhere;
+  }
+  .shadow-line.disagree { border-top: 1px dashed var(--border); padding-top: 4px; }
+  .shadow-line a { color: var(--accent); white-space: nowrap; }
   .approval-card.auto { opacity: 0.7; }
   .approval-card.denied { opacity: 0.85; }
   .approval-icon { font-family: monospace; font-weight: bold; width: 16px; text-align: center; }
