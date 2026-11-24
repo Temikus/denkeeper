@@ -84,7 +84,7 @@ pair you have already seen, and never look up your earlier verdict.
 3. Once calibrated, give the remaining queue to subagents rather than judging
    it yourself: you have seen the calibration pairs, and each one's swapped
    copy is still in the queue. Each subagent gets its own item ids, works them
-   `eval_pending` → `eval_get_pair` → `eval_verdict`, and is told nothing
+   `eval_get_pair` → `eval_verdict`, and is told nothing
    about the other items. It must not call `eval_summary` or go back to an
    item it has already judged: the agreement figure moves with each verdict,
    so reading it between verdicts would let a judge steer towards the
