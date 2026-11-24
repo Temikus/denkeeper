@@ -109,10 +109,40 @@ func TestClassify_PersonaUpdateSoulAndIdentityOnly(t *testing.T) {
 	}
 }
 
-// encoding/json matches keys case-insensitively, as the handler does.
+// A lone mixed-case spelling is refused too: it is a case variant.
 func TestClassify_MixedCaseKeyIsCaught(t *testing.T) {
 	if r := Classify("schedule_add", []byte(`{"name":"x","Session_Tier":"autonomous"}`)); r == nil {
 		t.Error("Session_Tier not caught")
+	}
+}
+
+// tool.Manager re-encodes arguments through a map with sorted keys, so
+// "section" and "Section" both reach the handler and it reads whichever sorts
+// last, not the one Classify's struct decode picked. Any key that folds to a
+// read field without being spelled exactly like it is therefore refused.
+func TestClassify_CaseVariantKeyFailsClosed(t *testing.T) {
+	for _, tc := range []struct{ tool, args string }{
+		{"persona_update", `{"section":"soul","Section":"user","content":"x"}`},
+		{"persona_update", `{"Section":"user","section":"soul","content":"x"}`},
+		{"persona_update", `{"section":"user","Content":"x","content":"y"}`},
+		{"persona_update", `{"ſection":"soul","section":"user","content":"x"}`}, // U+017F folds to s
+		{"schedule_add", `{"name":"x","session_tier":"","Session_Tier":"autonomous"}`},
+		{"schedule_add", `{"name":"x","Session_Tier":"autonomous","session_tier":""}`},
+		{"schedule_update", `{"name":"x","SESSION_TIER":"autonomous"}`},
+		{"schedule_update", `{"name":"x","seſſion_tier":"autonomous"}`},
+	} {
+		r := Classify(tc.tool, []byte(tc.args))
+		if r == nil {
+			t.Errorf("%s %s: not high-risk", tc.tool, tc.args)
+			continue
+		}
+		if v, ok := flagged(r, "arguments"); !ok || v != tc.args {
+			t.Errorf("%s %s: flagged %+v, want the whole arguments", tc.tool, tc.args, r.Flagged)
+		}
+	}
+	// Exact spellings of other keys are untouched.
+	if r := Classify("persona_update", []byte(`{"section":"user","content":"x","Note":"n"}`)); r != nil {
+		t.Errorf("unrelated mixed-case key made a user update high-risk: %+v", r)
 	}
 }
 

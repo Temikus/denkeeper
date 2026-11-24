@@ -71,6 +71,21 @@ func TestShouldAutoApprove_RulesSkipAHighRiskCall(t *testing.T) {
 	}
 }
 
+// The handler can read "soul" from a case-variant key the classifier would
+// have read as "user"; the rule must not approve it.
+func TestShouldAutoApprove_SessionRuleSkipsCaseVariantSoulCall(t *testing.T) {
+	m := newTestManager(t)
+	ctx := context.Background()
+	mustOK(t, m.AddSessionRule(ctx, "default", "persona_update", "conv1", "test"))
+
+	if ok, _ := m.ShouldAutoApprove(ctx, "default", "persona_update", []byte(`{"section":"user","content":"x"}`), "conv1"); !ok {
+		t.Error("session rule did not approve a plain user update")
+	}
+	if ok, _ := m.ShouldAutoApprove(ctx, "default", "persona_update", []byte(`{"section":"soul","Section":"user","content":"x"}`), "conv1"); ok {
+		t.Error("session rule approved a case-variant soul rewrite")
+	}
+}
+
 func TestShouldAutoApprove_ConfigRuleSkipsAHighRiskCall(t *testing.T) {
 	m := newTestManager(t)
 	ctx := context.Background()

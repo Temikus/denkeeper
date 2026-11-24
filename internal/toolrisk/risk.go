@@ -44,15 +44,18 @@ type entry struct {
 	humanOnly bool
 	warning   string // also the fallback when the arguments do not parse
 	check     func(args []byte) (*Risk, error)
+	// reads names the keys a conditional check depends on. A key that folds
+	// to one of them without being spelled exactly like it fails closed.
+	reads []string
 }
 
 var table = map[string]entry{
 	"tool_add":        {always: true, humanOnly: true, warning: warnToolAdd, check: checkToolAdd},
 	"plugin_add":      {always: true, humanOnly: true, warning: warnPluginAdd, check: checkPluginAdd},
 	"set_fallback":    {always: true, warning: warnSetFallback, check: checkSetFallback},
-	"schedule_add":    {warning: warnTier, check: checkScheduleAdd},
-	"schedule_update": {warning: warnTier, check: checkScheduleUpdate},
-	"persona_update":  {warning: warnPersona, check: checkPersonaUpdate},
+	"schedule_add":    {warning: warnTier, check: checkScheduleAdd, reads: []string{"session_tier"}},
+	"schedule_update": {warning: warnTier, check: checkScheduleUpdate, reads: []string{"session_tier"}},
+	"persona_update":  {warning: warnPersona, check: checkPersonaUpdate, reads: []string{"section", "content"}},
 }
 
 // localName strips a collision qualifier ("<server>__tool_add"), the same
@@ -78,11 +81,54 @@ func Classify(toolName string, args []byte) *Risk {
 	if len(bytes.TrimSpace(args)) == 0 {
 		args = []byte("{}")
 	}
+	if hasCaseVariant(args, e.reads) {
+		return failClosed(e, args)
+	}
 	r, err := e.check(args)
 	if err != nil {
-		return &Risk{Level: LevelHigh, Warning: e.warning, Flagged: []FlaggedArg{{Name: "arguments", Value: string(args)}}}
+		return failClosed(e, args)
 	}
 	return r
+}
+
+func failClosed(e entry, args []byte) *Risk {
+	return &Risk{Level: LevelHigh, Warning: e.warning, Flagged: []FlaggedArg{{Name: "arguments", Value: string(args)}}}
+}
+
+// hasCaseVariant reports whether the top-level object has a key that folds
+// to one of fields without being spelled exactly like it. tool.Manager
+// re-encodes arguments through a map with sorted keys, so "section" and
+// "Section" (or "ſection") both reach the handler, which reads whichever
+// sorts last; the struct decode in check may have read the other. Refusing
+// the variant keeps the two from disagreeing, whatever the SDK's encoder
+// does. strings.EqualFold folds at least as widely as encoding/json, so it
+// errs towards failing closed. Arguments that are not an object return false
+// and are left to check.
+func hasCaseVariant(args []byte, fields []string) bool {
+	if len(fields) == 0 {
+		return false
+	}
+	dec := json.NewDecoder(bytes.NewReader(args))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return false
+	}
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return false
+		}
+		key, _ := tok.(string)
+		for _, f := range fields {
+			if key != f && strings.EqualFold(key, f) {
+				return true
+			}
+		}
+		var skip json.RawMessage
+		if err := dec.Decode(&skip); err != nil {
+			return false
+		}
+	}
+	return false
 }
 
 // AlwaysHigh reports whether every call to toolName is high-risk, whatever its
@@ -119,8 +165,10 @@ func high(warning string, fields ...field) *Risk {
 	return r
 }
 
-// The structs below carry the handlers' JSON tags (internal/configmcp), so a
-// mixed-case or duplicate key resolves to the value the handler will act on.
+// The structs below carry the handlers' JSON tags (internal/configmcp), so an
+// exact duplicate key resolves to the value the handler will act on. A
+// case-variant key does not (see hasCaseVariant), so it never reaches them
+// for a field an entry reads.
 
 func checkToolAdd(args []byte) (*Risk, error) {
 	var a struct {
