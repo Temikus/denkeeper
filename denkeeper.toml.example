@@ -128,6 +128,7 @@ api_key = "YOUR_OPENROUTER_API_KEY"
 # adapters     = ["telegram"]
 # # llm_model  = "anthropic/claude-sonnet-4-20250514"   # optional override
 # # session_tier = "supervised"                          # optional override
+# # skill_index = false                                  # drop the skill list from this agent's prompt
 # #
 # # Tools listed here skip the entire approval chain (auto-approve rules →
 # # supervisor → human) for this agent. Only meaningful on the "supervised"
@@ -368,6 +369,7 @@ format = "text"
 
 # [skills]
 # max_bytes = 1048576              # cap on one skill file (frontmatter + body); 1 MiB default, negative = unlimited
+# index = true                     # list skills (name, triggers, first description line) in each prompt; capped at 8 KB
 
 # ---------------------------------------------------------------------------
 # Browser Automation (Docker)
@@ -517,12 +519,14 @@ format = "text"
 #   denkeeper plugin sign --key ~/.denkeeper/keys/publisher.key /usr/bin/my-plugin
 #   # Creates /usr/bin/my-plugin.sig
 #
-# allow_unsigned = true  (default) — unsigned plugins produce a warning
+# allow_unsigned = true  — unsigned plugins produce a warning
+#                          (default when trusted_keys is empty)
 # allow_unsigned = false — unsigned plugins are rejected at startup
+#                          (default when trusted_keys is set)
 
 # [security]
 # trusted_keys  = ["~/.denkeeper/keys/publisher.pub"]
-# allow_unsigned = true
+# allow_unsigned = false
 
 # ---------------------------------------------------------------------------
 # Sandbox Runtime — Backend for Docker-type plugins

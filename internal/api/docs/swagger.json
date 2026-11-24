@@ -7544,6 +7544,15 @@
                             }
                         }
                     },
+                    "422": {
+                        "description": "The skill's file cannot take this edit (unknown frontmatter keys would change, or a directory skill's folder is not named after it or is being renamed); edit it by hand",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "500": {
                         "description": "Update failed",
                         "schema": {
@@ -9325,15 +9334,15 @@
                     "type": "number"
                 },
                 "lowest": {
-                    "description": "check with the lowest score; \"\" when an answer is missing",
+                    "description": "check with the lowest score; \"\" when an answer is missing, except a review missing only self_grant (it predates that question and is scored on the checks it has)",
                     "type": "string"
                 },
                 "min_deny_score": {
-                    "description": "lowest check that can deny (no_leak only escalates); nil when an answer is missing",
+                    "description": "lowest check that can deny (no_leak and no_self_grant only escalate); nil when an answer is missing, except a review missing only self_grant",
                     "type": "number"
                 },
                 "min_score": {
-                    "description": "nil: an answer is missing, so the call always escalates",
+                    "description": "nil: an answer is missing, so the call always escalates; set for a review missing only self_grant, scored on the checks it has",
                     "type": "number"
                 },
                 "model": {

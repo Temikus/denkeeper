@@ -974,6 +974,7 @@ var builtinReadOnlyTools = map[string]bool{
 	"get_cost_summary":     true,
 	"kv_get":               true,
 	"kv_list":              true,
+	"ops_report":           true,
 	"task_get":             true,
 	"task_list":            true,
 	"persona_get":          true,
@@ -988,9 +989,34 @@ var builtinReadOnlyTools = map[string]bool{
 	"web_search":           true,
 }
 
+// builtinHumanOnlyTools names in-process tools that start code on the host:
+// tool_add spawns a stdio MCP server, plugin_add a plugin. Every call to one
+// needs a one-off human approval in every tier — no auto-approve rule, decider
+// or supervisor may answer it (DEN-82). Keyed by MCP tool name; consulted only
+// for session-registered (in-process) servers.
+var builtinHumanOnlyTools = map[string]bool{
+	"plugin_add": true,
+	"tool_add":   true,
+}
+
+// IsHumanOnlyToolName reports whether name, bare or collision-qualified
+// ("<server>__tool_add"), is one of the human-only tool names. It is the
+// name-only check for surfaces that see no server, such as auto-approve rule
+// creation; the engine uses Manager.RequiresHumanApproval.
+func IsHumanOnlyToolName(name string) bool {
+	if builtinHumanOnlyTools[name] {
+		return true
+	}
+	if i := strings.LastIndex(name, "__"); i >= 0 {
+		return builtinHumanOnlyTools[name[i+2:]]
+	}
+	return false
+}
+
 // toolClass is everything a classification decision reads about one tool,
 // snapshotted under the manager lock.
 type toolClass struct {
+	server    string // owning server's name
 	local     string // server-local name, which the allowlists are keyed by
 	inProcess bool   // registered as an in-process session, not an external server
 	optedIn   bool   // [tools.*] idempotent / idempotent_tools names it
@@ -1009,15 +1035,21 @@ func (m *Manager) classify(toolName string) (toolClass, *Manager, error) {
 	if err != nil {
 		return toolClass{}, parent, err
 	}
+	return classOf(sc, local), parent, nil
+}
+
+// classOf snapshots a resolved tool's classification. The caller holds m.mu.
+func classOf(sc *serverConn, local string) toolClass {
 	return toolClass{
-		local: local,
+		server: sc.name,
+		local:  local,
 		// In-process sessions (RegisterSession) have no transport and no
 		// command; external servers always set one of them.
 		inProcess: sc.transport == "" && sc.command == "",
 		optedIn:   sc.cfg.IsIdempotentTool(local),
 		trusted:   sc.cfg.TrustAnnotations,
 		hinted:    sc.readOnlyHinted[local],
-	}, parent, nil
+	}
 }
 
 // declaredReadOnly reports whether an external server's operator or the server
@@ -1050,6 +1082,25 @@ func (m *Manager) IsIdempotent(toolName string) bool {
 	return class.declaredReadOnly()
 }
 
+// BuiltinLocalName returns toolName's server-local name when it resolves to an
+// in-process server (config MCP and friends). ok is false for an external
+// server's tool, an ambiguous name, or an unknown one. Callers use it to tell
+// our kv_set from an external server's tool of the same name.
+func (m *Manager) BuiltinLocalName(toolName string) (local string, ok bool) {
+	class, parent, err := m.classify(toolName)
+	if err != nil {
+		// Only a genuine miss goes to the parent; a collision here stays here.
+		if parent != nil && errors.Is(err, ErrToolNotFound) {
+			return parent.BuiltinLocalName(toolName)
+		}
+		return "", false
+	}
+	if !class.inProcess {
+		return "", false
+	}
+	return class.local, true
+}
+
 // IsReadOnly reports whether toolName only reads — the classification the
 // restricted tier's read-only tool grant is checked against. Conservative by
 // construction: a tool nobody classified is not read-only, and neither is an
@@ -1071,6 +1122,24 @@ func (m *Manager) IsReadOnly(toolName string) bool {
 		return builtinReadOnlyTools[class.local]
 	}
 	return class.declaredReadOnly()
+}
+
+// RequiresHumanApproval reports whether every call to toolName must be
+// approved by a human, whatever the agent's tier: the in-process tools in
+// builtinHumanOnlyTools. An ambiguous name answers true when either owner
+// would, so a collision cannot be used to dodge the gate.
+func (m *Manager) RequiresHumanApproval(toolName string) bool {
+	class, parent, err := m.classify(toolName)
+	if err != nil {
+		if errors.Is(err, ErrAmbiguousTool) {
+			return IsHumanOnlyToolName(toolName)
+		}
+		if parent != nil && errors.Is(err, ErrToolNotFound) {
+			return parent.RequiresHumanApproval(toolName)
+		}
+		return false
+	}
+	return class.inProcess && builtinHumanOnlyTools[class.local]
 }
 
 // ToolDescription returns the MCP description for the named tool, or ""
@@ -1099,6 +1168,11 @@ func (m *Manager) ToolDescription(toolName string) string {
 type Result struct {
 	Text       string
 	Structured json.RawMessage
+	// Provenance is the server that took the call, classified under the same
+	// lock that admitted it, so it holds even if the server is replaced or
+	// drains straight after. Set on error results too; zero when the name
+	// did not resolve.
+	Provenance Provenance
 }
 
 // Execute runs a single tool call and returns the text result. It is
@@ -1115,7 +1189,7 @@ func (m *Manager) Execute(ctx context.Context, call llm.ToolCall) (string, error
 // servers share it) is resolved to its owning server; the server-local name is
 // what goes on the wire. A bare name that two servers claim is never guessed
 // at — it returns ErrAmbiguousTool naming the alternatives.
-func (m *Manager) ExecuteResult(ctx context.Context, call llm.ToolCall) (Result, error) {
+func (m *Manager) ExecuteResult(ctx context.Context, call llm.ToolCall) (res Result, err error) {
 	// Admission to the in-flight set is taken under the same read lock that
 	// resolves the server and snapshots its session: teardown phase 1 flips the
 	// conn to draining under the write lock, so an admission decided after the
@@ -1132,6 +1206,9 @@ func (m *Manager) ExecuteResult(ctx context.Context, call llm.ToolCall) (Result,
 	if resolveErr == nil {
 		serverName, session, disabled = sc.name, sc.session, sc.disabledSet[local]
 		admitted = sc.enterCall()
+		// Every return below carries the provenance of this resolution.
+		prov := classOf(sc, local).provenance()
+		defer func() { res.Provenance = prov }()
 	}
 	m.mu.RUnlock()
 
@@ -1201,7 +1278,7 @@ func (m *Manager) ExecuteResult(ctx context.Context, call llm.ToolCall) (Result,
 		return Result{}, err
 	}
 
-	res := Result{
+	res = Result{
 		Text:       joinTextContent(result.Content),
 		Structured: m.encodeStructured(call.Function.Name, result.StructuredContent),
 	}

@@ -6,6 +6,7 @@ export const DECIDER_DENY_DEFAULT = 0.05
 
 export const CHECK_LABELS = {
   aligned: 'aligned', scoped: 'scoped', no_injection: 'no injection', no_secrets: 'no secrets', no_leak: 'no leak',
+  no_self_grant: 'no self-grant',
 }
 
 // Rounded down so a shown score never passes a threshold the real one misses.
@@ -43,8 +44,9 @@ export function reviewedUpTo(rows, now = Date.now()) {
   return last
 }
 
-// The lowest check that can deny. no_leak only escalates, so it is left out
-// server-side; rows without the field fall back to min_score.
+// The lowest check that can deny. no_leak and no_self_grant only escalate,
+// so the server leaves them out of min_deny_score; rows without the field
+// fall back to min_score.
 const denyScore = row => row.min_deny_score ?? row.min_score
 
 // Mirrors decideSupervisorOutcome in internal/agent/supervisor_decider.go:

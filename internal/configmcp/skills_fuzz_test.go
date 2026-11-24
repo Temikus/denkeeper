@@ -1,11 +1,13 @@
 package configmcp_test
 
 import (
+	"encoding/json"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/Temikus/denkeeper/internal/configmcp"
 	"github.com/Temikus/denkeeper/internal/skill"
@@ -43,10 +45,11 @@ var skillNameSeeds = []string{
 // In normal `go test` (CI) the seed corpus runs as ordinary subtests.
 func FuzzApplySkillCreate_NeverEscapes(f *testing.F) {
 	for _, s := range skillNameSeeds {
-		f.Add(s)
+		f.Add(s, false)
+		f.Add(s, true)
 	}
 
-	f.Fuzz(func(t *testing.T, name string) {
+	f.Fuzz(func(t *testing.T, name string, yamlDialect bool) {
 		base := t.TempDir()
 		skillsDir := filepath.Join(base, "skills")
 
@@ -58,6 +61,13 @@ func FuzzApplySkillCreate_NeverEscapes(f *testing.F) {
 		}
 
 		payload := configmcp.BuildSkillPayload(name, "desc", "1.0.0", nil, "body", 0, 0, nil)
+		// A JSON string is a valid YAML double-quoted scalar, but json.Marshal
+		// replaces invalid UTF-8 with U+FFFD, so such names stay on the TOML
+		// path, where they reach the parser unchanged.
+		if yamlDialect && utf8.ValidString(name) {
+			quoted, _ := json.Marshal(name)
+			payload = "---\nname: " + string(quoted) + "\ndescription: desc\n---\n\nbody"
+		}
 		// Error or success are both fine; the invariant below is what matters.
 		_ = configmcp.ApplySkillCreate(skillsDir, func(skill.Skill) {}, ioTestLogger(), payload, 0)
 

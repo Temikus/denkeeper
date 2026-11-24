@@ -96,7 +96,7 @@ Some body.`)
 
 	_, err := ParseFile("bad.md", content)
 	if err == nil {
-		t.Fatal("expected error for missing opening +++, got nil")
+		t.Fatal("expected error for missing opening delimiter, got nil")
 	}
 }
 
@@ -456,6 +456,32 @@ Research things.`), 0o644); err != nil {
 	}
 	if sk.SubFileNames[1] != "templates/report.txt" {
 		t.Errorf("SubFileNames[1] = %q, want templates/report.txt", sk.SubFileNames[1])
+	}
+}
+
+func TestLoadDir_WarnsWhenFlatAndFolderShareAName(t *testing.T) {
+	dir := t.TempDir()
+	content := []byte("+++\nname = \"kelos\"\n+++\n\nbody")
+	if err := os.MkdirAll(filepath.Join(dir, "kelos"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"kelos.md", filepath.Join("kelos", "SKILL.md")} {
+		if err := os.WriteFile(filepath.Join(dir, p), content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var logs strings.Builder
+	skills, err := LoadDir(dir, slog.New(slog.NewTextHandler(&logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(skills) != 2 {
+		t.Fatalf("loaded %d skills, want both files", len(skills))
+	}
+	out := logs.String()
+	if !strings.Contains(out, "two files define the same skill name") ||
+		!strings.Contains(out, filepath.Join(dir, "kelos.md")) || !strings.Contains(out, filepath.Join(dir, "kelos", "SKILL.md")) {
+		t.Errorf("log = %q, want a warning naming both files", out)
 	}
 }
 

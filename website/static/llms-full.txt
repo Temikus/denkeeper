@@ -151,6 +151,7 @@ Multi-agent definitions. If absent, a single "default" agent is synthesized.
     llm_model = ""                   # override default model
     max_output_tokens = 0            # override llm.max_output_tokens (0 = inherit)
     session_tier = ""              # override default permission tier
+    # skill_index = false            # override [skills] index for this agent (unset = inherit)
     browser_url_allowlist = []       # allowed domains for browser automation
     cost_limit_soft = 0.0            # soft cost limit override
     cost_limit_hard = 0.0            # hard cost limit override
@@ -300,6 +301,7 @@ Global MCP settings.
     init_retry_backoff = "2s"        # backoff between retries
     url_allowlist = []               # allowed hosts for SSE servers
     env_passthrough = []             # extra parent env vars to forward into all stdio subprocesses; DENKEEPER_* always filtered
+    allowed_commands = []            # exact stdio commands runtime-added tools may run (empty = no allowlist; non-admin REST keys then cannot add stdio tools); only npx/uvx are pin-checked
 
 ### [[schedules]]
 
@@ -367,6 +369,7 @@ Global MCP settings.
 ### [skills]
 
     max_bytes = 1048576              # cap on a single persisted skill file (frontmatter + body); 1 MiB default, negative = unlimited
+    index = true                     # list skill names and triggers (+ first description line unless always on); descriptions, then entries that do not fit, dropped past 8,000 bytes
 
 ### [browser]
 
@@ -513,7 +516,7 @@ Each signal takes "withhold", "warn" (audit but deliver anyway) or "off".
 Plugin signature verification.
 
     trusted_keys = []                # paths to Ed25519 public keys
-    allow_unsigned = true            # allow unsigned plugin binaries
+    allow_unsigned = true            # allow unsigned plugin binaries (default false when trusted_keys is set)
 
 ### [sandbox]
 

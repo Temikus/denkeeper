@@ -62,7 +62,7 @@ Behind a reverse proxy, set `api.external_url` so generated URLs are correct.
 | Channels | `channel_list` |
 | Audit | `audit_events`, `audit_summary`, `decider_reviews` |
 | Evals | `eval_pending`, `eval_get_pair`, `eval_verdict`, `eval_summary`, `eval_run_status` |
-| Telemetry | `cost_summary`, `telemetry_summary` |
+| Telemetry | `cost_summary`, `telemetry_summary`, `ops_report` |
 | KV | `kv_get`, `kv_set`, `kv_list`, `kv_delete` |
 | Tasks | `task_list`, `task_get`, `task_create`, `task_checkout`, `task_comment`, `task_update` |
 | Safety | `panic`, `panic_status`, `resume` |
@@ -85,7 +85,7 @@ They are also journaled. Before any skill write, the file's exact prior bytes ar
 
 **Editing skills where you write code.** Skills are markdown with frontmatter; an IDE agent with `skill_*` tools can draft and revise them against the real instance instead of you pasting into a web form.
 
-**Answering questions about the running system.** `audit_events`, `telemetry_summary`, and `cost_summary` turn "why did the 7am job cost so much yesterday" into a question you can just ask.
+**Answering questions about the running system.** `audit_events`, `telemetry_summary`, and `cost_summary` turn "why did the 7am job cost so much yesterday" into a question you can just ask. `ops_report` hands back one agent's computed health numbers for the last 7 days by default, up to 30 (spend against the window before, tool and skill outcomes, expected against actual schedule fires, KV key counts), so an audit does not have to add them up from raw events. Spend counts completed turns only. Spend, tools and skills are counted per conversation (a conversation moved from another agent brings its earlier turns along), and expected fires assume the current schedule ran for the whole window. `actual_fires` comes from the audit log, so it needs `[audit]` enabled and covers at most the audit retention window; without it the report lists it as unavailable. It needs `audit:read` and an `agent`.
 
 **Judging an eval run.** The `eval_*` tools let a client work a finished run's queue of blinded A/B pairs and decide whether a candidate model is an upgrade. `eval_get_pair` withholds everything that would identify a side — model, provider, variant name, cost, latency, usage — so the judge decides on the responses and their tool traces alone; `eval_summary` unblinds and applies the decision rule. `eval_verdict` is the only writer among them and it writes verdicts only: a key scoped `eval:read,eval:write` can judge a run but cannot start one, which is the right shape for a judging key since runs spend real tokens. The repo's `/judge-eval` skill carries the rubric and drives the loop. See [Evals](/docs/concepts/evals/) for the loop these tools sit inside.
 

@@ -55,6 +55,15 @@ const (
 	// CategoryTask covers task lifecycle changes (filed, claimed, released,
 	// reassigned, status, comment), whoever made them.
 	CategoryTask = "task"
+	// CategoryAudit covers the audit log's own records: prune checkpoints and
+	// counts of lost events.
+	CategoryAudit = "audit"
+)
+
+// Actions in CategoryAudit.
+const (
+	ActionPruneCheckpoint = "prune_checkpoint"
+	ActionDroppedEvents   = "dropped_events"
 )
 
 // Event statuses.

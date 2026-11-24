@@ -3,7 +3,7 @@ title: "Configuration Reference"
 description: "Complete reference for denkeeper.toml options."
 slug: "config"
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-09-18T00:00:00+00:00
+lastmod: 2026-11-23T00:00:00+00:00
 draft: false
 weight: 10
 toc: true
@@ -191,6 +191,7 @@ Defaults for agents that do not set their own directories.
 | `max_output_tokens` | int | `0` | Override `llm.max_output_tokens` for this agent. `0` = inherit. The post-turn reviewer keeps the global value |
 | `session_tier` | string | — | Override default permission tier |
 | `timezone` | string | — | IANA name, e.g. `"Australia/Sydney"`. Precedence: agent > `api.timezone` > UTC. Does **not** affect cron evaluation, which stays on `api.timezone` and is restart-only |
+| `skill_index` | bool | — | Overrides `[skills] index` for this agent; unset inherits it. Applied on `POST /server/reload` |
 | `cost_limit_soft` | float | — | Per-agent soft cost limit in USD (overrides global) |
 | `cost_limit_hard` | float | — | Per-agent hard cost limit in USD (overrides global) |
 | `max_context_messages` | int | `50` | Most recent messages sent to the LLM. Older history is dropped from the request, not deleted |
@@ -209,10 +210,10 @@ Defaults for agents that do not set their own directories.
 | `supervisor_body_excerpt_len` | int | `500` | Max characters of skill body included in the review prompt |
 | `supervisor_tool_desc_len` | int | `1000` | Max characters of tool description included in the review prompt |
 | `supervisor_max_args_bytes` | int | `16384` | Max bytes of tool-call arguments sent for review. Larger calls skip the supervisor and go straight to human approval (audited with `cause: "too_large"`); arguments are never truncated. `0` = default |
-| `supervisor_decider` | string | — | `[[llm.deciders]]` entry that scores each tool call before the supervisor: six yes/no questions, combined into five checks where high means safe (see [Decision Models](/docs/concepts/deciders/#the-checks)). Supervised tier only; works with or without `supervisor` |
+| `supervisor_decider` | string | — | `[[llm.deciders]]` entry that scores each tool call before the supervisor: seven yes/no questions, combined into six checks where high means safe (see [Decision Models](/docs/concepts/deciders/#the-checks)). Supervised tier only; works with or without `supervisor` |
 | `supervisor_decider_mode` | string | `"shadow"` | `"shadow"`: the decider runs and writes a `supervisor` audit event (`source = "decider:<name>"`) with the verdict it would have given, but never changes the outcome. `"enforce"`: the verdict approves or denies the call, and an uncertain one goes on to the supervisor or a human |
 | `supervisor_decider_approve_at` | float | `0.95` | The decider approves when every check is at or above this score |
-| `supervisor_decider_deny_at` | float | `0.05` | The decider denies when any check except `no_leak` (which only escalates) is at or below this score. Must satisfy `0 < deny_at < approve_at < 1` |
+| `supervisor_decider_deny_at` | float | `0.05` | The decider denies when any check except `no_leak` and `no_self_grant` (which only escalate) is at or below this score. Must satisfy `0 < deny_at < approve_at < 1` |
 
 Decider spend is billed to the reviewed agent, per conversation. A decider failure (timeout, cost limit, input too large) is audited and never approves anything. See [Decision Models](/docs/concepts/deciders/) for how to move from shadow to enforce.
 
@@ -372,6 +373,7 @@ While it is off, the task endpoints answer `503` and the tools aren't offered. C
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `max_bytes` | int | `1048576` | Cap on a single persisted skill file, frontmatter + body (1 MiB). Negative = unlimited |
+| `index` | bool | `true` | List every skill's name and triggers in each agent's system prompt, plus the first description line for skills that are not always on (see [Skill index](/docs/concepts/skills/#skill-index)). The list is capped at 8,000 bytes: past that, descriptions and then entries that do not fit are left out. An agent's `skill_index` overrides it. Applied on `POST /server/reload` |
 
 Skill content is written verbatim, so without a bound an authorized caller could exhaust disk. The cap is enforced on every write surface (REST, config MCP, external MCP).
 
@@ -431,7 +433,7 @@ cached_input = 0.3
 | `enabled` | bool | `true` | Enable audit logging |
 | `retention_days` | int | `30` | How long audit events are kept. 0 = unlimited |
 | `cleanup_interval` | string | `"1h"` | How often retention is enforced |
-| `buffer_size` | int | `1000` | Capacity of the in-memory event buffer. Emission never blocks an agent turn: events past a full buffer are dropped with a warning log |
+| `buffer_size` | int | `1000` | Capacity of the in-memory event buffer. Emission never blocks an agent turn: events past a full buffer are dropped with a warning log, counted, and recorded in one `audit`/`dropped_events` event once the buffer drains |
 
 Events are queryable via `GET /api/v1/audit` and the dashboard's Audit Log page.
 
@@ -564,7 +566,7 @@ Subprocess plugins run as child processes with direct MCP stdio. Docker plugins 
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `trusted_keys` | string[] | — | Paths to PEM-encoded Ed25519 public key files |
-| `allow_unsigned` | bool | `true` | Allow unsigned subprocess plugin binaries |
+| `allow_unsigned` | bool | `true` without `trusted_keys`, `false` with them | Allow unsigned subprocess plugin binaries |
 
 When `allow_unsigned = false`, all subprocess plugin binaries must have a valid Ed25519 signature from one of the trusted keys.
 
@@ -636,6 +638,7 @@ Global settings that apply to all MCP tool servers.
 | `init_retry_backoff` | string | `"2s"` | Base backoff duration between initial-connection retries |
 | `sse_keep_alive_secs` | int | `15` | TCP keepalive interval for SSE connections (overridable per server) |
 | `env_passthrough` | string[] | — | Extra parent-process environment variable names forwarded to stdio server subprocesses, on top of the built-in non-secret allowlist. `DENKEEPER_*` and other denylisted names are always blocked, even here |
+| `allowed_commands` | string[] | — | Exact stdio commands a tool added or changed at runtime (Config MCP `tool_add`, REST) may run, compared on the full string (`"npx"` does not admit `/tmp/x/npx`). Tools in this file are not checked. Only `npx` and `uvx` packages are checked for a pinned version, so listing another launcher (`uv`, `npm`, `pnpm`, `bunx`, `pipx`) lets it fetch unpinned packages. Empty means no allowlist, but then a REST key without the `admin` scope cannot add a stdio tool or change its command line or `env`. Restart-only |
 
 Removing, disabling, restarting or reconfiguring a tool server tears it down in
 two phases. The server stops being offered immediately — its tools leave the
@@ -673,6 +676,15 @@ per-tool-call timeout, so a call that was going to succeed gets to.
 **SSE security**: SSRF protection blocks localhost, link-local (169.254.x.x), and cloud metadata endpoints. `${NAME}` placeholders in `url` and `headers` are resolved from environment but secrets matching `DENKEEPER_*_SECRET`, `DENKEEPER_*_PASSWORD*`, and related patterns are denied. URL and header values are redacted in API responses.
 
 **Untrusted writers**: a tool or plugin added by an agent (`tool_add`, `plugin_add`), or through the REST API without the `admin` scope, cannot reference host variables. `env` values may not contain `$` references, `url` and `headers` placeholders must name a key of the tool's own `env`, and REST rejects `env_passthrough`. Tools in this file are unchanged: `env` expands any variable, and the denylist above covers only `url` and `headers`.
+
+**Code a runtime tool may run**:
+
+- **Approval.** Every Config MCP `tool_add` and `plugin_add` call waits for a one-off operator approval, in every tier. No auto-approve rule, decider or supervisor can answer it, and the approval has no "15 min" or "Always" option. With no adapter to ask through (a headless schedule), the call is denied.
+- **Plugins.** An agent's `plugin_add` may not use `type = "subprocess"`, a `host` or `container:` network, or volumes, and neither may a REST key without `admin`.
+- **Commands.** A stdio tool added or changed at runtime, by anyone, must use a command from `[mcp] allowed_commands` when that is set.
+- **Pinning.** An `npx` or `uvx` package must be pinned to an exact version (`@scope/name@1.2.3`, `name==1.2.3`). `npx -c`, `uvx --with-requirements`, registry and index overrides (`npx --registry`, `uvx --index-url`, `--find-links` and similar), uvx overrides, constraints, config-file, directory, project and cache-dir options, a `uvx --python` that is not a bare version such as `3.12`, and any launcher option Denkeeper does not recognise are refused. Only `npx` and `uvx` are checked: other launchers (`uv tool run`, `npm exec`, `pnpm dlx`, `bunx`, `pipx`) fetch whatever they are given.
+- **Environment.** A runtime stdio tool may not set env that loads other code or moves where a package comes from: `NODE_OPTIONS`, `NODE_PATH`, `PYTHONPATH`, `GCONV_PATH`, `PATH`, `HOME`, `PREFIX`, `APPDATA` and similar, or any `npm_config_*`, `PIP_*`, `UV_*`, `LD_*`, `DYLD_*` or `XDG_*` name. The refusal names the variable. These checks apply to every caller, admin keys included: to set one of these variables, put the tool in the config file.
+- **Edits.** An edit that leaves the command line unchanged is not re-checked, except that a changed `env` is checked against the environment rule.
 
 Tools can also be added and removed at runtime via the REST API (`tools:write` scope) or the Config MCP server (`tool_add`/`tool_remove`). Runtime changes are persisted to the TOML config file.
 

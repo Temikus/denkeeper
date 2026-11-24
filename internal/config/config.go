@@ -358,13 +358,24 @@ func (c *DecideConfig) DecideEnabled() bool {
 	return c.Enabled == nil || *c.Enabled
 }
 
-// SkillsConfig controls skill management (create/update via API, MCP, config MCP).
+// SkillsConfig controls skill management (create/update via API, MCP, config
+// MCP) and the skill index in each agent's system prompt.
 type SkillsConfig struct {
 	// MaxBytes caps the size of a single persisted skill file (frontmatter +
 	// body). Skill content is written verbatim, so without a bound an authorized
 	// caller could exhaust disk. Default: 1048576 (1 MiB). Set negative for no
 	// limit.
 	MaxBytes int `toml:"max_bytes"`
+
+	// Index lists every skill (name, triggers, and the first description line
+	// unless always on) in each agent's system prompt, capped at 8,000 bytes.
+	// nil means on. [[agents]] skill_index overrides it per agent.
+	Index *bool `toml:"index"`
+}
+
+// IndexEnabled reports whether the skill index is on instance-wide.
+func (c SkillsConfig) IndexEnabled() bool {
+	return c.Index == nil || *c.Index
 }
 
 // WebConfig controls built-in web search and URL fetching tools.
@@ -486,8 +497,8 @@ type SecurityConfig struct {
 	// TrustedKeys is a list of file paths to PEM-encoded Ed25519 public keys.
 	// Plugins signed by any of these keys are trusted.
 	TrustedKeys []string `toml:"trusted_keys"`
-	// AllowUnsigned controls whether unsigned plugins are allowed.
-	// Defaults to true. Set to false to require all plugins to be signed.
+	// AllowUnsigned controls whether unsigned plugins are allowed. Defaults
+	// to true with no trusted_keys and to false when trusted_keys is set.
 	AllowUnsigned *bool `toml:"allow_unsigned"`
 }
 
@@ -775,6 +786,9 @@ type AgentInstanceConfig struct {
 	// Does not affect cron evaluation (that remains api.timezone, restart-only).
 	Timezone string `toml:"timezone"`
 
+	// SkillIndex overrides [skills] index for this agent. nil inherits it.
+	SkillIndex *bool `toml:"skill_index"`
+
 	// BrowserURLAllowlist overrides the global browser URL allowlist for this agent.
 	// If set, only these domains are reachable. Supports wildcards: "*.example.com".
 	BrowserURLAllowlist []string `toml:"browser_url_allowlist"`
@@ -978,6 +992,12 @@ type MCPConfig struct {
 	// allowlist. Secret-bearing names (DENKEEPER_* and the forbidden-pattern
 	// denylist) are always filtered out even if listed here.
 	EnvPassthrough []string `toml:"env_passthrough"`
+	// AllowedCommands, when non-empty, is the exact list of stdio commands a
+	// tool added or updated at runtime (config MCP tool_add, REST, external
+	// MCP) may run, compared on the full string. Tools in this file are not
+	// checked. Empty = no allowlist, except that a REST key without the admin
+	// scope may then not add or update a stdio tool at all. Restart-only.
+	AllowedCommands []string `toml:"allowed_commands"`
 }
 
 // ToolConfig defines an MCP tool server to spawn.
@@ -2183,8 +2203,11 @@ func applyMiscDefaults(cfg *Config) {
 		cfg.Voice.TTSVoice = "alloy"
 	}
 	if cfg.Security.AllowUnsigned == nil {
-		t := true
-		cfg.Security.AllowUnsigned = &t
+		// Listing trusted keys says signatures matter, so an unset
+		// allow_unsigned then requires them rather than waving unsigned
+		// binaries through with a warning. Set it explicitly to keep either.
+		allow := len(cfg.Security.TrustedKeys) == 0
+		cfg.Security.AllowUnsigned = &allow
 	}
 	if cfg.KV.MaxKeysPerAgent == 0 {
 		cfg.KV.MaxKeysPerAgent = 1000
@@ -3241,6 +3264,14 @@ func validateAgentBindings(a AgentInstanceConfig, wildcards map[string]string) e
 		}
 	}
 	return nil
+}
+
+// EffectiveSkillIndex is the agent's skill_index when set, else global.
+func (a AgentInstanceConfig) EffectiveSkillIndex(global bool) bool {
+	if a.SkillIndex != nil {
+		return *a.SkillIndex
+	}
+	return global
 }
 
 // EffectiveMaxOutputTokens is the agent's own max_output_tokens, else the

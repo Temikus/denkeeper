@@ -45,7 +45,7 @@ func TestMergeSkillFields_PreservesExistingCap(t *testing.T) {
 	}
 	newBody := "new body"
 
-	payload := configmcp.MergeSkillFields("capped", existing, nil, nil, nil, &newBody, nil, nil, nil)
+	payload := mustMerge(t, "capped", existing, nil, nil, nil, &newBody, nil, nil, nil)
 
 	s, err := skill.ParseFile("(test)", []byte(payload))
 	if err != nil {
@@ -63,7 +63,7 @@ func TestMergeSkillFields_ExplicitZeroClearsCap(t *testing.T) {
 	existing := skill.Skill{Name: "capped", Version: "1.0.0", MaxToolRounds: 12, Body: "body"}
 	clear := 0
 
-	payload := configmcp.MergeSkillFields("capped", existing, nil, nil, nil, nil, &clear, nil, nil)
+	payload := mustMerge(t, "capped", existing, nil, nil, nil, nil, &clear, nil, nil)
 
 	s, err := skill.ParseFile("(test)", []byte(payload))
 	if err != nil {

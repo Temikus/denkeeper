@@ -209,6 +209,39 @@ describe('Chat page', () => {
     })
   })
 
+  test('human-only approval offers no auto-approve buttons', async () => {
+    server.use(
+      http.post('/api/v1/chat', () => {
+        const encoder = new TextEncoder()
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode('data: {"type":"tool_approval","approval_id":"a1","tool":"tool_add","text":"add","approval_human_only":true}\n\n'))
+          },
+        })
+        return new HttpResponse(stream, {
+          headers: { 'Content-Type': 'text/event-stream' },
+        })
+      })
+    )
+
+    render(Chat)
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/Type a message/)).toBeInTheDocument()
+    })
+
+    const textarea = screen.getByPlaceholderText(/Type a message/)
+    await fireEvent.input(textarea, { target: { value: 'add a tool' } })
+    await fireEvent.click(document.querySelector('.btn-send'))
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Approve tool_add')).toBeInTheDocument()
+    })
+    expect(screen.getByLabelText('Deny tool_add')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Approve tool_add for 15 minutes')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Always approve tool_add')).not.toBeInTheDocument()
+    expect(screen.getByText('Adds a tool server or plugin the agent can use, so it needs your approval every time.')).toBeInTheDocument()
+  })
+
   test('labels a decider approval as the decider, with its reason', async () => {
     server.use(
       http.post('/api/v1/chat', () => {
@@ -435,6 +468,54 @@ describe('Chat page', () => {
       expect(screen.getByText('Pending approvals (1)')).toBeInTheDocument()
       expect(screen.getByText('Run tool: fetch_data')).toBeInTheDocument()
     })
+  })
+
+  test('pending banner shows a human-only tool_add with no auto-approve buttons', async () => {
+    server.use(
+      http.get('/api/v1/approvals', ({ request }) => {
+        const url = new URL(request.url)
+        if (url.searchParams.get('status') === 'pending') {
+          return HttpResponse.json([
+            { id: 'appr-ha', agent_name: 'default', adapter_name: 'telegram', external_id: '12345678', kind: 'install_tool', status: 'pending',
+              summary: 'Execute tool "tool_add" with args: {"name":"gh","command":"npx"}' },
+          ])
+        }
+        return HttpResponse.json([])
+      })
+    )
+
+    render(Chat)
+    await waitFor(() => {
+      expect(screen.getByText('Pending approvals (1)')).toBeInTheDocument()
+    })
+    expect(screen.getByLabelText('Approve tool tool_add')).toBeInTheDocument()
+    expect(screen.getByLabelText('Deny tool tool_add')).toBeInTheDocument()
+    expect(screen.queryByText('15 min')).not.toBeInTheDocument()
+    expect(screen.queryByText('Always')).not.toBeInTheDocument()
+    expect(screen.getByText('Adds a tool server or plugin the agent can use, so it needs your approval every time.')).toBeInTheDocument()
+  })
+
+  // Config MCP's own install requests ("Install tool: …") are not engine tool
+  // calls, so the banner leaves them to the Approvals page.
+  test('pending banner skips install_tool rows that are not engine tool calls', async () => {
+    server.use(
+      http.get('/api/v1/approvals', ({ request }) => {
+        const url = new URL(request.url)
+        if (url.searchParams.get('status') === 'pending') {
+          return HttpResponse.json([
+            { id: 'appr-cfg', agent_name: 'default', adapter_name: 'telegram', external_id: '12345678', kind: 'install_tool', status: 'pending', summary: 'Install tool: gh (npx)' },
+            { id: 'appr-tc', agent_name: 'default', adapter_name: 'telegram', external_id: '12345678', kind: 'tool_call', status: 'pending', summary: 'Run tool: fetch_data' },
+          ])
+        }
+        return HttpResponse.json([])
+      })
+    )
+
+    render(Chat)
+    await waitFor(() => {
+      expect(screen.getByText('Pending approvals (1)')).toBeInTheDocument()
+    })
+    expect(screen.queryByText('Install tool: gh (npx)')).not.toBeInTheDocument()
   })
 
   // --- Channel selector interaction tests ---

@@ -84,7 +84,7 @@ func TestMergeSkillFields_PreservesExistingRequires(t *testing.T) {
 	}
 	newBody := "new body"
 
-	payload := configmcp.MergeSkillFields("gated", existing, nil, nil, nil, &newBody, nil, nil, nil)
+	payload := mustMerge(t, "gated", existing, nil, nil, nil, &newBody, nil, nil, nil)
 
 	s, err := skill.ParseFile("(test)", []byte(payload))
 	if err != nil {
@@ -108,7 +108,7 @@ func TestMergeSkillFields_EmptyRequiresClears(t *testing.T) {
 		Body:     "body",
 	}
 
-	payload := configmcp.MergeSkillFields("gated", existing, nil, nil, nil, nil, nil, nil, []string{})
+	payload := mustMerge(t, "gated", existing, nil, nil, nil, nil, nil, nil, []string{})
 
 	s, err := skill.ParseFile("(test)", []byte(payload))
 	if err != nil {
@@ -194,7 +194,7 @@ func TestMergeSkillFields_ReplacesRequires(t *testing.T) {
 		Body:     "body",
 	}
 
-	payload := configmcp.MergeSkillFields("gated", existing, nil, nil, nil, nil, nil, nil, []string{"kv_get", "kv_set"})
+	payload := mustMerge(t, "gated", existing, nil, nil, nil, nil, nil, nil, []string{"kv_get", "kv_set"})
 
 	s, err := skill.ParseFile("(test)", []byte(payload))
 	if err != nil {
@@ -220,7 +220,7 @@ func TestMergeSkillFields_PreservesAllFieldsOnBodyOnlyEdit(t *testing.T) {
 	}
 	newBody := "new body"
 
-	payload := configmcp.MergeSkillFields("gated", existing, nil, nil, nil, &newBody, nil, nil, nil)
+	payload := mustMerge(t, "gated", existing, nil, nil, nil, &newBody, nil, nil, nil)
 
 	s, err := skill.ParseFile("(test)", []byte(payload))
 	if err != nil {

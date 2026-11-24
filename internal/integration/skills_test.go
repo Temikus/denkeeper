@@ -4,7 +4,12 @@ package integration
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Temikus/denkeeper/internal/skill"
@@ -376,5 +381,84 @@ func TestSkills_TelemetryListByAgent(t *testing.T) {
 	}
 	if !names["greet"] || !names["help"] {
 		t.Errorf("expected greet and help; got %v", names)
+	}
+}
+
+// loadYAMLSkills writes files under a temp skills dir, loads it with
+// skill.LoadDir as startup does, and hands the result to the default agent.
+func loadYAMLSkills(t *testing.T, h *Harness, files map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for rel, content := range files {
+		path := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	skills, err := skill.LoadDir(dir, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("LoadDir: %v", err)
+	}
+	e := h.Dispatcher.Agent("default")
+	e.SetSkillDirs(dir, "")
+	for _, s := range skills {
+		e.AppendSkill(s)
+	}
+	return dir
+}
+
+func TestSkills_YAMLDirectorySkillIsServed(t *testing.T) {
+	h := NewHarness(t, nil)
+	loadYAMLSkills(t, h, map[string]string{
+		"kelos/SKILL.md": "---\nname: kelos\ndescription: Looks after things.\nlicense: MIT\n---\n\nDo the thing.\n",
+	})
+
+	rec := h.Do(h.AuthedRequest(http.MethodGet, "/api/v1/skills/default/kelos", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get status = %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var sk map[string]any
+	DecodeJSON(t, rec, &sk)
+	if sk["name"] != "kelos" || sk["description"] != "Looks after things." || sk["body"] != "Do the thing." {
+		t.Errorf("skill = %v", sk)
+	}
+}
+
+func TestSkills_YAMLFlatSkillEditedTwice(t *testing.T) {
+	h := NewHarness(t, nil)
+	const file = "---\nname: tidy\ndescription: Tidies up.\nlicense: MIT\nmetadata:\n  author: someone\n---\n\nOld body.\n"
+	dir := loadYAMLSkills(t, h, map[string]string{"tidy.md": file})
+	path := filepath.Join(dir, "tidy.md")
+	block := "---\nname: tidy\ndescription: Tidies up.\nlicense: MIT\nmetadata:\n  author: someone\n---\n\n"
+
+	put := func(body map[string]any) string {
+		t.Helper()
+		rec := h.Do(h.AuthedRequest(http.MethodPut, "/api/v1/skills/default/tidy", body))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("put status = %d; body: %s", rec.Code, rec.Body.String())
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+
+	// Body only: the frontmatter comes back byte for byte.
+	if got := put(map[string]any{"body": "New body."}); got != block+"New body.\n" {
+		t.Errorf("after body edit:\n%q", got)
+	}
+	// Then a field: still YAML, unknown keys kept, body from the first edit.
+	got := put(map[string]any{"description": "Tidies up nicely."})
+	for _, want := range []string{"---\n", "description: Tidies up nicely.", "license: MIT", "author: someone", "New body."} {
+		if !strings.Contains(got, want) {
+			t.Errorf("after description edit, missing %q:\n%s", want, got)
+		}
+	}
+	if !strings.HasPrefix(got, "---\n") {
+		t.Errorf("dialect changed:\n%s", got)
 	}
 }
