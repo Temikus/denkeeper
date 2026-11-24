@@ -359,6 +359,20 @@ describe('handleToolEvent via SSE path', () => {
     await sendMessage('search')
   })
 
+  test('tool_approval pending keeps approval_risk as risk', async () => {
+    const risk = { level: 'high', warning: 'w', flagged: [{ name: 'rules', value: '[]' }] }
+    mockStreamChat.mockImplementation(async (agent, sid, msg, onChunk, onDone, onToolEvent) => {
+      onToolEvent({ type: 'tool_approval', approval_id: 'a1', tool: 'set_fallback', text: 'x', approval_risk: risk })
+      onToolEvent({ type: 'tool_approval', approval_id: 'a2', tool: 'web_search', text: 'y' })
+      onDone('sess-1')
+    })
+
+    await sendMessage('go')
+    const [risky, plain] = get(chatState).messages[1].approvals
+    expect(risky.risk).toEqual(risk)
+    expect(plain.risk).toBeNull()
+  })
+
   test('tool_approval auto_approved adds with correct status', async () => {
     mockStreamChat.mockImplementation(async (agent, sid, msg, onChunk, onDone, onToolEvent) => {
       onToolEvent({ type: 'tool_approval', approval_id: 'a1', tool: 'web_search', text: 'search', approval_status: 'auto_approved' })

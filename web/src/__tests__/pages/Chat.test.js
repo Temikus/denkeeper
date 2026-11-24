@@ -242,6 +242,43 @@ describe('Chat page', () => {
     expect(screen.getByText('Adds a tool server or plugin the agent can use, so it needs your approval every time.')).toBeInTheDocument()
   })
 
+  test('high-risk approval shows the warning and no auto-approve buttons', async () => {
+    const risk = { level: 'high', warning: 'Replaces the LLM fallback rules: which provider and model requests switch to.', flagged: [{ name: 'rules', value: '[{"provider":"x"}]' }] }
+    server.use(
+      http.post('/api/v1/chat', () => {
+        const encoder = new TextEncoder()
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode('data: ' + JSON.stringify({ type: 'tool_approval', approval_id: 'a1', tool: 'set_fallback', text: 'set', approval_risk: risk }) + '\n\n'))
+          },
+        })
+        return new HttpResponse(stream, {
+          headers: { 'Content-Type': 'text/event-stream' },
+        })
+      })
+    )
+
+    render(Chat)
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/Type a message/)).toBeInTheDocument()
+    })
+    const textarea = screen.getByPlaceholderText(/Type a message/)
+    await fireEvent.input(textarea, { target: { value: 'change my fallbacks' } })
+    await fireEvent.click(document.querySelector('.btn-send'))
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Approve set_fallback')).toBeInTheDocument()
+    })
+    expect(screen.getByLabelText('Deny set_fallback')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Approve set_fallback for 15 minutes')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Always approve set_fallback')).not.toBeInTheDocument()
+    expect(screen.getByText(/Replaces the LLM fallback rules/)).toBeInTheDocument()
+    expect(screen.getByText('[{"provider":"x"}]')).toBeInTheDocument()
+    // Someone tabbing straight to Approve hears the warning.
+    const describedBy = screen.getByLabelText('Approve set_fallback').getAttribute('aria-describedby')
+    expect(document.getElementById(describedBy).textContent).toContain('Replaces the LLM fallback rules')
+  })
+
   test('labels a decider approval as the decider, with its reason', async () => {
     server.use(
       http.post('/api/v1/chat', () => {
@@ -493,6 +530,35 @@ describe('Chat page', () => {
     expect(screen.queryByText('15 min')).not.toBeInTheDocument()
     expect(screen.queryByText('Always')).not.toBeInTheDocument()
     expect(screen.getByText('Adds a tool server or plugin the agent can use, so it needs your approval every time.')).toBeInTheDocument()
+  })
+
+  test('pending banner shows a high-risk call with two buttons and its flagged arguments open', async () => {
+    server.use(
+      http.get('/api/v1/approvals', ({ request }) => {
+        const url = new URL(request.url)
+        if (url.searchParams.get('status') === 'pending') {
+          return HttpResponse.json([
+            { id: 'appr-hr', agent_name: 'default', adapter_name: 'telegram', external_id: '12345678', kind: 'tool_call', status: 'pending',
+              summary: 'Execute tool "schedule_update" with args: {"name":"nightly","session_tier":"autonomous"}',
+              risk: { level: 'high', warning: 'Sets the permission tier this schedule runs at.', flagged: [{ name: 'session_tier', value: '"autonomous"' }] } },
+          ])
+        }
+        return HttpResponse.json([])
+      })
+    )
+
+    render(Chat)
+    await waitFor(() => {
+      expect(screen.getByText('Pending approvals (1)')).toBeInTheDocument()
+    })
+    expect(screen.getByLabelText('Approve tool schedule_update')).toBeInTheDocument()
+    expect(screen.getByLabelText('Deny tool schedule_update')).toBeInTheDocument()
+    expect(screen.queryByText('15 min')).not.toBeInTheDocument()
+    expect(screen.queryByText('Always')).not.toBeInTheDocument()
+    expect(screen.getByText('Sets the permission tier this schedule runs at.', { exact: false })).toBeInTheDocument()
+    // Outside the closed "Show arguments" details, so visible without a click.
+    const flagged = screen.getByText('"autonomous"', { selector: '.approval-risk code' })
+    expect(flagged.closest('details')).toBeNull()
   })
 
   // Config MCP's own install requests ("Install tool: …") are not engine tool

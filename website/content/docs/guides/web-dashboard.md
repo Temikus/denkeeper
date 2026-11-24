@@ -69,6 +69,8 @@ websocket_replay_buffer_ttl = "5m"
 
 Supervised agents surface tool-call approvals inline in Chat, and in the Approvals page. Alongside Approve and Deny, **Always Approve** creates an auto-approve rule so that tool stops asking — see [Supervisors & Auto-Approval](/docs/concepts/supervisors/) for how the scopes differ.
 
+A high-risk call, such as adding a tool server, changing the LLM fallback rules, setting a schedule's permission tier or rewriting the agent's soul or identity, is marked **High risk** with a fixed warning and the arguments that make it risky, shown in full. It offers only Approve and Deny, and no rule ever approves it; a rule you made earlier for such a tool is listed as *inactive (high-risk tool)*.
+
 Approval requests expire after 24 hours.
 
 ## Behind a reverse proxy
