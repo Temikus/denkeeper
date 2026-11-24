@@ -109,7 +109,7 @@ func TestCreateAutoApprove_HighRiskToolRefused(t *testing.T) {
 		`{"agent":"default","tool":"tool_add","scope":"permanent"}`,
 	} {
 		rec := postJSON(srv, "/api/v1/auto-approve", body)
-		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "is high-risk and cannot be auto-approved") {
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "is high-risk and cannot be auto-approved; each call will ask for approval") {
 			t.Errorf("%s: status = %d, body %s; want 400", body, rec.Code, rec.Body)
 		}
 	}

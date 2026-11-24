@@ -38,7 +38,15 @@ Some calls change what the agent can do, not just what it does. These count as h
 - setting or clearing a schedule's permission tier (`schedule_add` or `schedule_update` with `session_tier`);
 - rewriting the agent's soul or identity (`persona_update`).
 
-A high-risk call is approved one at a time. No auto-approve rule covers it, whether it was made in chat, through the API or with `auto_approve_tools` in TOML: the prompt offers only Approve and Deny, a request to make a rule from it is refused and the call stays pending, and startup warns about a TOML entry that can never apply. The prompt shows a fixed warning and the arguments that make the call risky, in full. A supervisor can still approve one (except `tool_add` and `plugin_add`, which always need a person), so an unattended schedule keeps working.
+A high-risk call is approved one at a time:
+
+- No auto-approve rule covers it, whether the rule was made in chat, through the API or with `auto_approve_tools` in TOML.
+- The prompt offers only Approve and Deny (or only Deny, with a pointer to the dashboard, when the flagged values are too long for a chat message).
+- A request to make a rule from it is refused, and the call stays pending.
+- Startup warns about an `auto_approve_tools` entry that can never apply.
+- The prompt shows a fixed warning and the arguments that make the call risky, in full.
+
+A supervisor can still approve one (except `tool_add` and `plugin_add`, which always need a person), so an unattended schedule keeps working.
 
 ## Adapter security
 

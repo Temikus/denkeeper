@@ -290,7 +290,7 @@ describe('Approvals page', () => {
   test('the add-rule form shows the server refusal', async () => {
     server.use(
       http.post('/api/v1/auto-approve', () =>
-        HttpResponse.json({ error: 'set_fallback is high-risk and cannot be auto-approved' }, { status: 400 })
+        HttpResponse.json({ error: 'set_fallback is high-risk and cannot be auto-approved; each call will ask for approval' }, { status: 400 })
       )
     )
 
@@ -308,7 +308,7 @@ describe('Approvals page', () => {
     await fireEvent.click(screen.getByText('Add'))
 
     await waitFor(() => {
-      expect(screen.getByText('set_fallback is high-risk and cannot be auto-approved')).toBeInTheDocument()
+      expect(screen.getByText('set_fallback is high-risk and cannot be auto-approved; each call will ask for approval')).toBeInTheDocument()
     })
   })
 

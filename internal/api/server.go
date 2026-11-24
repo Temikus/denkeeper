@@ -1913,7 +1913,7 @@ func (s *Server) handleCreateAutoApprove(w http.ResponseWriter, r *http.Request)
 	}
 	// The manager refuses a rule for an always-high tool (tool_add and
 	// plugin_add included) with ErrHighRisk; one message for all of them.
-	highRisk := map[string]string{"error": body.Tool + " is high-risk and cannot be auto-approved; each call is approved once or denied"}
+	highRisk := map[string]string{"error": body.Tool + " is high-risk and cannot be auto-approved; each call will ask for approval"}
 
 	switch body.Scope {
 	case "session":
