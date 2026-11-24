@@ -66,10 +66,10 @@ func (m *Manager) checkRuntimeCommand(cfg config.ToolConfig) error {
 // runtimeEnvRefused names env variables a runtime-added stdio tool may not
 // set: each makes the child load other code (an interpreter option, a module
 // or library path, a shell startup file, PATH for a launcher's `env node`) or
-// fetch its package from elsewhere (a home or config dir holding .npmrc,
-// pip.conf or uv.toml, or a CA bundle that lets a proxy answer). cfg.Env wins
-// over the inherited env (buildStdioEnv), so without this a pin or an
-// allowlisted command could still run anything.
+// fetch its package from elsewhere (a home, prefix or Windows profile dir
+// holding .npmrc, pip.conf or uv.toml, or a CA bundle that lets a proxy
+// answer). cfg.Env wins over the inherited env (buildStdioEnv), so without
+// this a pin or an allowlisted command could still run anything.
 var runtimeEnvRefused = flagSet(
 	"NODE_OPTIONS", "NODE_PATH", "NODE_EXTRA_CA_CERTS",
 	"PYTHONPATH", "PYTHONSTARTUP", "PYTHONHOME", "PYTHONUSERBASE",
@@ -77,13 +77,20 @@ var runtimeEnvRefused = flagSet(
 	"BASH_ENV", "ENV",
 	"JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS",
 	"PERL5OPT", "PERL5LIB", "RUBYOPT", "RUBYLIB",
-	"PATH", "HOME", "XDG_CONFIG_HOME", "SSL_CERT_FILE", "SSL_CERT_DIR",
+	"PATH", "HOME", "PREFIX", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
+	"SSL_CERT_FILE", "SSL_CERT_DIR",
 )
 
 // runtimeEnvRefusedPrefixes cover launchers whose every setting is also an
-// env variable (npm, pip, uv), and the macOS loader. uv alone has dozens that
-// move the index or the interpreter, so the whole family is refused.
-var runtimeEnvRefusedPrefixes = []string{"NPM_CONFIG_", "PIP_", "UV_", "DYLD_"}
+// env variable (npm, pip, uv), the macOS loader, and the XDG base dirs, where
+// npm, pip and uv look for config and cache (uv also installs tools there).
+// uv alone has dozens that move the index or the interpreter, so whole
+// families are refused.
+var runtimeEnvRefusedPrefixes = []string{"NPM_CONFIG_", "PIP_", "UV_", "DYLD_", "XDG_"}
+
+// runtimeRefusalFix ends every runtime refusal. The checks apply to admin
+// callers too, so the fix is the config file, not a permission.
+const runtimeRefusalFix = "put this tool in the config file instead"
 
 // ValidateRuntimeEnv refuses env names that load code or move a package's
 // source, matched case-insensitively (npm reads npm_config_* in any case).
@@ -101,7 +108,7 @@ func ValidateRuntimeEnv(env map[string]string) error {
 			refused = refused || strings.HasPrefix(upper, p)
 		}
 		if refused {
-			return fmt.Errorf("env %s can make the tool run other code or fetch its package from elsewhere; only an operator can set it, in the config file", name)
+			return fmt.Errorf("env %s can make the tool run other code or fetch its package from elsewhere; tools added at runtime can't set it, so %s", name, runtimeRefusalFix)
 		}
 	}
 	return nil
@@ -194,20 +201,21 @@ var uvxLauncher = launcher{
 	name: "uvx",
 	// Index and find-links overrides pick where a pinned name is fetched
 	// from; --allow-insecure-host lets anyone on the path answer instead.
-	// Overrides and constraints files replace the pinned version, and a
-	// config file, directory or project can load a uv.toml that moves the index.
+	// Overrides and constraints files replace the pinned version, a config
+	// file, directory or project can load a uv.toml that moves the index, and
+	// a cache dir the caller filled can serve a planted build of the pin.
 	refused: flagSet("--with-requirements", "--with-editable",
 		"--index", "--index-url", "-i", "--default-index", "--extra-index-url",
 		"--find-links", "-f", "--allow-insecure-host", "--env-file",
 		"--overrides", "--constraints", "-c", "--build-constraints", "-b",
-		"--config-file", "--directory", "--project"),
+		"--config-file", "--directory", "--project", "--cache-dir"),
 	packageFlags: map[string]packageFlagRole{
 		"--from": namesPackage, "--with": extraPackage, "--with-executables-from": extraPackage,
 	},
 	// A path here would run that executable as the interpreter.
 	versionFlags: flagSet("--python", "-p"),
 	valueFlags: flagSet(
-		"--cache-dir", "--color",
+		"--color",
 		"--index-strategy", "--keyring-provider", "--resolution", "--prerelease",
 		"--exclude-newer", "--link-mode", "--python-platform",
 		"--refresh-package", "--reinstall-package", "--upgrade-package", "-P",
@@ -233,7 +241,7 @@ func (l launcher) check(args []string) error {
 		name, value, hasValue := strings.Cut(arg, "=")
 		switch {
 		case l.refused[name]:
-			return fmt.Errorf("%s %s runs code that cannot be pinned; only an operator can configure it", l.name, name)
+			return fmt.Errorf("%s %s runs code that cannot be pinned; tools added at runtime can't use it, so %s", l.name, name, runtimeRefusalFix)
 		case l.packageFlags[name] != 0:
 			if !hasValue {
 				if i+1 >= len(args) {
@@ -259,7 +267,7 @@ func (l launcher) check(args []string) error {
 		case arg == "--":
 			return l.checkPositional(named, args[i+1:])
 		case strings.HasPrefix(arg, "-"):
-			return fmt.Errorf("%s option %s is not one Denkeeper can check; only an operator can configure it", l.name, name)
+			return fmt.Errorf("%s option %s is not one Denkeeper can check; tools added at runtime can't use it, so %s", l.name, name, runtimeRefusalFix)
 		default:
 			return l.checkPositional(named, args[i:])
 		}
@@ -278,7 +286,7 @@ func (l launcher) checkVersionFlag(args []string, i int, name, value string, has
 		}
 	}
 	if !bareVersion.MatchString(value) {
-		return i, fmt.Errorf("%s %s takes only a version such as 3.12; only an operator can name an interpreter", l.name, name)
+		return i, fmt.Errorf("%s %s takes only a version such as 3.12 in a tool added at runtime; to name an interpreter, %s", l.name, name, runtimeRefusalFix)
 	}
 	return i, nil
 }

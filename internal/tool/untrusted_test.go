@@ -121,7 +121,7 @@ func TestValidatePinnedPackageArgs_UvxIndexOverridesRefused(t *testing.T) {
 // config that moves the index.
 func TestValidatePinnedPackageArgs_UvxFileAndProjectFlagsRefused(t *testing.T) {
 	for _, flag := range []string{"--overrides", "--constraints", "-c", "--build-constraints", "-b",
-		"--config-file", "--directory", "--project"} {
+		"--config-file", "--directory", "--project", "--cache-dir"} {
 		requireRefusedOption(t, "uvx", []string{flag, "/tmp/x", "pkg==1.0"})
 	}
 }
@@ -287,7 +287,9 @@ func TestValidateRuntimeEnv_RefusesCodeLoadingNames(t *testing.T) {
 		"LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT", "DYLD_INSERT_LIBRARIES", "dyld_library_path",
 		"BASH_ENV", "ENV", "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS",
 		"PERL5OPT", "PERL5LIB", "RUBYOPT", "RUBYLIB",
-		"PATH", "HOME", "XDG_CONFIG_HOME", "SSL_CERT_FILE", "SSL_CERT_DIR",
+		"PATH", "HOME", "SSL_CERT_FILE", "SSL_CERT_DIR",
+		"XDG_CONFIG_HOME", "XDG_CONFIG_DIRS", "XDG_CACHE_HOME", "xdg_data_home",
+		"PREFIX", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
 	} {
 		err := ValidateRuntimeEnv(map[string]string{"API_KEY": "x", name: "v"})
 		if err == nil {
@@ -296,6 +298,26 @@ func TestValidateRuntimeEnv_RefusesCodeLoadingNames(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), name) {
 			t.Errorf("%s: error %q does not name the variable", name, err)
+		}
+	}
+}
+
+// These checks apply to admin callers too, so the refusal must point at the
+// config file rather than read as a missing permission.
+func TestRuntimeRefusals_PointAtTheConfigFile(t *testing.T) {
+	for name, err := range map[string]error{
+		"env":            ValidateRuntimeEnv(map[string]string{"NODE_OPTIONS": "x"}),
+		"refused option": ValidatePinnedPackageArgs("npx", []string{"--registry", "x", "pkg@1.0.0"}),
+		"unknown option": ValidatePinnedPackageArgs("uvx", []string{"--made-up", "pkg==1.0"}),
+		"python":         ValidatePinnedPackageArgs("uvx", []string{"--python", "/tmp/py", "pkg==1.0"}),
+	} {
+		if err == nil {
+			t.Errorf("%s: accepted, want rejection", name)
+			continue
+		}
+		msg := err.Error()
+		if strings.Contains(msg, "only an operator") || !strings.Contains(msg, "put this tool in the config file instead") {
+			t.Errorf("%s: %q, want it to point at the config file", name, msg)
 		}
 	}
 }
