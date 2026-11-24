@@ -1,5 +1,5 @@
 <script>
-  import { tick } from 'svelte'
+  import { tick, untrack } from 'svelte'
   import { api } from '../api.js'
   import { relativeTime } from '../relativeTime.js'
   import { attention, refreshAttention } from '../attention.js'
@@ -81,6 +81,22 @@
     load()
   })
 
+  // Re-fetch when this agent's badge count changes. A verdict that lands while
+  // the panel is open moves the badge, but the rows and nextMark are from the
+  // last load. The first count seen for an agent is the one that load saw, and
+  // a change this panel's own mark caused is already on screen.
+  let badgeSeen = null
+  let ownMark = false
+  $effect(() => {
+    const n = $attention.deciderReviews?.[agent]
+    const who = agent
+    untrack(() => {
+      const changed = badgeSeen?.agent === who && badgeSeen.n !== undefined && n !== undefined && n !== badgeSeen.n
+      if (changed && !ownMark) load()
+      badgeSeen = { agent: who, n }
+    })
+  })
+
   let A = $derived(Number(approveAt) || DECIDER_APPROVE_DEFAULT)
   let D = $derived(Number(denyAt) || DECIDER_DENY_DEFAULT)
   let stats = $derived(summarize(rows, A, D))
@@ -108,7 +124,8 @@
   let canMark = $derived(!loading && loadedFor === panelKey() && toReview > 0 && !truncated &&
     !!nextMark && isFresh({ time: nextMark }, markUpTo))
   let statusText = $derived.by(() => {
-    if (marking) return ''
+    // A live region: no mark is possible mid-load, which is not news to announce.
+    if (marking || loading) return ''
     if (toReview > 0 && truncated) return 'Too many reviews to load. Pick a shorter time range to mark them reviewed.'
     if (toReview > 0 && !canMark) return 'Waiting on the supervisor for newer calls'
     if (toReview === 0 && markUpTo) return 'Nothing new to review'
@@ -196,8 +213,15 @@
       const res = await api.markDeciderReviewed(agent, { decider, upTo })
       markUpTo = res?.reviewed_up_to || upTo
       markBy = res?.reviewed_by || markBy
-      // Awaited so the status reads from the new count, not the old one.
-      await refreshAttention()
+      // Awaited so the status reads from the new count, not the old one. The
+      // count drop is this mark's own, so it does not trigger a reload.
+      ownMark = true
+      try {
+        await refreshAttention()
+        await tick()
+      } finally {
+        ownMark = false
+      }
       // The button is gone; keep keyboard focus here instead of <body>.
       await tick()
       statusEl?.focus()

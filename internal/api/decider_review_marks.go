@@ -67,36 +67,76 @@ func (s *Server) handleDeciderReviewCounts(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, out)
 }
 
+// deciderCountKey names one count: the same agent counted for another decider
+// or other thresholds is a different number.
+type deciderCountKey struct {
+	agent, decider    string
+	approveAt, denyAt float64
+}
+
+// deciderCountRun is one count scan in flight. done closes when n and err are set.
+type deciderCountRun struct {
+	done    chan struct{}
+	n       int
+	err     error
+	waiters int // callers sharing this run, for tests
+}
+
 // unreviewedCount returns the memoized count while it is fresh and was taken
-// for the same decider and thresholds, else counts again.
+// for the same decider and thresholds, else counts again. Concurrent callers
+// for the same key share one scan.
 func (s *Server) unreviewedCount(ctx context.Context, name, decider string, cfg agent.DeciderStageConfig) (int, error) {
+	key := deciderCountKey{agent: name, decider: decider, approveAt: cfg.ApproveAt, denyAt: cfg.DenyAt}
 	s.deciderCountMu.Lock()
 	c, ok := s.deciderCounts[name]
-	gen := s.deciderCountGen[name]
-	s.deciderCountMu.Unlock()
 	if ok && c.decider == decider && c.approveAt == cfg.ApproveAt && c.denyAt == cfg.DenyAt && time.Since(c.at) < deciderCountTTL {
+		s.deciderCountMu.Unlock()
 		return c.count, nil
 	}
-	mark, _, err := s.deps.AuditStore.ReviewMark(ctx, name, decider)
-	if err != nil {
-		return 0, err
+	if run, ok := s.deciderCountRuns[key]; ok {
+		run.waiters++
+		s.deciderCountMu.Unlock()
+		select {
+		case <-run.done:
+			return run.n, run.err
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		}
 	}
-	n, err := agent.CountUnsafeApprovals(ctx, s.deps.AuditStore, name, decider, mark.ReviewedUpTo, cfg.ApproveAt, cfg.DenyAt)
-	if err != nil {
-		return 0, err
+	run := &deciderCountRun{done: make(chan struct{})}
+	if s.deciderCountRuns == nil {
+		s.deciderCountRuns = map[deciderCountKey]*deciderCountRun{}
 	}
+	s.deciderCountRuns[key] = run
+	gen := s.deciderCountGen[name]
+	s.deciderCountMu.Unlock()
+
+	// Shared by every waiter, so the first caller hanging up must not cancel
+	// it for the rest; the scan is bounded by its window.
+	run.n, run.err = s.countUnreviewed(context.WithoutCancel(ctx), name, decider, cfg)
+
 	s.deciderCountMu.Lock()
 	defer s.deciderCountMu.Unlock()
+	delete(s.deciderCountRuns, key)
+	close(run.done)
 	// A mark that landed while counting makes n stale: answer with it, but do
 	// not cache it, or the cleared badge would come back for a whole TTL.
-	if s.deciderCountGen[name] != gen {
-		return n, nil
+	if run.err != nil || s.deciderCountGen[name] != gen {
+		return run.n, run.err
 	}
 	if s.deciderCounts == nil {
 		s.deciderCounts = map[string]deciderCountEntry{}
 	}
-	s.deciderCounts[name] = deciderCountEntry{decider: decider, approveAt: cfg.ApproveAt, denyAt: cfg.DenyAt, count: n, at: time.Now()}
-	return n, nil
+	s.deciderCounts[name] = deciderCountEntry{decider: decider, approveAt: cfg.ApproveAt, denyAt: cfg.DenyAt, count: run.n, at: time.Now()}
+	return run.n, nil
+}
+
+func (s *Server) countUnreviewed(ctx context.Context, name, decider string, cfg agent.DeciderStageConfig) (int, error) {
+	mark, _, err := s.deps.AuditStore.ReviewMark(ctx, name, decider)
+	if err != nil {
+		return 0, err
+	}
+	return agent.CountUnsafeApprovals(ctx, s.deps.AuditStore, name, decider, mark.ReviewedUpTo, cfg.ApproveAt, cfg.DenyAt)
 }
 
 type markReviewedInput struct {

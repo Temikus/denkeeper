@@ -315,6 +315,75 @@ describe('DeciderCalibration review mark', () => {
     await waitFor(() => screen.getByRole('button', { name: 'Mark all reviewed' }))
   })
 
+  // A verdict that lands while the panel is open moves the badge; the rows and
+  // nextMark come from the last load, so the panel loads again.
+  test('reloads when this agent\'s badge count changes', async () => {
+    attention.set({ pendingApprovals: 0, unhealthyTools: [], deciderReviews: { pamela: 1 } })
+    let loads = 0
+    server.use(http.get('/api/v1/agents/:name/decider-reviews', () => {
+      loads++
+      return HttpResponse.json({ agent: 'pamela', decider: 'jev', supervisor: 'argus', reviews: [old(), fresh()],
+        failed: 0, truncated: false, until: new Date().toISOString(), reviewed_up_to: MARK })
+    }))
+    render(DeciderCalibration, { props })
+    await waitFor(() => screen.getByRole('button', { name: 'Mark all reviewed' }))
+    expect(loads).toBe(1)
+
+    attention.set({ pendingApprovals: 0, unhealthyTools: [], deciderReviews: { pamela: 1, other: 4 } })
+    await new Promise(r => setTimeout(r, 20))
+    expect(loads).toBe(1) // another agent's count is not this panel's business
+
+    attention.set({ pendingApprovals: 0, unhealthyTools: [], deciderReviews: { pamela: 2 } })
+    await waitFor(() => expect(loads).toBe(2))
+  })
+
+  // The badge drop a mark causes is already on screen; reloading for it would
+  // only flash the panel.
+  test('its own mark does not trigger a reload', async () => {
+    attention.set({ pendingApprovals: 0, unhealthyTools: [], deciderReviews: { pamela: 1 } })
+    let loads = 0
+    server.use(http.get('/api/v1/agents/:name/decider-reviews', () => {
+      loads++
+      return HttpResponse.json({ agent: 'pamela', decider: 'jev', supervisor: 'argus', reviews: [old(), fresh()],
+        failed: 0, truncated: false, until: new Date().toISOString(), reviewed_up_to: MARK })
+    }))
+    server.use(http.get('/api/v1/decider-reviews/unreviewed', () => HttpResponse.json({ pamela: 0 })))
+    serveMark(body => HttpResponse.json({ agent: 'pamela', decider: 'jev', reviewed_up_to: body.up_to, reviewed_by: 'temik' }))
+    render(DeciderCalibration, { props })
+
+    await fireEvent.click(await waitFor(() => screen.getByRole('button', { name: 'Mark all reviewed' })))
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Nothing new to review'))
+    await new Promise(r => setTimeout(r, 20))
+    expect(loads).toBe(1)
+  })
+
+  // The status is a live region: "Waiting on the supervisor…" must not be
+  // announced on every reload just because no mark is possible mid-load.
+  test('says nothing while a reload runs', async () => {
+    const ago = ms => new Date(Date.now() - ms).toISOString()
+    const settledAt = ago(20 * 60000)
+    const rows = [
+      review(1, 0.99, 'DENY', { time: settledAt }),
+      review(2, 0.5, undefined, { time: ago(5 * 60000), supervisor_name: '' }),
+      review(3, 0.99, 'DENY', { time: ago(60000), tool: 'kv_set' }),
+    ]
+    let hold = null
+    server.use(http.get('/api/v1/agents/:name/decider-reviews', async () => {
+      if (hold) await hold
+      return HttpResponse.json({ agent: 'pamela', decider: 'jev', supervisor: 'argus', reviews: rows,
+        failed: 0, truncated: false, until: new Date().toISOString(), reviewed_up_to: settledAt })
+    }))
+    render(DeciderCalibration, { props })
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Waiting on the supervisor for newer calls'))
+
+    let release
+    hold = new Promise(r => { release = r })
+    await fireEvent.change(screen.getByLabelText('Time range'), { target: { value: '7' } })
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/^$/))
+    release()
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Waiting on the supervisor for newer calls'))
+  })
+
   test('a truncated load cannot be marked and says why', async () => {
     serveReviews([old(), fresh()], { reviewed_up_to: MARK, reviewed_by: 'temik', truncated: true })
     render(DeciderCalibration, { props })

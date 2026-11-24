@@ -15,21 +15,31 @@ import (
 	"github.com/Temikus/denkeeper/internal/config"
 )
 
-// countingStore counts List calls on a real store. onList, when set, runs once
-// inside the next List call, to interleave a request with a count.
+// countingStore counts event reads (List and ScanEvents) on a real store.
+// onList, when set, runs once inside the next read, to interleave a request
+// with a count.
 type countingStore struct {
 	*audit.SQLiteStore
 	lists  atomic.Int32
 	onList func()
 }
 
-func (s *countingStore) List(ctx context.Context, opts audit.ListOpts) ([]audit.Event, int, error) {
+func (s *countingStore) read() {
 	s.lists.Add(1)
 	if hook := s.onList; hook != nil {
 		s.onList = nil
 		hook()
 	}
+}
+
+func (s *countingStore) List(ctx context.Context, opts audit.ListOpts) ([]audit.Event, int, error) {
+	s.read()
 	return s.SQLiteStore.List(ctx, opts)
+}
+
+func (s *countingStore) ScanEvents(ctx context.Context, opts audit.ListOpts, fn func(audit.Event) error) error {
+	s.read()
+	return s.SQLiteStore.ScanEvents(ctx, opts, fn)
 }
 
 // unsafeReviewDeps holds one shadow review of "default"'s echo call that jev
@@ -163,6 +173,52 @@ func TestUnreviewedCount_ACountRacingAMarkDoesNotCacheItsStaleResult(t *testing.
 
 	if _, counts := getCounts(t, srv); counts["default"] != 0 {
 		t.Fatalf("counts after the mark = %v, want default: 0 (the stale count was cached)", counts)
+	}
+}
+
+// Two badge polls at once share one scan: the second waits for the first's
+// result instead of reading the window again.
+func TestUnreviewedCount_ConcurrentCountsScanOnce(t *testing.T) {
+	at := time.Now().Add(-time.Hour).UTC()
+	deps, store := unsafeReviewDeps(t, at)
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	second := make(chan map[string]int, 1)
+	store.onList = func() {
+		go func() {
+			rec := httptest.NewRecorder()
+			srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/decider-reviews/unreviewed"))
+			var body map[string]int
+			_ = json.NewDecoder(rec.Body).Decode(&body)
+			second <- body
+		}()
+		// Hold the first scan until the second caller is waiting on it.
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			srv.deciderCountMu.Lock()
+			waiting := 0
+			for _, run := range srv.deciderCountRuns {
+				waiting += run.waiters
+			}
+			srv.deciderCountMu.Unlock()
+			if waiting == 1 {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Error("the second count never waited on the first")
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+
+	_, first := getCounts(t, srv)
+	other := <-second
+	if first["default"] != 1 || other["default"] != 1 {
+		t.Fatalf("counts = %v and %v, want default: 1 from both", first, other)
+	}
+	if n := store.lists.Load(); n != 1 {
+		t.Fatalf("store read %d times, want one scan shared by both counts", n)
 	}
 }
 

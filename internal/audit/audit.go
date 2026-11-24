@@ -171,6 +171,12 @@ type Store interface {
 	Insert(ctx context.Context, event Event) error
 	InsertBatch(ctx context.Context, events []Event) error
 	List(ctx context.Context, opts ListOpts) ([]Event, int, error)
+	// ScanEvents streams every event opts' filters match to fn, in id order,
+	// in one query. Unlike List it counts no total and ignores Limit and
+	// Offset, so reading n rows costs one pass rather than one per page. fn
+	// must not use the store: the in-memory store has one connection, and the
+	// open query holds it. An error from fn stops the scan and is returned.
+	ScanEvents(ctx context.Context, opts ListOpts, fn func(Event) error) error
 	Stats(ctx context.Context, opts StatsOpts) (*Stats, error)
 	PruneBefore(ctx context.Context, before time.Time) (int, error)
 	// ReviewMark returns how far an operator has reviewed an agent's shadow

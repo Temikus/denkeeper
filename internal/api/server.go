@@ -129,6 +129,9 @@ type Server struct {
 	deciderCountMu  sync.Mutex
 	deciderCounts   map[string]deciderCountEntry
 	deciderCountGen map[string]uint64
+	// deciderCountRuns holds the count scan in flight per agent, decider and
+	// thresholds; a second caller waits for it instead of scanning again.
+	deciderCountRuns map[deciderCountKey]*deciderCountRun
 
 	// pairing marks chat-app types with a pairing long poll in progress; only
 	// one may poll a bot's updates at a time.

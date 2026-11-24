@@ -127,6 +127,41 @@ func TestCountUnsafeApprovals_CountsPastTheReviewsScanCap(t *testing.T) {
 	}
 }
 
+// The count scans and pairs on its own path; it must agree with the panel's
+// PairShadowReviews on duplicate calls, expired reviews, supervisor errors,
+// unanswered reviews and wrong denials alike.
+func TestCountUnsafeApprovals_AgreesWithThePanelsPairing(t *testing.T) {
+	c := newCountStore(t)
+	base := time.Now().Add(-3 * time.Hour)
+	at := func(m int) time.Time { return base.Add(time.Duration(m) * time.Minute) }
+	c.review("dup", at(0), nil, "DENY", at(1))                                        // unsafe
+	c.review("dup", at(2), nil, "", time.Time{})                                      // same call, waits
+	c.review("dup", at(3), nil, "ESCALATE", at(4))                                    // FIFO: pairs with at(2), unsafe
+	c.review("late", at(10), nil, "DENY", at(40))                                     // verdict past the window: unpaired
+	c.review("err", at(50), nil, "error", at(51))                                     // supervisor failed: not unsafe
+	c.review("wrong", at(60), map[string]float64{"secrets": 0.99}, "APPROVE", at(61)) // wrong denial
+	c.review("fine", at(70), nil, "APPROVE", at(71))                                  // agreement
+	c.review("waiting", at(80), nil, "", time.Time{})                                 // no verdict yet
+
+	// UTC: List compares stored timestamps as text, so a local-zone bound misfilters.
+	set, err := LoadShadowReviews(context.Background(), c.s, "pamela", "jev", base.Add(-time.Hour).UTC(), time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := 0
+	for _, r := range set.Reviews {
+		if r.UnsafeApproval(0.95, 0.05) {
+			want++
+		}
+	}
+	if want != 2 {
+		t.Fatalf("fixture gives the panel %d unsafe approvals, want 2", want)
+	}
+	if got := c.count(time.Time{}, 0.95); got != want {
+		t.Fatalf("count = %d, panel pairing = %d", got, want)
+	}
+}
+
 func TestCountUnsafeApprovals_DeniedAndEscalated(t *testing.T) {
 	c := newCountStore(t)
 	c.review("c1", countT, nil, "DENY", countT.Add(time.Second))
