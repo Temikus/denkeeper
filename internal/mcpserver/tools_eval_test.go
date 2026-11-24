@@ -237,12 +237,13 @@ func listEvalToolNames(t *testing.T) []string {
 	return names
 }
 
-// The judge surface is exactly five tools, and none of them unblinds a pair.
-// The unblinded view (GET /eval/runs/{id}/pairs) is REST-only on purpose: a
-// judge that can look up which variant produced which response can unblind its
-// own queue, and every position-bias control downstream stops meaning anything.
+// The judge surface is exactly six tools, and none of them unblinds a pair
+// while the run can still take verdicts. eval_samples names the variant behind
+// each response, so it opens only once no item is pending, and from then on
+// RecordVerdict refuses judge verdicts. The unblinded pair view
+// (GET /eval/runs/{id}/pairs) stays REST-only.
 func TestEvalTools_JudgeSurfaceCannotUnblindAPair(t *testing.T) {
-	want := []string{"eval_get_pair", "eval_pending", "eval_run_status", "eval_summary", "eval_verdict"}
+	want := []string{"eval_get_pair", "eval_pending", "eval_run_status", "eval_samples", "eval_summary", "eval_verdict"}
 	got := listEvalToolNames(t)
 
 	if len(got) != len(want) {
@@ -285,7 +286,7 @@ func TestEvalVerdict_RejectsBadWinnersAndDimensions(t *testing.T) {
 }
 
 func TestEvalSummaryAndRunStatus(t *testing.T) {
-	s, _, runID := evalServer(t)
+	s, store, runID := evalServer(t)
 
 	res, _, _ := s.handleEvalRunStatus(evalReadCtx(), nil, evalRunInput{RunID: runID})
 	if res.IsError {
@@ -299,6 +300,8 @@ func TestEvalSummaryAndRunStatus(t *testing.T) {
 		t.Errorf("status = %+v, want terminal with 1 pair and 2 pending items", status)
 	}
 
+	// The full summary opens once every item has a judge verdict.
+	judgeEvalRun(t, store, runID)
 	res, _, _ = s.handleEvalSummary(evalReadCtx(), nil, evalRunInput{RunID: runID})
 	if res.IsError {
 		t.Fatalf("eval_summary: %s", toolResultText(res))
@@ -317,5 +320,400 @@ func TestEvalSummaryAndRunStatus(t *testing.T) {
 	}
 	if len(sum.Verdicts[0].Gates) != 3 {
 		t.Errorf("got %d gates, want 3", len(sum.Verdicts[0].Gates))
+	}
+}
+
+// judgeEvalRun records a judge verdict on every item of the run.
+func judgeEvalRun(t *testing.T, store *eval.Store, runID int64) {
+	t.Helper()
+	items, err := store.ListItems(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("ListItems: %v", err)
+	}
+	for _, it := range items {
+		if _, err := store.RecordVerdict(context.Background(), eval.Verdict{
+			ItemID: it.ID, Winner: eval.WinnerA, JudgeIdent: "judge-key",
+		}); err != nil {
+			t.Fatalf("RecordVerdict: %v", err)
+		}
+	}
+}
+
+type samplesPayload struct {
+	RunID    int64             `json:"run_id"`
+	Variants []eval.Variant    `json:"variants"`
+	Samples  []json.RawMessage `json:"samples"`
+	Count    int               `json:"count"`
+	Total    int               `json:"total"`
+}
+
+func callEvalSamples(t *testing.T, s *Server, input evalSamplesInput) samplesPayload {
+	t.Helper()
+	res, _, err := s.handleEvalSamples(evalReadCtx(), nil, input)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("eval_samples: %s", toolResultText(res))
+	}
+	var out samplesPayload
+	if err := json.Unmarshal([]byte(toolResultText(res)), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	return out
+}
+
+func TestEvalSamples_RefusedWhileItemsPending(t *testing.T) {
+	s, _, runID := evalServer(t)
+
+	res, _, _ := s.handleEvalSamples(evalReadCtx(), nil, evalSamplesInput{RunID: runID})
+	text := toolResultText(res)
+	if !res.IsError || !strings.Contains(text, "has 2 judgment items pending") {
+		t.Fatalf("eval_samples with pending items = %q, want a refusal naming the count", text)
+	}
+	for _, forbidden := range []string{"incumbent", "candidate", "kimi-k3"} {
+		if strings.Contains(text, forbidden) {
+			t.Errorf("refusal leaked %q: %s", forbidden, text)
+		}
+	}
+}
+
+func TestEvalSamples_RefusedUntilRunFinishes(t *testing.T) {
+	s, store, _ := evalServer(t)
+	ctx := context.Background()
+	set, err := store.CreateTaskSet(ctx, "unfinished", "")
+	if err != nil {
+		t.Fatalf("CreateTaskSet: %v", err)
+	}
+	if _, err := store.AddTask(ctx, set.ID, eval.Task{Prompt: "p", Category: eval.CategoryChat}); err != nil {
+		t.Fatalf("AddTask: %v", err)
+	}
+	run, _, err := store.CreateRun(ctx, eval.Run{
+		TaskSetID: set.ID, BaseAgent: "pamela", K: 1, CostCap: 2, AsOf: time.Now().UTC(),
+	}, []eval.Variant{{Name: "incumbent"}, {Name: "candidate"}})
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	res, _, _ := s.handleEvalSamples(evalReadCtx(), nil, evalSamplesInput{RunID: run.ID})
+	if !res.IsError || !strings.Contains(toolResultText(res), "opens once the run has finished") {
+		t.Errorf("eval_samples on an unfinished run = %q, want the not-finished refusal", toolResultText(res))
+	}
+}
+
+func TestEvalSamples_OperatorMarksDoNotOpenIt(t *testing.T) {
+	s, store, runID := evalServer(t)
+	items, err := store.ListItems(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("ListItems: %v", err)
+	}
+	for _, it := range items {
+		if _, err := store.RecordVerdict(context.Background(), eval.Verdict{
+			ItemID: it.ID, Winner: eval.WinnerA, JudgeIdent: eval.JudgeOperator,
+		}); err != nil {
+			t.Fatalf("RecordVerdict(operator): %v", err)
+		}
+	}
+
+	res, _, _ := s.handleEvalSamples(evalReadCtx(), nil, evalSamplesInput{RunID: runID})
+	if !res.IsError || !strings.Contains(toolResultText(res), "pending") {
+		t.Errorf("eval_samples after operator marks only = %q, want still refused", toolResultText(res))
+	}
+}
+
+func TestEvalSamples_FullyJudgedRunReturnsSamplesAndVariants(t *testing.T) {
+	s, store, runID := evalServer(t)
+	judgeEvalRun(t, store, runID)
+
+	got := callEvalSamples(t, s, evalSamplesInput{RunID: runID})
+	if got.RunID != runID || got.Count != 2 || got.Total != 2 || len(got.Samples) != 2 {
+		t.Fatalf("payload = run %d count %d total %d samples %d, want run %d with 2/2/2",
+			got.RunID, got.Count, got.Total, len(got.Samples), runID)
+	}
+	names := map[string]bool{}
+	for _, v := range got.Variants {
+		names[v.Name] = true
+	}
+	if !names["incumbent"] || !names["candidate"] {
+		t.Errorf("variants = %+v, want incumbent and candidate", got.Variants)
+	}
+
+	rows, err := store.ListTaskSamples(context.Background(), runID, 0)
+	if err != nil {
+		t.Fatalf("ListTaskSamples: %v", err)
+	}
+	for i, row := range rows {
+		want, err := json.Marshal(row)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if string(got.Samples[i]) != string(want) {
+			t.Errorf("sample %d = %s\nwant the store row as REST serialises it: %s", i, got.Samples[i], want)
+		}
+	}
+}
+
+func TestEvalSamples_TaskIDNarrows(t *testing.T) {
+	s, store, runID := evalServer(t)
+	judgeEvalRun(t, store, runID)
+	rows, err := store.ListTaskSamples(context.Background(), runID, 0)
+	if err != nil {
+		t.Fatalf("ListTaskSamples: %v", err)
+	}
+
+	got := callEvalSamples(t, s, evalSamplesInput{RunID: runID, TaskID: rows[0].TaskID})
+	if got.Total != 2 || got.Count != 2 {
+		t.Errorf("task_id %d: count %d total %d, want 2/2", rows[0].TaskID, got.Count, got.Total)
+	}
+	got = callEvalSamples(t, s, evalSamplesInput{RunID: runID, TaskID: 9999})
+	if got.Samples == nil || len(got.Samples) != 0 || got.Total != 0 {
+		t.Errorf("unknown task_id: samples %v total %d, want an empty array and total 0", got.Samples, got.Total)
+	}
+}
+
+func TestEvalSamples_Paging(t *testing.T) {
+	s, store, runID := evalServer(t)
+	judgeEvalRun(t, store, runID)
+	rows, err := store.ListTaskSamples(context.Background(), runID, 0)
+	if err != nil {
+		t.Fatalf("ListTaskSamples: %v", err)
+	}
+
+	got := callEvalSamples(t, s, evalSamplesInput{RunID: runID, Limit: 1, Offset: 1})
+	if got.Count != 1 || got.Total != 2 {
+		t.Fatalf("limit 1 offset 1: count %d total %d, want 1/2", got.Count, got.Total)
+	}
+	var smp eval.Sample
+	if err := json.Unmarshal(got.Samples[0], &smp); err != nil {
+		t.Fatalf("unmarshal sample: %v", err)
+	}
+	if smp.ID != rows[1].ID {
+		t.Errorf("limit 1 offset 1 returned sample %d, want the second, %d", smp.ID, rows[1].ID)
+	}
+
+	got = callEvalSamples(t, s, evalSamplesInput{RunID: runID, TaskID: rows[1].TaskID, Limit: 1, Offset: 1})
+	if got.Count != 1 || got.Total != 2 {
+		t.Fatalf("task_id with limit 1 offset 1: count %d total %d, want 1/2", got.Count, got.Total)
+	}
+	if err := json.Unmarshal(got.Samples[0], &smp); err != nil {
+		t.Fatalf("unmarshal sample: %v", err)
+	}
+	if smp.ID != rows[1].ID {
+		t.Errorf("task_id with limit 1 offset 1 returned sample %d, want %d", smp.ID, rows[1].ID)
+	}
+
+	got = callEvalSamples(t, s, evalSamplesInput{RunID: runID, Offset: 5})
+	if got.Count != 0 || got.Total != 2 || got.Samples == nil {
+		t.Errorf("offset past the end: count %d total %d samples %v, want an empty array and total 2",
+			got.Count, got.Total, got.Samples)
+	}
+	if n := clampSamplesLimit(500); n != evalSamplesMaxLimit {
+		t.Errorf("clampSamplesLimit(500) = %d, want %d", n, evalSamplesMaxLimit)
+	}
+}
+
+func TestEvalSamples_ScopeAndConfiguration(t *testing.T) {
+	s, store, runID := evalServer(t)
+	judgeEvalRun(t, store, runID)
+
+	if res, _, _ := s.handleEvalSamples(context.Background(), nil, evalSamplesInput{RunID: runID}); !res.IsError ||
+		!strings.Contains(toolResultText(res), "eval:read") {
+		t.Errorf("eval_samples without eval:read = %q, want refused", toolResultText(res))
+	}
+	bare := &Server{deps: Deps{Logger: testLogger()}}
+	if res, _, _ := bare.handleEvalSamples(evalReadCtx(), nil, evalSamplesInput{RunID: runID}); !res.IsError ||
+		!strings.Contains(toolResultText(res), "eval not configured") {
+		t.Errorf("eval_samples unconfigured = %q, want eval not configured", toolResultText(res))
+	}
+	if res, _, _ := s.handleEvalSamples(evalReadCtx(), nil, evalSamplesInput{}); !res.IsError ||
+		!strings.Contains(toolResultText(res), "run_id is required") {
+		t.Errorf("eval_samples without run_id = %q", toolResultText(res))
+	}
+	if res, _, _ := s.handleEvalSamples(evalReadCtx(), nil, evalSamplesInput{RunID: runID, TaskID: -1}); !res.IsError ||
+		!strings.Contains(toolResultText(res), "task_id must be a positive integer") {
+		t.Errorf("eval_samples with task_id -1 = %q", toolResultText(res))
+	}
+}
+
+func TestEvalVerdict_FullyJudgedRunTakesNoMoreVerdicts(t *testing.T) {
+	s, store, runID := evalServer(t)
+	judgeEvalRun(t, store, runID)
+	items, err := store.ListItems(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("ListItems: %v", err)
+	}
+
+	res, _, _ := s.handleEvalVerdict(evalWriteCtx(), nil, evalVerdictInput{ItemID: items[0].ID, Winner: "b"})
+	if !res.IsError || !strings.Contains(toolResultText(res), "is fully judged: every item has a judge verdict, so the run takes no more") ||
+		!strings.Contains(toolResultText(res), "to judge again, start a new run") {
+		t.Errorf("eval_verdict on a fully judged run = %q, want refused", toolResultText(res))
+	}
+}
+
+func TestEvalVerdict_OperatorMarkOnJudgedItemIsRefused(t *testing.T) {
+	s, store, runID := evalServer(t)
+	items, err := store.ListItems(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("ListItems: %v", err)
+	}
+	if res, _, _ := s.handleEvalVerdict(evalWriteCtx(), nil, evalVerdictInput{ItemID: items[0].ID, Winner: "a"}); res.IsError {
+		t.Fatalf("judge verdict: %s", toolResultText(res))
+	}
+
+	res, _, _ := s.handleEvalVerdict(evalWriteCtx(), nil, evalVerdictInput{
+		ItemID: items[0].ID, Winner: "b", JudgeIdent: eval.JudgeOperator,
+	})
+	if !res.IsError || !strings.Contains(toolResultText(res), "already has a judge verdict") ||
+		!strings.Contains(toolResultText(res), "so a mark on it would not be blind. Draw pending items with eval_pending 'sample_n' and mark those before they are judged") {
+		t.Errorf("operator mark on a judged item = %q, want refused", toolResultText(res))
+	}
+}
+
+// While a run can still take verdicts, nothing a judge can call names a
+// variant or the candidate model. eval_summary is left out: it names
+// variants by design.
+func TestEvalTools_NoIdentityWhileItemsPending(t *testing.T) {
+	s, store, runID := evalServer(t)
+	items, err := store.ListItems(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("ListItems: %v", err)
+	}
+	ctx := evalReadCtx()
+	var outputs []string
+	res, _, _ := s.handleEvalPending(ctx, nil, evalPendingInput{RunID: runID})
+	outputs = append(outputs, toolResultText(res))
+	res, _, _ = s.handleEvalGetPair(ctx, nil, evalGetPairInput{ItemID: items[0].ID})
+	outputs = append(outputs, toolResultText(res))
+	res, _, _ = s.handleEvalRunStatus(ctx, nil, evalRunInput{RunID: runID})
+	outputs = append(outputs, toolResultText(res))
+	res, _, _ = s.handleEvalSamples(ctx, nil, evalSamplesInput{RunID: runID})
+	outputs = append(outputs, toolResultText(res))
+
+	for i, out := range outputs {
+		for _, forbidden := range []string{"incumbent", "candidate", "kimi-k3"} {
+			if strings.Contains(out, forbidden) {
+				t.Errorf("output %d leaked %q: %s", i, forbidden, out)
+			}
+		}
+	}
+
+	// eval_summary names the variants by design, so it is checked for the
+	// things that tie a response to one; see TestEvalSummary_WithheldWhileItemsPending.
+	res, _, _ = s.handleEvalSummary(ctx, nil, evalRunInput{RunID: runID})
+	assertSummaryWithheld(t, toolResultText(res))
+}
+
+// withheldSummaryKeys are the eval_summary keys that can tie a response to its
+// variant on a one-task run. None may appear while the run takes verdicts.
+var withheldSummaryKeys = []string{
+	`"per_task"`, `"variants"`, `"mean_rounds"`, `"mean_cost_per_task"`, `"mean_latency_ms"`,
+	`"total_cost"`, `"cost_spent"`, `"gates"`, `"delta"`, `"categories"`, `"verdicts"`, `"verdict"`,
+	`"reason"`, `"divergence"`, `"wins"`, `"losses"`, `"ties"`, `"win_rate"`,
+}
+
+func assertSummaryWithheld(t *testing.T, out string) {
+	t.Helper()
+	for _, key := range withheldSummaryKeys {
+		if strings.Contains(out, key) {
+			t.Errorf("eval_summary carries %s while items are pending: %s", key, out)
+		}
+	}
+}
+
+// The evalServer fixture is a one-task, k=1 run: the case where any
+// per-variant figure ties a response on eval_get_pair to its variant.
+func TestEvalSummary_WithheldWhileItemsPending(t *testing.T) {
+	s, _, runID := evalServer(t)
+
+	res, _, _ := s.handleEvalSummary(evalReadCtx(), nil, evalRunInput{RunID: runID})
+	if res.IsError {
+		t.Fatalf("eval_summary: %s", toolResultText(res))
+	}
+	out := toolResultText(res)
+	assertSummaryWithheld(t, out)
+
+	var got evalSummaryClosed
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !strings.Contains(got.WithheldNote, "2 judgment items pending") ||
+		!strings.Contains(got.WithheldNote, "per-variant breakdown and verdict") {
+		t.Errorf("withheld_note = %q, want it to say why", got.WithheldNote)
+	}
+	if got.RunID != runID || got.Completeness.Pairs != 1 || got.Completeness.SamplesOK != 2 {
+		t.Errorf("closed summary = %+v, want the run's completeness", got)
+	}
+	if len(got.Judgments) != 1 || got.Judgments[0].Variant != "candidate" || got.Judgments[0].Pairs != 1 {
+		t.Errorf("judgments = %+v, want one candidate block", got.Judgments)
+	}
+}
+
+// Calibration reads the agreement figure mid-run: the operator marks an item,
+// the judge rules on it, and the other item is still pending.
+func TestEvalSummary_AgreementVisibleMidCalibration(t *testing.T) {
+	s, store, runID := evalServer(t)
+	items, err := store.ListItems(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("ListItems: %v", err)
+	}
+	for _, ident := range []string{eval.JudgeOperator, "judge-key"} {
+		if _, err := store.RecordVerdict(context.Background(), eval.Verdict{
+			ItemID: items[0].ID, Winner: eval.WinnerA, JudgeIdent: ident,
+		}); err != nil {
+			t.Fatalf("RecordVerdict(%s): %v", ident, err)
+		}
+	}
+
+	res, _, _ := s.handleEvalSummary(evalReadCtx(), nil, evalRunInput{RunID: runID})
+	out := toolResultText(res)
+	assertSummaryWithheld(t, out)
+	var got evalSummaryClosed
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got.Judgments) != 1 {
+		t.Fatalf("judgments = %+v, want one", got.Judgments)
+	}
+	agr := got.Judgments[0].OperatorAgreement
+	if agr == nil || agr.Items != 1 || agr.Agreed != 1 || agr.Rate != 1 {
+		t.Errorf("operator_agreement = %+v, want 1 of 1 mid-calibration", agr)
+	}
+	if !strings.Contains(got.WithheldNote, "1 judgment item pending") {
+		t.Errorf("withheld_note = %q, want one pending item", got.WithheldNote)
+	}
+}
+
+func TestEvalSummary_EverythingReturnedWhenFullyJudged(t *testing.T) {
+	s, store, runID := evalServer(t)
+	judgeEvalRun(t, store, runID)
+
+	res, _, _ := s.handleEvalSummary(evalReadCtx(), nil, evalRunInput{RunID: runID})
+	out := toolResultText(res)
+	if strings.Contains(out, "withheld_note") || strings.Contains(out, `"judgments"`) {
+		t.Errorf("fully judged summary still carries the closed shape: %s", out)
+	}
+	var got eval.Summary
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got.PerTask) != 1 || len(got.Variants) != 2 || len(got.Verdicts) != 1 || len(got.Verdicts[0].Gates) == 0 {
+		t.Errorf("summary = %+v, want per_task, variants, verdict and gates", got)
+	}
+}
+
+func TestEvalSamples_OnePendingItemIsSingular(t *testing.T) {
+	s, store, runID := evalServer(t)
+	items, err := store.ListItems(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("ListItems: %v", err)
+	}
+	if _, err := store.RecordVerdict(context.Background(), eval.Verdict{
+		ItemID: items[0].ID, Winner: eval.WinnerA, JudgeIdent: "judge-key",
+	}); err != nil {
+		t.Fatalf("RecordVerdict: %v", err)
+	}
+	res, _, _ := s.handleEvalSamples(evalReadCtx(), nil, evalSamplesInput{RunID: runID})
+	if !strings.Contains(toolResultText(res), "has 1 judgment item pending") {
+		t.Errorf("refusal = %q, want the singular form", toolResultText(res))
 	}
 }

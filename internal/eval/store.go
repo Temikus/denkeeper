@@ -261,7 +261,8 @@ CREATE TABLE IF NOT EXISTS eval_verdicts (
     notes          TEXT    NOT NULL DEFAULT '',
     judge_ident    TEXT    NOT NULL DEFAULT '',
     rubric_version TEXT    NOT NULL DEFAULT '',
-    created_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at     DATETIME
 );
 
 CREATE INDEX IF NOT EXISTS idx_eval_tasks_set      ON eval_tasks (set_id);
@@ -301,6 +302,13 @@ var evalMigrations = []string{
 	// [eval] judge_max_cost_per_run. Folding them would make a judged run look
 	// like it had blown its cap.
 	`ALTER TABLE eval_runs ADD COLUMN judge_cost REAL NOT NULL DEFAULT 0`,
+	// updated_at: a verdict's latest call, beside created_at (its first). Nullable
+	// because ALTER cannot add a CURRENT_TIMESTAMP default. The backfill runs on
+	// every start, so rows an older binary wrote get their created_at; reads
+	// scan it into time.Time, which fails on NULL. COALESCE would not help: the
+	// driver parses a time only from a column declared DATETIME.
+	`ALTER TABLE eval_verdicts ADD COLUMN updated_at DATETIME`,
+	`UPDATE eval_verdicts SET updated_at = created_at WHERE updated_at IS NULL`,
 }
 
 // TaskSet is a named collection of eval tasks.
@@ -507,8 +515,12 @@ type Verdict struct {
 	// the judge reported it (the `Rubric version:` line of the judge-eval
 	// skill). Empty when the judge did not say, which is why the results view
 	// reports the distinct set rather than assuming one.
-	RubricVersion string    `db:"rubric_version" json:"rubric_version,omitempty"`
-	CreatedAt     time.Time `db:"created_at"     json:"created_at"`
+	RubricVersion string `db:"rubric_version" json:"rubric_version,omitempty"`
+	// CreatedAt is this ident's first call on the item and UpdatedAt its latest.
+	// Agreement compares marks against the first; the newest-verdict pick
+	// reads the latest.
+	CreatedAt time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt time.Time `db:"updated_at" json:"updated_at"`
 }
 
 // Store persists eval task sets, runs and samples. It owns its own handle on
@@ -1089,22 +1101,48 @@ func (s *Store) ListTaskSamples(ctx context.Context, runID, taskID int64) ([]Sam
 	return s.listSamples(ctx, runID, taskID)
 }
 
-// listSamples reads a run's samples, narrowed to one task when taskID > 0. The
-// column list lives here once: a sample gained a column twice already, and two
-// copies of it is how one reader silently stops carrying it.
+// PageTaskSamples returns one page of ListTaskSamples' rows, in the same order,
+// and the row count of the whole listing. limit must be positive.
+func (s *Store) PageTaskSamples(ctx context.Context, runID, taskID int64, offset, limit int) ([]Sample, int, error) {
+	if limit <= 0 {
+		return nil, 0, fmt.Errorf("paging samples of run %d: limit must be positive, got %d", runID, limit)
+	}
+	where, args := samplesWhere(runID, taskID)
+	var total int
+	if err := s.db.GetContext(ctx, &total, `SELECT COUNT(*) FROM eval_samples`+where, args...); err != nil {
+		return nil, 0, fmt.Errorf("counting samples of run %d: %w", runID, err)
+	}
+	page, err := s.selectSamples(ctx, runID, where+` ORDER BY id LIMIT ? OFFSET ?`,
+		append(args, limit, max(offset, 0))...)
+	if err != nil {
+		return nil, 0, err
+	}
+	return page, total, nil
+}
+
+// listSamples reads a run's samples, narrowed to one task when taskID > 0.
 func (s *Store) listSamples(ctx context.Context, runID, taskID int64) ([]Sample, error) {
+	where, args := samplesWhere(runID, taskID)
+	return s.selectSamples(ctx, runID, where+` ORDER BY id`, args...)
+}
+
+func samplesWhere(runID, taskID int64) (string, []any) {
+	if taskID > 0 {
+		return ` WHERE run_id = ? AND task_id = ?`, []any{runID, taskID}
+	}
+	return ` WHERE run_id = ?`, []any{runID}
+}
+
+// selectSamples holds the one copy of the sample column list: a sample gained
+// a column twice already, and two copies of it is how one reader silently
+// stops carrying it.
+func (s *Store) selectSamples(ctx context.Context, runID int64, tail string, args ...any) ([]Sample, error) {
 	out := []Sample{}
 	query := `SELECT id, run_id, variant_id, task_id, k_index, status, error, response, trace,
 	                 rounds, stop_reason, upstream, outcome_ok, outcome_rejected, outcome_failed,
 	                 outcome_denied, outcome_cached, outcome_suppressed, tokens_prompt,
 	                 tokens_completion, cost, latency_ms, created_at
-	          FROM eval_samples WHERE run_id = ?`
-	args := []any{runID}
-	if taskID > 0 {
-		query += ` AND task_id = ?`
-		args = append(args, taskID)
-	}
-	query += ` ORDER BY id`
+	          FROM eval_samples` + tail
 	if err := s.db.SelectContext(ctx, &out, query, args...); err != nil {
 		return nil, fmt.Errorf("listing samples of run %d: %w", runID, err)
 	}

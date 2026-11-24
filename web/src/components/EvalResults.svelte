@@ -181,6 +181,12 @@
   // What grades a pass, in the order it is asked: the decider first, then
   // the model for whatever it could not settle.
   const serverJudgeLabel = $derived([judgeDecider, judgeModel].filter(Boolean).join(', then '))
+  // One string, so the optional cap never leaves a space before the period.
+  // A judged item refuses operator marks; a pass can leave items pending.
+  const serverJudgeHint = $derived(
+    (judgeModel ? 'grades them here, unattended' : 'grades what it is sure of here; the rest stays pending') +
+    (judgeCostCap > 0 ? ` · up to $${judgeCostCap.toFixed(2)}` : '') +
+    ". Items it grades can't be marked for calibration afterwards, so mark any first.")
 
   // Verdicts store judge identities, not names: the two internal backends
   // record under fixed keys, and an MCP judge records under its API key name.
@@ -478,8 +484,7 @@
               </button>
               <span class="hint">
                 <span class="mono">{serverJudgeLabel}</span>
-                {judgeModel ? 'grades them here, unattended' : 'grades what it is sure of here; the rest stays pending'}
-                {#if judgeCostCap > 0}· up to ${judgeCostCap.toFixed(2)}{/if}
+                {serverJudgeHint}
               </span>
             </div>
             {#if serverJudge?.message}

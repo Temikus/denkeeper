@@ -10046,6 +10046,9 @@
                 "rubric_version": {
                     "type": "string"
                 },
+                "updated_at": {
+                    "type": "string"
+                },
                 "winner": {
                     "description": "Winner is the presented letter the judge named — what it actually saw.",
                     "type": "string"

@@ -13,8 +13,9 @@ and a candidate — through the real engine, with writes suppressed. Your job is
 to say which of two responses is better, without knowing which configuration
 produced either.
 
-**You never learn the assignment.** Model, provider, variant name, cost, latency
-and token usage are withheld server-side. Do not speculate about them, and do
+**You never learn the assignment while you can still judge.** Model, provider,
+variant name, cost, latency and token usage are withheld server-side until
+every item of the run has a judge verdict. Do not speculate about them, and do
 not let a guess influence a verdict. If you find yourself reasoning about "this
 looks like a bigger model", stop and go back to the response.
 
@@ -44,7 +45,8 @@ claude mcp add --transport http denkeeper https://your-denkeeper/api/v1/mcp --he
 | `eval_pending` | The queue. `run_id` scopes it; `sample_n` draws a random subset |
 | `eval_get_pair` | One blinded item: prompt, notes, pinned history, Response A and B with tool traces |
 | `eval_verdict` | Record `{item_id, winner, dimensions, notes, rubric_version}` |
-| `eval_summary` | Unblinds: gate table, win-rate, per-category breakdown, verdict |
+| `eval_summary` | While items are pending: completeness and operator-judge agreement only. Once fully judged it unblinds: gate table, win-rate, per-category breakdown, verdict |
+| `eval_samples` | After judging only: each sample with the variant that wrote it. Refused while any item is pending |
 
 Each pair of responses is queued **twice**, with the presentation order swapped.
 Both items must be judged before the pair counts, and if your two verdicts name
@@ -56,19 +58,44 @@ pair you have already seen, and never look up your earlier verdict.
 
 1. `eval_run_status` — confirm the run is terminal (`done`, `capped`, or
    `stopped`). Judging a running run wastes effort on a moving queue.
-2. **First run against a new rubric: calibrate.** `eval_pending` with
-   `sample_n: 20` and work that subset interactively, showing the operator your
-   reasoning for each. The operator records their own call with
-   `eval_verdict` and `judge_ident: "operator"` — that sits alongside your
-   verdict rather than replacing it, and `eval_summary` reports the agreement
-   rate. **Below roughly 80 % agreement, stop and fix the rubric below before
-   judging the rest.** A drifted rubric silently devalues every later run.
-3. Once calibrated, work the remaining queue: `eval_pending` → `eval_get_pair`
-   → `eval_verdict`, one item at a time. For a large queue, fan out to parallel
-   subagents; each subagent gets its own item ids and must not be told anything
-   about the other items.
+2. **First run against a new rubric: calibrate, operator first.**
+   1. `eval_pending` with `sample_n: 20`. Keep the item ids.
+   2. For each item, `eval_get_pair` and show the operator the prompt, the
+      notes, the pinned history if any, and both responses with their tool
+      traces. **Do not say which
+      response you prefer, and do not record a verdict of your own on these
+      items.**
+   3. Record the operator's call with `eval_verdict` and
+      `judge_ident: "operator"`. The item stays pending.
+   4. When every mark is in, hand the same item ids to a subagent. Give it the
+      ids and this skill, tell it to judge them as in step 3 with its own
+      verdicts (never `judge_ident: "operator"`), and tell it nothing about the
+      operator's calls. You have seen the marks, so your own
+      verdict on these items would not be independent.
+   5. `eval_summary` reports the agreement rate. **Below roughly 80 %
+      agreement, stop and fix the rubric below before judging the rest.** A
+      drifted rubric silently devalues every later run.
+
+   The server enforces this order: an operator mark on an item that already
+   has a judge verdict is refused. If that happens the item can no longer be a
+   calibration item; draw another. If the run will be judged by the internal
+   judge instead, calibrate before starting the internal judge (the
+   dashboard's judge button or `POST /eval/runs/{id}/judge`). An item it has
+   judged can no longer be marked.
+3. Once calibrated, give the remaining queue to subagents rather than judging
+   it yourself: you have seen the calibration pairs, and each one's swapped
+   copy is still in the queue. Each subagent gets its own item ids, works them
+   `eval_get_pair` → `eval_verdict`, and is told nothing
+   about the other items. It must not call `eval_summary` or go back to an
+   item it has already judged: the agreement figure moves with each verdict,
+   so reading it between verdicts would let a judge steer towards the
+   operator's calls.
 4. `eval_summary` — read the verdict with its gate table and per-category
    breakdown back to the operator.
+5. Only after that, when the operator asks which variant wrote a response:
+   `eval_samples` with the `run_id` and a `task_id`. It is refused while any
+   item is pending, and once the queue is empty the run takes no more
+   verdicts, so there is nothing left to bias.
 
 ## The rubric
 
@@ -148,7 +175,10 @@ eval_verdict:
 
 ## Reading the summary
 
-`eval_summary` returns a verdict per candidate with its work shown:
+Before every item has a judge verdict, `eval_summary` returns only
+completeness and, per candidate, the pair counts and agreement, with
+`withheld_note` saying why. Once judging is complete it returns a verdict per
+candidate with its work shown:
 
 - **The gate table** — rejected-rate, mean-rounds and cost-per-task deltas
   against their thresholds. A failed gate means *downgrade* regardless of your
