@@ -61,27 +61,34 @@ pair you have already seen, and never look up your earlier verdict.
 2. **First run against a new rubric: calibrate, operator first.**
    1. `eval_pending` with `sample_n: 20`. Keep the item ids.
    2. For each item, `eval_get_pair` and show the operator the prompt, the
-      notes and both responses with their tool traces. **Do not say which
+      notes, the pinned history if any, and both responses with their tool
+      traces. **Do not say which
       response you prefer, and do not record a verdict of your own on these
       items.**
    3. Record the operator's call with `eval_verdict` and
       `judge_ident: "operator"`. The item stays pending.
-   4. When every mark is in, hand the same item ids to a subagent to judge.
-      Give it the ids and this skill, and nothing about the operator's calls.
-      You have seen the marks, so your own verdict on these items would not be
-      independent.
+   4. When every mark is in, hand the same item ids to a subagent. Give it the
+      ids and this skill, tell it to judge them as in step 3, and tell it
+      nothing about the operator's calls. You have seen the marks, so your own
+      verdict on these items would not be independent.
    5. `eval_summary` reports the agreement rate. **Below roughly 80 %
       agreement, stop and fix the rubric below before judging the rest.** A
       drifted rubric silently devalues every later run.
 
-   The server holds the order: an operator mark on an item that already has a
-   judge verdict is refused. If that happens the item can no longer be a
+   The server enforces this order: an operator mark on an item that already
+   has a judge verdict is refused. If that happens the item can no longer be a
    calibration item; draw another. If the run will be judged by the internal
-   judge instead, calibrate before starting it.
-3. Once calibrated, work the remaining queue: `eval_pending` → `eval_get_pair`
-   → `eval_verdict`, one item at a time. For a large queue, fan out to parallel
-   subagents; each subagent gets its own item ids and must not be told anything
-   about the other items.
+   judge instead, calibrate before starting the internal judge (the
+   dashboard's judge button or `POST /eval/runs/{id}/judge`). An item it has
+   judged can no longer be marked.
+3. Once calibrated, give the remaining queue to subagents rather than judging
+   it yourself: you have seen the calibration pairs, and each one's swapped
+   copy is still in the queue. Each subagent gets its own item ids, works them
+   `eval_pending` → `eval_get_pair` → `eval_verdict`, and is told nothing
+   about the other items. It must not call `eval_summary` or go back to an
+   item it has already judged: the agreement figure moves with each verdict,
+   so reading it between verdicts would let a judge steer towards the
+   operator's calls.
 4. `eval_summary` — read the verdict with its gate table and per-category
    breakdown back to the operator.
 5. Only after that, when the operator asks which variant wrote a response:
@@ -167,7 +174,10 @@ eval_verdict:
 
 ## Reading the summary
 
-`eval_summary` returns a verdict per candidate with its work shown:
+Before every item has a judge verdict, `eval_summary` returns only
+completeness and, per candidate, the pair counts and agreement, with
+`withheld_note` saying why. Once judging is complete it returns a verdict per
+candidate with its work shown:
 
 - **The gate table** — rejected-rate, mean-rounds and cost-per-task deltas
   against their thresholds. A failed gate means *downgrade* regardless of your
