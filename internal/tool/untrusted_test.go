@@ -117,8 +117,8 @@ func TestValidatePinnedPackageArgs_UvxIndexOverridesRefused(t *testing.T) {
 	}
 }
 
-// These name a file or URL that can replace the pinned version or load a
-// config that moves the index.
+// These name a file or URL that can replace the pinned version, a config
+// that moves the index, or a cache location that can serve a planted build.
 func TestValidatePinnedPackageArgs_UvxFileAndProjectFlagsRefused(t *testing.T) {
 	for _, flag := range []string{"--overrides", "--constraints", "-c", "--build-constraints", "-b",
 		"--config-file", "--directory", "--project", "--cache-dir"} {
@@ -151,8 +151,8 @@ func TestValidatePinnedPackageArgs_UvxPythonOnlyBareVersion(t *testing.T) {
 
 // Every entry in a launcher's refused set must hit the refused branch, in
 // both the separate-value and --flag=value forms, so a typo or a move into
-// valueFlags/boolFlags fails here. The "cannot be pinned" message tells the
-// refused branch apart from the unknown-option fallback, which also rejects.
+// valueFlags/boolFlags fails here. The "a pin cannot cover it" message tells
+// the refused branch apart from the unknown-option fallback, which also rejects.
 func TestValidatePinnedPackageArgs_EveryRefusedFlagRefused(t *testing.T) {
 	for _, tc := range []struct {
 		l   launcher
@@ -172,7 +172,7 @@ func requireRefusedOption(t *testing.T, command string, args []string) {
 		t.Errorf("%s %v: accepted, want rejection", command, args)
 		return
 	}
-	if !strings.Contains(err.Error(), "cannot be pinned") {
+	if !strings.Contains(err.Error(), "can change what code the tool runs, so a pin cannot cover it") {
 		t.Errorf("%s %v: rejected as %q, want the refused-option error", command, args, err)
 	}
 }
@@ -284,7 +284,8 @@ func TestValidateRuntimeEnv_RefusesCodeLoadingNames(t *testing.T) {
 		"UV_INSECURE_HOST", "UV_CONFIG_FILE", "UV_OVERRIDE", "uv_python",
 		"PIP_INDEX_URL", "pip_extra_index_url",
 		"PYTHONPATH", "PYTHONSTARTUP", "PYTHONHOME", "PYTHONUSERBASE",
-		"LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT", "DYLD_INSERT_LIBRARIES", "dyld_library_path",
+		"LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT", "ld_bind_now", "DYLD_INSERT_LIBRARIES", "dyld_library_path",
+		"GCONV_PATH", "LOCPATH", "NLSPATH",
 		"BASH_ENV", "ENV", "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS",
 		"PERL5OPT", "PERL5LIB", "RUBYOPT", "RUBYLIB",
 		"PATH", "HOME", "SSL_CERT_FILE", "SSL_CERT_DIR",

@@ -73,7 +73,7 @@ func (m *Manager) checkRuntimeCommand(cfg config.ToolConfig) error {
 var runtimeEnvRefused = flagSet(
 	"NODE_OPTIONS", "NODE_PATH", "NODE_EXTRA_CA_CERTS",
 	"PYTHONPATH", "PYTHONSTARTUP", "PYTHONHOME", "PYTHONUSERBASE",
-	"LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT",
+	"GCONV_PATH", "LOCPATH", "NLSPATH", // glibc loads iconv modules and locale data from these
 	"BASH_ENV", "ENV",
 	"JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS",
 	"PERL5OPT", "PERL5LIB", "RUBYOPT", "RUBYLIB",
@@ -82,11 +82,11 @@ var runtimeEnvRefused = flagSet(
 )
 
 // runtimeEnvRefusedPrefixes cover launchers whose every setting is also an
-// env variable (npm, pip, uv), the macOS loader, and the XDG base dirs, where
-// npm, pip and uv look for config and cache (uv also installs tools there).
-// uv alone has dozens that move the index or the interpreter, so whole
-// families are refused.
-var runtimeEnvRefusedPrefixes = []string{"NPM_CONFIG_", "PIP_", "UV_", "DYLD_", "XDG_"}
+// env variable (npm, pip, uv), the Linux and macOS loaders, and the XDG base
+// dirs, where npm, pip and uv look for config and cache (uv also installs
+// tools there). uv alone has dozens that move the index or the interpreter,
+// so whole families are refused.
+var runtimeEnvRefusedPrefixes = []string{"NPM_CONFIG_", "PIP_", "UV_", "LD_", "DYLD_", "XDG_"}
 
 // runtimeRefusalFix ends every runtime refusal. The checks apply to admin
 // callers too, so the fix is the config file, not a permission.
@@ -241,7 +241,7 @@ func (l launcher) check(args []string) error {
 		name, value, hasValue := strings.Cut(arg, "=")
 		switch {
 		case l.refused[name]:
-			return fmt.Errorf("%s %s runs code that cannot be pinned; tools added at runtime can't use it, so %s", l.name, name, runtimeRefusalFix)
+			return fmt.Errorf("%s %s can change what code the tool runs, so a pin cannot cover it; tools added at runtime can't use it, so %s", l.name, name, runtimeRefusalFix)
 		case l.packageFlags[name] != 0:
 			if !hasValue {
 				if i+1 >= len(args) {

@@ -100,8 +100,8 @@ func TestUpdateTool_NonAdminEnvOnlyCodeLoadingWithAllowlist_Rejected(t *testing.
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "NODE_OPTIONS") {
 		t.Fatalf("status = %d, body %s; want 400 naming NODE_OPTIONS", rec.Code, rec.Body)
 	}
-	if got, _ := mgr.ServerToolConfig("gh"); len(got.Env) != 0 {
-		t.Errorf("refused env stored: %v", got.Env)
+	if got, ok := mgr.ServerToolConfig("gh"); !ok || len(got.Env) != 0 {
+		t.Errorf("after a refused edit: tool present = %v, env %v; want the tool kept with no env", ok, got.Env)
 	}
 }
 

@@ -11,7 +11,7 @@
   import ToolCallArgs from '../components/ToolCallArgs.svelte'
   import { parseToolCall } from '../approvalFormat.js'
 
-  const HUMAN_ONLY_HINT = 'Installs code that runs on this machine, so it needs your approval every time.'
+  const HUMAN_ONLY_HINT = 'Adds a tool server or plugin the agent can use, so it needs your approval every time.'
 
   let agents = $state([])
   let agentsLoaded = $state(false)

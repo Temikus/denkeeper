@@ -239,7 +239,7 @@ describe('Chat page', () => {
     expect(screen.getByLabelText('Deny tool_add')).toBeInTheDocument()
     expect(screen.queryByLabelText('Approve tool_add for 15 minutes')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('Always approve tool_add')).not.toBeInTheDocument()
-    expect(screen.getByText('Installs code that runs on this machine, so it needs your approval every time.')).toBeInTheDocument()
+    expect(screen.getByText('Adds a tool server or plugin the agent can use, so it needs your approval every time.')).toBeInTheDocument()
   })
 
   test('labels a decider approval as the decider, with its reason', async () => {
@@ -492,7 +492,7 @@ describe('Chat page', () => {
     expect(screen.getByLabelText('Deny tool tool_add')).toBeInTheDocument()
     expect(screen.queryByText('15 min')).not.toBeInTheDocument()
     expect(screen.queryByText('Always')).not.toBeInTheDocument()
-    expect(screen.getByText('Installs code that runs on this machine, so it needs your approval every time.')).toBeInTheDocument()
+    expect(screen.getByText('Adds a tool server or plugin the agent can use, so it needs your approval every time.')).toBeInTheDocument()
   })
 
   // Config MCP's own install requests ("Install tool: …") are not engine tool

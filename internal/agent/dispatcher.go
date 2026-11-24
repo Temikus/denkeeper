@@ -1822,7 +1822,7 @@ func renderApprovalSection(tool, args string, humanOnly bool) string {
 // humanOnlyApprovalNote explains a human-only prompt's missing auto-approve
 // buttons. It is plain text, safe in HTML and Markdown, and counted in
 // approvalSectionOverheadBytes.
-const humanOnlyApprovalNote = "Installs code that runs on this machine, so it needs your approval every time."
+const humanOnlyApprovalNote = "Adds a tool server or plugin the agent can use, so it needs your approval every time."
 
 // renderLines builds the activity blockquote for a chunk, without any approval
 // section. This is the quantity budgeted by chunkLinesBudget — measuring the
