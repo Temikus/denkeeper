@@ -3656,8 +3656,8 @@ func (e *Engine) resolveHumanOnlyApproval(ctx context.Context, tc llm.ToolCall, 
 		e.logger.Warn("human-only tool denied: no operator can be asked",
 			"tool", tc.Function.Name, "round", round, "conversation", convID,
 			"approvals_wired", e.approvals != nil, "adapter_wired", onEvent != nil)
-		return approvalUnanswered(fmt.Sprintf("Tool call denied — %s runs code on this machine and always needs "+
-			"an operator's approval, but this session has no way to ask one. Ask the operator to add it in the config instead.",
+		return approvalUnanswered(fmt.Sprintf("Tool call denied: %s adds a tool server or plugin the agent can use, so it always needs "+
+			"an operator's approval, and this session has no way to ask one. Ask the operator to add it in the config instead.",
 			tc.Function.Name))
 	}
 	return e.requestToolApproval(ctx, tc, round, convID, run, onEvent, true)

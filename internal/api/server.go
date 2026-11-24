@@ -1877,7 +1877,7 @@ func (s *Server) handleCreateAutoApprove(w http.ResponseWriter, r *http.Request)
 		// The engine never consults rules for these, so a rule would be inert;
 		// refusing it says so instead of listing a rule that does nothing.
 		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": body.Tool + " runs code on this machine and always needs a one-off approval; it cannot be auto-approved",
+			"error": body.Tool + " adds a tool server or plugin the agent can use, so it always needs a one-off approval; it cannot be auto-approved",
 		})
 		return
 	}
