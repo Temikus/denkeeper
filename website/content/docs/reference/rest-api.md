@@ -845,19 +845,19 @@ Get cost summary.
 
 **Scope:** `approvals:read`
 
-List all approval requests.
+List all approval requests. A request whose tool call is high-risk carries a `risk` object: `level` (`"high"`), a fixed `warning`, and `flagged`, the arguments that make the call risky (`name` and `value`, the value as compact JSON, never cut).
 
 ### `GET /api/v1/approvals/{id}`
 
 **Scope:** `approvals:read`
 
-Get a single approval request.
+Get a single approval request, with `risk` as above.
 
 ### `POST /api/v1/approvals/{id}/approve`
 
 **Scope:** `approvals:write`
 
-Approve a pending request. Add `?auto_approve=session` or `?auto_approve=permanent` to simultaneously create an auto-approve rule for future tool calls of the same type.
+Approve a pending request. Add `?auto_approve=session` or `?auto_approve=permanent` to simultaneously create an auto-approve rule for future tool calls of the same type. On a high-risk request this is refused with `400` before anything is resolved, and the request stays pending: approve it without `auto_approve`, or deny it.
 
 ### `POST /api/v1/approvals/{id}/deny`
 
@@ -871,7 +871,7 @@ Deny a pending request.
 
 **Scope:** `approvals:read`
 
-List all auto-approve rules. Filter by agent with `?agent=name`. The list includes TOML-declared `config`-scoped rules (`auto_approve_tools` on `[[agents]]`); these are read-only and returned with an empty `id`.
+List all auto-approve rules. Filter by agent with `?agent=name`. The list includes TOML-declared `config`-scoped rules (`auto_approve_tools` on `[[agents]]`); these are read-only and returned with an empty `id`. A rule for a tool whose every call is high-risk (`tool_add`, `plugin_add`, `set_fallback`) carries `"inert": true`: it is kept but never applies.
 
 ### `POST /api/v1/auto-approve`
 
@@ -884,12 +884,13 @@ Create an auto-approve rule.
 ```json
 {
   "agent": "default",
-  "tool_name": "web_search",
+  "tool": "web_search",
   "scope": "permanent"
 }
 ```
 
-- `scope`: `"session"` (in-memory, cleared on restart) or `"permanent"` (persisted in SQLite). `"config"` is rejected with `400` — config-scoped rules can only be declared in TOML.
+- `scope`: `"session"` (in-memory, cleared on restart; needs `conversation_id`) or `"permanent"` (persisted in SQLite). `"config"` is rejected with `400` — config-scoped rules can only be declared in TOML.
+- A tool whose every call is high-risk (`tool_add`, `plugin_add`, `set_fallback`) is rejected with `400`: each of its calls is approved once or denied.
 
 ### `DELETE /api/v1/auto-approve/{id}`
 

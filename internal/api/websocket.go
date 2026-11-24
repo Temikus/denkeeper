@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -593,6 +594,9 @@ func (c *WSConn) handleApprovalResponse(f ApprovalResponseFrame) {
 
 	resolveCtx, resolveCancel := context.WithTimeout(c.connCtx, 30*time.Second)
 	defer resolveCancel()
+	if !c.allowStandingRule(resolveCtx, f) {
+		return
+	}
 	resolved, err := c.server.deps.Approvals.Resolve(resolveCtx, f.ApprovalID, approved, "ws")
 	if err != nil {
 		switch err {
@@ -628,6 +632,34 @@ func (c *WSConn) handleApprovalResponse(f ApprovalResponseFrame) {
 			c.hub.logger.Warn("ws: failed to send approval notification", "id", f.ApprovalID, "error", err)
 		}
 	}()
+}
+
+// allowStandingRule refuses an auto_* action on a high-risk call before the
+// request resolves, so it stays pending for a plain approve or deny. It sends
+// the error frame and returns false on a refusal or a lookup failure.
+func (c *WSConn) allowStandingRule(ctx context.Context, f ApprovalResponseFrame) bool {
+	var scope approval.AutoApproveScope
+	switch f.Action {
+	case "auto_session":
+		scope = approval.ScopeSession
+	case "auto_always":
+		scope = approval.ScopePermanent
+	default:
+		return true
+	}
+	err := c.server.deps.Approvals.CheckStandingRule(ctx, f.ApprovalID, scope, "ws")
+	switch {
+	case err == nil:
+		return true
+	case errors.Is(err, approval.ErrHighRisk):
+		c.sendError("", "high_risk", highRiskRuleRefusal)
+	case errors.Is(err, approval.ErrNotFound):
+		c.sendError("", "not_found", "approval not found")
+	default:
+		c.hub.logger.Error("ws: checking auto-approve rule", "id", f.ApprovalID, "error", err)
+		c.sendError("", "internal", "failed to resolve approval")
+	}
+	return false
 }
 
 // addAutoApproveRule creates the session or permanent rule an "auto_*"

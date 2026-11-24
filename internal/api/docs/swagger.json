@@ -630,7 +630,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Returns approval requests optionally filtered by status (pending, approved, denied, expired).",
+                "description": "Returns approval requests optionally filtered by status (pending, approved, denied, expired). A row whose tool call is high-risk carries risk: a fixed warning and the arguments that make it risky, in full.",
                 "produces": [
                     "application/json"
                 ],
@@ -693,7 +693,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Returns a single approval request by ID.",
+                "description": "Returns a single approval request by ID, with risk set when its tool call is high-risk.",
                 "produces": [
                     "application/json"
                 ],
@@ -754,7 +754,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Resolves a pending approval request. Used for both /approve and /deny endpoints. Optionally creates an auto-approve rule when auto_approve query param is set.",
+                "description": "Resolves a pending approval request. Used for both /approve and /deny endpoints. Optionally creates an auto-approve rule when auto_approve query param is set. A high-risk call (the request's risk field is set) can only be approved once: approving it with auto_approve answers 400 and leaves the request pending.",
                 "produces": [
                     "application/json"
                 ],
@@ -782,6 +782,15 @@
                         "description": "Resolved request",
                         "schema": {
                             "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_approval.Request"
+                        }
+                    },
+                    "400": {
+                        "description": "auto_approve on a high-risk call; the request stays pending",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     },
                     "404": {
@@ -830,7 +839,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Resolves a pending approval request. Used for both /approve and /deny endpoints. Optionally creates an auto-approve rule when auto_approve query param is set.",
+                "description": "Resolves a pending approval request. Used for both /approve and /deny endpoints. Optionally creates an auto-approve rule when auto_approve query param is set. A high-risk call (the request's risk field is set) can only be approved once: approving it with auto_approve answers 400 and leaves the request pending.",
                 "produces": [
                     "application/json"
                 ],
@@ -858,6 +867,15 @@
                         "description": "Resolved request",
                         "schema": {
                             "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_approval.Request"
+                        }
+                    },
+                    "400": {
+                        "description": "auto_approve on a high-risk call; the request stays pending",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     },
                     "404": {
@@ -1582,7 +1600,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Returns all auto-approve rules (session, permanent and config scopes), optionally filtered by agent name. Config-scoped rules come from the server TOML and carry an empty id — they cannot be deleted via this API.",
+                "description": "Returns all auto-approve rules (session, permanent and config scopes), optionally filtered by agent name. Config-scoped rules come from the server TOML and carry an empty id — they cannot be deleted via this API. A rule for a high-risk tool (tool_add, plugin_add, set_fallback) carries inert: true; it is kept but never applies.",
                 "produces": [
                     "application/json"
                 ],
@@ -1634,7 +1652,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Creates a new auto-approve rule for a specific agent and tool. Scope can be 'session' (requires conversation_id) or 'permanent'. The third scope, 'config', is declared in the server TOML (agents.auto_approve_tools) and is rejected here with 400.",
+                "description": "Creates a new auto-approve rule for a specific agent and tool. Scope can be 'session' (requires conversation_id) or 'permanent'. The third scope, 'config', is declared in the server TOML (agents.auto_approve_tools) and is rejected here with 400. A tool every call to which is high-risk (tool_add, plugin_add, set_fallback) is rejected with 400: those calls are approved one at a time.",
                 "consumes": [
                     "application/json"
                 ],
