@@ -1089,22 +1089,48 @@ func (s *Store) ListTaskSamples(ctx context.Context, runID, taskID int64) ([]Sam
 	return s.listSamples(ctx, runID, taskID)
 }
 
-// listSamples reads a run's samples, narrowed to one task when taskID > 0. The
-// column list lives here once: a sample gained a column twice already, and two
-// copies of it is how one reader silently stops carrying it.
+// PageTaskSamples returns one page of ListTaskSamples' rows, in the same order,
+// and the row count of the whole listing. limit must be positive.
+func (s *Store) PageTaskSamples(ctx context.Context, runID, taskID int64, offset, limit int) ([]Sample, int, error) {
+	if limit <= 0 {
+		return nil, 0, fmt.Errorf("paging samples of run %d: limit must be positive, got %d", runID, limit)
+	}
+	where, args := samplesWhere(runID, taskID)
+	var total int
+	if err := s.db.GetContext(ctx, &total, `SELECT COUNT(*) FROM eval_samples`+where, args...); err != nil {
+		return nil, 0, fmt.Errorf("counting samples of run %d: %w", runID, err)
+	}
+	page, err := s.selectSamples(ctx, runID, where+` ORDER BY id LIMIT ? OFFSET ?`,
+		append(args, limit, max(offset, 0))...)
+	if err != nil {
+		return nil, 0, err
+	}
+	return page, total, nil
+}
+
+// listSamples reads a run's samples, narrowed to one task when taskID > 0.
 func (s *Store) listSamples(ctx context.Context, runID, taskID int64) ([]Sample, error) {
+	where, args := samplesWhere(runID, taskID)
+	return s.selectSamples(ctx, runID, where+` ORDER BY id`, args...)
+}
+
+func samplesWhere(runID, taskID int64) (string, []any) {
+	if taskID > 0 {
+		return ` WHERE run_id = ? AND task_id = ?`, []any{runID, taskID}
+	}
+	return ` WHERE run_id = ?`, []any{runID}
+}
+
+// selectSamples holds the one copy of the sample column list: a sample gained
+// a column twice already, and two copies of it is how one reader silently
+// stops carrying it.
+func (s *Store) selectSamples(ctx context.Context, runID int64, tail string, args ...any) ([]Sample, error) {
 	out := []Sample{}
 	query := `SELECT id, run_id, variant_id, task_id, k_index, status, error, response, trace,
 	                 rounds, stop_reason, upstream, outcome_ok, outcome_rejected, outcome_failed,
 	                 outcome_denied, outcome_cached, outcome_suppressed, tokens_prompt,
 	                 tokens_completion, cost, latency_ms, created_at
-	          FROM eval_samples WHERE run_id = ?`
-	args := []any{runID}
-	if taskID > 0 {
-		query += ` AND task_id = ?`
-		args = append(args, taskID)
-	}
-	query += ` ORDER BY id`
+	          FROM eval_samples` + tail
 	if err := s.db.SelectContext(ctx, &out, query, args...); err != nil {
 		return nil, fmt.Errorf("listing samples of run %d: %w", runID, err)
 	}

@@ -413,6 +413,72 @@ func TestVerdict_LateOperatorMarksAreNotCounted(t *testing.T) {
 	}
 }
 
+// A re-judge must not move the judge's timestamp past an old-flow mark, or
+// the mark would start counting again.
+func TestVerdict_LateMarkStaysExcludedAfterReJudge(t *testing.T) {
+	f := newPairFixture(t, 1, []string{CategoryChat})
+	ctx := context.Background()
+	f.cleanRun(t)
+	f.createPairs(t)
+	item := f.items(t)[0] // the other item stays pending, so a re-judge is accepted
+
+	mustRecord(t, f.store, item.ID, WinnerA, "claude-code")
+	judgedAt := time.Now().UTC().Add(-time.Hour)
+	if _, err := f.store.db.ExecContext(ctx,
+		`UPDATE eval_verdicts SET created_at = ? WHERE item_id = ?`, judgedAt, item.ID); err != nil {
+		t.Fatalf("backdating judge verdict: %v", err)
+	}
+	if _, err := f.store.db.ExecContext(ctx,
+		`INSERT INTO eval_verdicts (item_id, winner, dimensions, notes, judge_ident, rubric_version, created_at)
+		 VALUES (?, ?, '{}', '', ?, '', ?)`,
+		item.ID, WinnerA, JudgeOperator, judgedAt.Add(30*time.Minute)); err != nil {
+		t.Fatalf("inserting late operator mark: %v", err)
+	}
+
+	mustRecord(t, f.store, item.ID, WinnerB, "claude-code")
+
+	judge := verdictsBy(t, f.store, f.run.ID, "claude-code")
+	if len(judge) != 1 || judge[0].Winner != WinnerB {
+		t.Fatalf("judge verdicts = %+v, want one row with the re-judged winner", judge)
+	}
+	if !judge[0].CreatedAt.Equal(judgedAt) {
+		t.Errorf("judge created_at = %v, want the first call's %v", judge[0].CreatedAt, judgedAt)
+	}
+	vv := f.onlyVerdict(t, f.summarizeWith(t, testOpts()))
+	if ag := vv.Judgment.OperatorAgreement; ag != nil {
+		t.Errorf("agreement = %+v, want nil: the mark came after the judge's first call", *ag)
+	}
+}
+
+// RecordVerdict returns the stored row: on a re-judge that is the first
+// call's id and time, not a fresh insert's.
+func TestRecordVerdict_ReJudgeReturnsStoredIDAndTime(t *testing.T) {
+	f := newPairFixture(t, 1, []string{CategoryChat})
+	ctx := context.Background()
+	f.cleanRun(t)
+	f.createPairs(t)
+	items := f.items(t)
+
+	first, err := f.store.RecordVerdict(ctx, Verdict{ItemID: items[0].ID, Winner: WinnerA, JudgeIdent: "claude-code"})
+	if err != nil {
+		t.Fatalf("RecordVerdict: %v", err)
+	}
+	// An insert in between moves the connection's last insert rowid.
+	if _, err := f.store.RecordVerdict(ctx, Verdict{ItemID: items[1].ID, Winner: WinnerA, JudgeIdent: JudgeOperator}); err != nil {
+		t.Fatalf("RecordVerdict(operator): %v", err)
+	}
+	again, err := f.store.RecordVerdict(ctx, Verdict{ItemID: items[0].ID, Winner: WinnerB, JudgeIdent: "claude-code"})
+	if err != nil {
+		t.Fatalf("RecordVerdict(re-judge): %v", err)
+	}
+	if again.ID != first.ID {
+		t.Errorf("re-judge id = %d, want the stored row's %d", again.ID, first.ID)
+	}
+	if !again.CreatedAt.Equal(first.CreatedAt) {
+		t.Errorf("re-judge created_at = %v, want the first call's %v", again.CreatedAt, first.CreatedAt)
+	}
+}
+
 // A candidate that wins overall while losing a category must say so: the
 // rolled-up number is exactly what hides a tool-heavy regression.
 func TestVerdict_CategoryDivergenceIsSurfaced(t *testing.T) {

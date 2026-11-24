@@ -377,13 +377,12 @@ func (s *Server) handleEvalSamples(ctx context.Context, _ *mcp.CallToolRequest, 
 	if err != nil {
 		return toolError("listing samples: " + err.Error()), nil, nil
 	}
-	all, err := store.ListTaskSamples(ctx, input.RunID, input.TaskID)
+	page, total, err := store.PageTaskSamples(ctx, input.RunID, input.TaskID, input.Offset, clampSamplesLimit(input.Limit))
 	if err != nil {
 		return toolError("listing samples: " + err.Error()), nil, nil
 	}
-	page := pageSamples(all, input.Offset, clampSamplesLimit(input.Limit))
 	r, jsonErr := toolJSON(evalSamplesResult{
-		RunID: input.RunID, Variants: variants, Samples: page, Count: len(page), Total: len(all),
+		RunID: input.RunID, Variants: variants, Samples: page, Count: len(page), Total: total,
 	})
 	return r, nil, jsonErr
 }
@@ -441,16 +440,6 @@ func clampSamplesLimit(limit int) int {
 		return evalSamplesDefaultLimit
 	}
 	return min(limit, evalSamplesMaxLimit)
-}
-
-// pageSamples slices one page, always returning a non-nil slice so the result
-// carries [] rather than null.
-func pageSamples(all []eval.Sample, offset, limit int) []eval.Sample {
-	offset = max(offset, 0)
-	if offset >= len(all) {
-		return []eval.Sample{}
-	}
-	return all[offset:min(offset+limit, len(all))]
 }
 
 // evalRunStatus is what a headless judge polls while a run finishes.

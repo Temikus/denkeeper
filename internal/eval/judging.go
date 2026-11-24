@@ -349,19 +349,19 @@ func (s *Store) RecordVerdict(ctx context.Context, v Verdict) (*Verdict, error) 
 		return nil, err
 	}
 
-	res, err := tx.ExecContext(ctx,
+	// created_at stays the first call's time on a re-judge: countAgreement
+	// drops marks made after it, and a moving timestamp would let them back in.
+	// RETURNING, not LastInsertId, because the update path inserts nothing.
+	if err := tx.QueryRowxContext(ctx,
 		`INSERT INTO eval_verdicts
 		   (item_id, winner, dimensions, notes, judge_ident, rubric_version, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (item_id, judge_ident) DO UPDATE SET
 		     winner = excluded.winner, dimensions = excluded.dimensions,
-		     notes = excluded.notes, rubric_version = excluded.rubric_version,
-		     created_at = excluded.created_at`,
-		v.ItemID, v.Winner, v.Dimensions, v.Notes, v.JudgeIdent, v.RubricVersion, v.CreatedAt)
-	if err != nil {
-		return nil, fmt.Errorf("recording verdict for item %d: %w", v.ItemID, err)
-	}
-	if v.ID, err = res.LastInsertId(); err != nil {
+		     notes = excluded.notes, rubric_version = excluded.rubric_version
+		 RETURNING id, created_at`,
+		v.ItemID, v.Winner, v.Dimensions, v.Notes, v.JudgeIdent, v.RubricVersion, v.CreatedAt,
+	).Scan(&v.ID, &v.CreatedAt); err != nil {
 		return nil, fmt.Errorf("recording verdict for item %d: %w", v.ItemID, err)
 	}
 	if v.JudgeIdent != JudgeOperator {

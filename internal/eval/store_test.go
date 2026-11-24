@@ -558,3 +558,69 @@ func TestStore_ListTaskSamplesNarrowsWithoutLosingColumns(t *testing.T) {
 		t.Errorf("got %d samples for task 0, want every sample in the run", len(all))
 	}
 }
+
+// A page must be the same slice of ListTaskSamples' order that paging in
+// memory would give, with total counting the whole listing, not the page.
+func TestStore_PageTaskSamplesMatchesTheFullListing(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	set := mustTaskSet(t, s, "set")
+	first := mustTask(t, s, set.ID, "first prompt")
+	second := mustTask(t, s, set.ID, "second prompt")
+	run, variants, err := s.CreateRun(ctx,
+		Run{TaskSetID: set.ID, BaseAgent: "p", K: 3, CostCap: 1, AsOf: time.Now()},
+		[]Variant{{Name: "a"}, {Name: "b"}})
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	other, _, err := s.CreateRun(ctx,
+		Run{TaskSetID: set.ID, BaseAgent: "p", K: 1, CostCap: 1, AsOf: time.Now()},
+		[]Variant{{Name: "a"}})
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	// Interleave the tasks so a task's rows are not one contiguous id range.
+	for k := range 3 {
+		for _, task := range []*Task{first, second} {
+			for _, v := range variants {
+				if _, err := s.AddSample(ctx, Sample{
+					RunID: run.ID, VariantID: v.ID, TaskID: task.ID, KIndex: k, Status: SampleOK,
+				}); err != nil {
+					t.Fatalf("AddSample: %v", err)
+				}
+			}
+		}
+	}
+	if _, err := s.AddSample(ctx, Sample{RunID: other.ID, VariantID: variants[0].ID, TaskID: first.ID, Status: SampleOK}); err != nil {
+		t.Fatalf("AddSample: %v", err)
+	}
+
+	for _, taskID := range []int64{0, first.ID} {
+		full, err := s.ListTaskSamples(ctx, run.ID, taskID)
+		if err != nil {
+			t.Fatalf("ListTaskSamples(%d): %v", taskID, err)
+		}
+		for _, pg := range []struct{ offset, limit int }{{0, 4}, {4, 4}, {2, 3}, {len(full) - 1, 5}, {len(full), 5}, {-3, 2}} {
+			page, total, err := s.PageTaskSamples(ctx, run.ID, taskID, pg.offset, pg.limit)
+			if err != nil {
+				t.Fatalf("PageTaskSamples(task %d, %+v): %v", taskID, pg, err)
+			}
+			if total != len(full) {
+				t.Errorf("task %d %+v: total %d, want %d", taskID, pg, total, len(full))
+			}
+			start := min(max(pg.offset, 0), len(full))
+			want := full[start:min(start+pg.limit, len(full))]
+			if len(page) != len(want) || page == nil {
+				t.Fatalf("task %d %+v: got %d rows (nil=%v), want %d", taskID, pg, len(page), page == nil, len(want))
+			}
+			for i := range want {
+				if page[i].ID != want[i].ID {
+					t.Errorf("task %d %+v: row %d is sample %d, want %d", taskID, pg, i, page[i].ID, want[i].ID)
+				}
+			}
+		}
+	}
+	if _, _, err := s.PageTaskSamples(ctx, run.ID, 0, 0, 0); err == nil {
+		t.Error("PageTaskSamples with limit 0 = nil error, want an error")
+	}
+}

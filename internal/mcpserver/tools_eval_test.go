@@ -491,6 +491,17 @@ func TestEvalSamples_Paging(t *testing.T) {
 		t.Errorf("limit 1 offset 1 returned sample %d, want the second, %d", smp.ID, rows[1].ID)
 	}
 
+	got = callEvalSamples(t, s, evalSamplesInput{RunID: runID, TaskID: rows[1].TaskID, Limit: 1, Offset: 1})
+	if got.Count != 1 || got.Total != 2 {
+		t.Fatalf("task_id with limit 1 offset 1: count %d total %d, want 1/2", got.Count, got.Total)
+	}
+	if err := json.Unmarshal(got.Samples[0], &smp); err != nil {
+		t.Fatalf("unmarshal sample: %v", err)
+	}
+	if smp.ID != rows[1].ID {
+		t.Errorf("task_id with limit 1 offset 1 returned sample %d, want %d", smp.ID, rows[1].ID)
+	}
+
 	got = callEvalSamples(t, s, evalSamplesInput{RunID: runID, Offset: 5})
 	if got.Count != 0 || got.Total != 2 || got.Samples == nil {
 		t.Errorf("offset past the end: count %d total %d samples %v, want an empty array and total 2",
