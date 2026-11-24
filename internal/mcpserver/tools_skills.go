@@ -10,6 +10,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/audit"
 	"github.com/Temikus/denkeeper/internal/configmcp"
+	"github.com/Temikus/denkeeper/internal/skill"
 	"github.com/Temikus/denkeeper/internal/skilleffect"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -257,8 +258,7 @@ func (s *Server) handleSkillUpdate(ctx context.Context, _ *mcp.CallToolRequest, 
 		}
 	}
 
-	payload := configmcp.MergeSkillFields(newName, existing, input.Description, input.Version, input.Triggers, input.Body, input.MaxToolRounds, input.MaxOutputTokens, input.RequiresTools)
-	warnings, err := configmcp.LintSkillWrite(s.deps.Scheduler, &existing, payload)
+	payload, warnings, err := s.buildSkillUpdate(newName, existing, input)
 	if err != nil {
 		return toolError(err.Error()), nil, nil
 	}
@@ -276,6 +276,19 @@ func (s *Server) handleSkillUpdate(ctx context.Context, _ *mcp.CallToolRequest, 
 	}
 
 	return toolText("skill updated: " + input.Name + configmcp.FormatSkillWarnings(warnings)), nil, nil
+}
+
+// buildSkillUpdate renders and lints an edit.
+func (s *Server) buildSkillUpdate(newName string, existing skill.Skill, input skillUpdateInput) (string, []string, error) {
+	payload, err := configmcp.MergeSkillFields(newName, existing, input.Description, input.Version, input.Triggers, input.Body, input.MaxToolRounds, input.MaxOutputTokens, input.RequiresTools)
+	if err != nil {
+		return "", nil, fmt.Errorf("building skill: %w", err)
+	}
+	warnings, err := configmcp.LintSkillWrite(s.deps.Scheduler, &existing, payload)
+	if err != nil {
+		return "", nil, err
+	}
+	return payload, warnings, nil
 }
 
 func (s *Server) handleSkillDelete(ctx context.Context, _ *mcp.CallToolRequest, input skillDeleteInput) (*mcp.CallToolResult, any, error) {

@@ -5,10 +5,12 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -573,12 +575,20 @@ func (s *Server) handleSkillGet(_ context.Context, req *mcp.CallToolRequest) (*m
 }
 
 // MergeSkillFields merges optional update fields with existing skill values and
-// returns the payload built with the given name. A nil pointer (or a nil slice)
-// keeps the existing value — notably, an omitted maxToolRounds, maxOutputTokens
-// or requiresTools keeps the caps and the declared tool set the skill already
-// carries rather than silently clearing them. A non-nil but empty slice clears,
-// matching triggers.
-func MergeSkillFields(name string, existing skill.Skill, desc, ver *string, triggers []string, body *string, maxToolRounds, maxOutputTokens *int, requiresTools []string) string {
+// renders the payload with the given name in the skill's own dialect, keeping
+// frontmatter keys Denkeeper does not read (skill.Render). A nil pointer (or a
+// nil slice) keeps the existing value — notably, an omitted maxToolRounds,
+// maxOutputTokens or requiresTools keeps the caps and the declared tool set the
+// skill already carries rather than silently clearing them. A non-nil but empty
+// slice clears, matching triggers.
+func MergeSkillFields(name string, existing skill.Skill, desc, ver *string, triggers []string, body *string, maxToolRounds, maxOutputTokens *int, requiresTools []string) (string, error) {
+	// Writes find a skill's file by name (skillFileRel), so a folder named
+	// otherwise would get a second, flat copy instead of the edit.
+	if existing.Dir != "" && filepath.Base(existing.Dir) != existing.Name {
+		folder := filepath.Base(existing.Dir)
+		return "", fmt.Errorf("skill %q keeps its files in the %s folder, which is not named after it, so this edit "+
+			"cannot reach them. Edit %s in the skills directory (%w)", existing.Name, folder, path.Join(folder, "SKILL.md"), ErrSkillNotEditable)
+	}
 	description := existing.Description
 	if desc != nil {
 		description = *desc
@@ -607,7 +617,28 @@ func MergeSkillFields(name string, existing skill.Skill, desc, ver *string, trig
 	if requiresTools != nil {
 		reqTools = requiresTools
 	}
-	return BuildSkillPayload(name, description, version, trig, b, rounds, outTokens, reqTools)
+	payload, err := skill.Render(existing, skill.Fields{
+		Name: name, Description: description, Version: version, Triggers: trig,
+		MaxToolRounds: rounds, MaxOutputTokens: outTokens, RequiresTools: reqTools,
+	}, b)
+	return payload, explainRenderError(err, existing)
+}
+
+// explainRenderError says what a reader can do when the unknown-key guard in
+// skill.Render refuses a rewrite, naming the file when the skill knows it (only
+// a directory-form skill records its path). Other errors pass through unchanged.
+func explainRenderError(err error, existing skill.Skill) error {
+	if !errors.Is(err, skill.ErrUnknownKeysChanged) {
+		return err
+	}
+	where := "the skill's file in the agent's skills directory"
+	if existing.Dir != "" {
+		// Relative to the skills directory: Dir is a server path, and callers
+		// over REST or MCP must not learn the host layout from it.
+		where = path.Join(filepath.Base(existing.Dir), "SKILL.md") + " in the skills directory"
+	}
+	return fmt.Errorf("the edit was not saved: denkeeper could not rewrite this skill's frontmatter "+
+		"without changing keys it does not read. Edit %s by hand (%w)", where, err)
 }
 
 func (s *Server) handleSkillUpdate(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -650,7 +681,10 @@ func (s *Server) handleSkillUpdate(ctx context.Context, req *mcp.CallToolRequest
 		}
 	}
 
-	payload := MergeSkillFields(effectiveName, existing, input.Description, input.Version, input.Triggers, input.Body, input.MaxToolRounds, input.MaxOutputTokens, input.RequiresTools)
+	payload, err := MergeSkillFields(effectiveName, existing, input.Description, input.Version, input.Triggers, input.Body, input.MaxToolRounds, input.MaxOutputTokens, input.RequiresTools)
+	if err != nil {
+		return toolError("building skill: " + err.Error()), nil
+	}
 	applyFn, summary := s.buildSkillUpdateAction(input.Name, effectiveName, isRename, payload)
 
 	return s.applyLintedSkill(ctx, &existing, approval.ActionKindUpdateSkill,
@@ -696,6 +730,17 @@ func (s *Server) buildSkillUpdateAction(oldName, effectiveName string, isRename 
 	return fn, "Update skill: " + oldName
 }
 
+// replaceOnce replaces old in body, refusing unless it matches exactly once.
+func replaceOnce(body, old, replacement string) (string, error) {
+	switch count := strings.Count(body, old); {
+	case count == 0:
+		return "", errors.New("old_string not found in skill body")
+	case count > 1:
+		return "", fmt.Errorf("old_string matches %d times; must match exactly once", count)
+	}
+	return strings.Replace(body, old, replacement, 1), nil
+}
+
 func (s *Server) handleSkillPatch(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	if s.deps.AgentSkillsDir == "" {
 		return toolError("skill_patch is not available: no agent skills directory configured"), nil
@@ -732,16 +777,15 @@ func (s *Server) handleSkillPatch(ctx context.Context, req *mcp.CallToolRequest)
 		}
 	}
 
-	count := strings.Count(sk.Body, input.OldString)
-	if count == 0 {
-		return toolError("old_string not found in skill body"), nil
+	newBody, err := replaceOnce(sk.Body, input.OldString, input.NewString)
+	if err != nil {
+		return toolError(err.Error()), nil
 	}
-	if count > 1 {
-		return toolError(fmt.Sprintf("old_string matches %d times; must match exactly once", count)), nil
+	// Body only, so the frontmatter block is reused byte for byte.
+	payload, err := MergeSkillFields(input.Name, sk, nil, nil, nil, &newBody, nil, nil, nil)
+	if err != nil {
+		return toolError("building skill: " + err.Error()), nil
 	}
-
-	newBody := strings.Replace(sk.Body, input.OldString, input.NewString, 1)
-	payload := BuildSkillPayload(input.Name, sk.Description, sk.Version, sk.Triggers, newBody, sk.MaxToolRounds, sk.MaxOutputTokens, sk.Requires.Tools)
 
 	deps := s.deps
 	skillName := input.Name
@@ -1888,13 +1932,48 @@ func checkSkillPayloadSize(payload string, maxBytes int) error {
 	return nil
 }
 
-// writeSkillFileAtomic writes payload to "<name>.md" within root via a
-// randomized temp-file + rename, so a partial write never replaces a good file
-// and two concurrent writers to the same skill name cannot share (and corrupt)
-// one temp file. Both operations are confined to root and reject names that
-// escape it.
+// skillFileRel is where name's skill file lives under root: "<name>.md" when
+// that exists, else "<name>/SKILL.md" when a "<name>" folder exists (a
+// directory-form skill, which skill_write_file creates under the skill's
+// name), else "<name>.md". Write, read and remove all resolve through it, so
+// the undo journal's prior bytes and a revert land on the same file.
+func skillFileRel(root *os.Root, name string) (string, error) {
+	flat := name + ".md"
+	if _, err := root.Lstat(flat); err == nil {
+		return flat, nil
+	} else if !os.IsNotExist(err) {
+		return "", fmt.Errorf("checking skill file %s: %w", flat, err)
+	}
+	fi, err := root.Lstat(name)
+	if err == nil && fi.IsDir() {
+		return name + "/SKILL.md", nil
+	}
+	if err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("checking skill folder %s: %w", name, err)
+	}
+	return flat, nil
+}
+
+// setDirMeta gives s the folder and sub-files the loader would, when name's
+// file lives in a folder. A payload parses without them, so without this an
+// edit would leave memory treating the skill as flat.
+func setDirMeta(root *os.Root, agentSkillsDir, name string, s *skill.Skill) {
+	if rel, err := skillFileRel(root, name); err == nil && rel != name+".md" {
+		s.Dir = filepath.Join(agentSkillsDir, name)
+		s.SubFileNames = skill.ScanSubFiles(s.Dir)
+	}
+}
+
+// writeSkillFileAtomic writes payload to name's skill file within root
+// (skillFileRel) via a randomized temp-file + rename, so a partial write never
+// replaces a good file and two concurrent writers to the same skill name
+// cannot share (and corrupt) one temp file. Both operations are confined to
+// root and reject names that escape it.
 func writeSkillFileAtomic(root *os.Root, name, payload string) error {
-	final := name + ".md"
+	final, err := skillFileRel(root, name)
+	if err != nil {
+		return err
+	}
 
 	// Unique temp name within root, created O_EXCL so it can never collide with
 	// a concurrent writer's temp file. Loader ignores it (not a *.md file).
@@ -1933,8 +2012,9 @@ func writeSkillFileAtomic(root *os.Root, name, payload string) error {
 	return nil
 }
 
-// ReadSkillFile returns the raw on-disk bytes of "<name>.md" from the agent's
-// skills directory, read through an os.Root so the read is confined to that
+// ReadSkillFile returns the raw on-disk bytes of name's skill file
+// (skillFileRel: "<name>.md" or "<name>/SKILL.md") from the agent's skills
+// directory, read through an os.Root so the read is confined to that
 // directory and cannot escape it via traversal or symlink — the same hard
 // boundary the write and remove helpers above sit behind.
 //
@@ -1943,9 +2023,8 @@ func writeSkillFileAtomic(root *os.Root, name, payload string) error {
 // journal these bytes as the "state before a mutation" must not mistake an
 // unreadable file for an absent one.
 //
-// The bytes are returned verbatim rather than re-serialized through
-// BuildSkillPayload, so a frontmatter field this build does not know about
-// still survives a round trip through the undo journal.
+// The bytes are returned verbatim, so the undo journal restores the file
+// exactly: dialect, comments and formatting included.
 func ReadSkillFile(agentSkillsDir, name string) (string, bool, error) {
 	if err := ValidateSkillName(name); err != nil {
 		return "", false, err
@@ -1959,7 +2038,11 @@ func ReadSkillFile(agentSkillsDir, name string) (string, bool, error) {
 	}
 	defer func() { _ = root.Close() }()
 
-	f, err := root.Open(name + ".md")
+	rel, err := skillFileRel(root, name)
+	if err != nil {
+		return "", false, err
+	}
+	f, err := root.Open(rel)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return "", false, nil
@@ -1975,41 +2058,87 @@ func ReadSkillFile(agentSkillsDir, name string) (string, bool, error) {
 	return string(data), true, nil
 }
 
-// SkillFileExists reports whether name has a skill file on disk in either form,
-// "<name>.md" or "<name>/SKILL.md", whether or not it loaded. Like ReadSkillFile,
-// an IO failure other than "not found" is an error, not "absent".
-func SkillFileExists(agentSkillsDir, name string) (bool, error) {
+// skillOnDisk says what name has on disk: a skill file in either form, or only
+// a "<name>" folder with no SKILL.md (what deleting a directory skill leaves).
+type skillOnDisk int
+
+const (
+	skillAbsent skillOnDisk = iota
+	skillFilePresent
+	skillFolderOnly
+)
+
+func skillPresence(agentSkillsDir, name string) (skillOnDisk, error) {
 	if err := ValidateSkillName(name); err != nil {
-		return false, err
+		return skillAbsent, err
 	}
 	root, err := os.OpenRoot(agentSkillsDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return false, nil
+			return skillAbsent, nil
 		}
-		return false, fmt.Errorf("opening skills directory: %w", err)
+		return skillAbsent, fmt.Errorf("opening skills directory: %w", err)
 	}
 	defer func() { _ = root.Close() }()
 
-	for _, p := range []string{name + ".md", name + "/SKILL.md"} {
-		if _, err := root.Lstat(p); err == nil {
-			return true, nil
-		} else if !os.IsNotExist(err) {
-			return false, fmt.Errorf("checking skill file %s: %w", p, err)
-		}
+	if _, err := root.Lstat(name + ".md"); err == nil {
+		return skillFilePresent, nil
+	} else if !os.IsNotExist(err) {
+		return skillAbsent, fmt.Errorf("checking skill file %s.md: %w", name, err)
 	}
-	return false, nil
+	// Only a real folder counts: a plain file called <name> is not a skill.
+	fi, err := root.Lstat(name)
+	if os.IsNotExist(err) {
+		return skillAbsent, nil
+	}
+	if err != nil {
+		return skillAbsent, fmt.Errorf("checking skill folder %s: %w", name, err)
+	}
+	if !fi.IsDir() {
+		return skillAbsent, nil
+	}
+	if _, err := root.Lstat(name + "/SKILL.md"); err == nil {
+		return skillFilePresent, nil
+	} else if !os.IsNotExist(err) {
+		return skillAbsent, fmt.Errorf("checking skill file %s/SKILL.md: %w", name, err)
+	}
+	return skillFolderOnly, nil
 }
 
-// RefuseExistingSkill returns an error wrapping ErrSkillExists if name already
-// has a skill file in either form.
+// SkillFileExists reports whether name is taken on disk: a skill file in
+// either form, "<name>.md" or "<name>/SKILL.md", whether or not it loaded, or
+// a "<name>" folder left without its SKILL.md. Like ReadSkillFile, an IO
+// failure other than "not found" is an error, not "absent".
+func SkillFileExists(agentSkillsDir, name string) (bool, error) {
+	p, err := skillPresence(agentSkillsDir, name)
+	return p != skillAbsent, err
+}
+
+// RefuseExistingSkill returns an error wrapping ErrSkillExists if name is
+// taken on disk. A leftover folder is refused too: a new skill written into it
+// would silently take on the old skill's files.
 func RefuseExistingSkill(agentSkillsDir, name string) error {
-	exists, err := SkillFileExists(agentSkillsDir, name)
+	return refuseExisting(agentSkillsDir, name, false)
+}
+
+// RefuseExistingSkillForRestore is RefuseExistingSkill for an undo of a
+// delete: a leftover folder is where the deleted skill's files still are, so
+// only a skill file refuses.
+func RefuseExistingSkillForRestore(agentSkillsDir, name string) error {
+	return refuseExisting(agentSkillsDir, name, true)
+}
+
+func refuseExisting(agentSkillsDir, name string, restoring bool) error {
+	p, err := skillPresence(agentSkillsDir, name)
 	if err != nil {
 		return err
 	}
-	if exists {
+	switch {
+	case p == skillFilePresent:
 		return fmt.Errorf("skill %q %w", name, ErrSkillExists)
+	case p == skillFolderOnly && !restoring:
+		return fmt.Errorf("skill %q %w as a %s folder with no SKILL.md, likely left by a deleted skill; "+
+			"revert the delete, or remove or rename the folder by hand", name, ErrSkillExists, name)
 	}
 	return nil
 }
@@ -2027,10 +2156,21 @@ func SkillPayloadFromFile(content string) string {
 }
 
 // ApplySkillCreate writes the skill file to disk and appends it to the
-// in-memory skill list. It refuses a name that already has a file with
-// ErrSkillExists. Callers hold LockSkillCreate so that check stays true
-// through the write.
+// in-memory skill list. It refuses a name that already has a file, or a
+// leftover folder, with ErrSkillExists. Callers hold LockSkillCreate so that
+// check stays true through the write.
 func ApplySkillCreate(agentSkillsDir string, appendSkill func(skill.Skill), logger skillLogger, payload string, maxBytes int) error {
+	return applySkillCreate(agentSkillsDir, appendSkill, logger, payload, maxBytes, false)
+}
+
+// ApplySkillRestore is ApplySkillCreate for an undo of a delete: it writes
+// into a folder a deleted directory skill left behind, where that skill's
+// other files still are.
+func ApplySkillRestore(agentSkillsDir string, appendSkill func(skill.Skill), logger skillLogger, payload string, maxBytes int) error {
+	return applySkillCreate(agentSkillsDir, appendSkill, logger, payload, maxBytes, true)
+}
+
+func applySkillCreate(agentSkillsDir string, appendSkill func(skill.Skill), logger skillLogger, payload string, maxBytes int, restoring bool) error {
 	if err := checkSkillPayloadSize(payload, maxBytes); err != nil {
 		return err
 	}
@@ -2038,7 +2178,7 @@ func ApplySkillCreate(agentSkillsDir string, appendSkill func(skill.Skill), logg
 	if err != nil {
 		return fmt.Errorf("parsing skill: %w", err)
 	}
-	if err := RefuseExistingSkill(agentSkillsDir, s.Name); err != nil {
+	if err := refuseExisting(agentSkillsDir, s.Name, restoring); err != nil {
 		return err
 	}
 
@@ -2051,6 +2191,7 @@ func ApplySkillCreate(agentSkillsDir string, appendSkill func(skill.Skill), logg
 	if err := writeSkillFileAtomic(root, s.Name, payload); err != nil {
 		return err
 	}
+	setDirMeta(root, agentSkillsDir, s.Name, s)
 
 	appendSkill(*s)
 	logger.Info("skill created via config MCP", "name", s.Name, "file", filepath.Join(agentSkillsDir, s.Name+".md"))
@@ -2080,10 +2221,42 @@ func ApplySkillUpdate(agentSkillsDir string, updateSkill func(string, skill.Skil
 	if err := writeSkillFileAtomic(root, name, payload); err != nil {
 		return err
 	}
+	setDirMeta(root, agentSkillsDir, name, s)
 
 	updateSkill(name, *s)
 	logger.Info("skill updated via config MCP", "name", name, "file", filepath.Join(agentSkillsDir, name+".md"))
 	return nil
+}
+
+// CheckSkillRename refuses a rename that cannot be done or undone safely: a
+// directory-form source (the journal cannot move a folder back), or a new
+// name already taken on disk, loaded or not, the same check a create makes.
+// The tracked writer runs it before journaling, so a refused rename leaves no
+// revision; ApplySkillRename runs it again for untracked writes.
+func CheckSkillRename(agentSkillsDir, oldName, newName string) error {
+	if err := ValidateSkillName(oldName); err != nil {
+		return err
+	}
+	root, err := os.OpenRoot(agentSkillsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("opening skills directory: %w", err)
+	}
+	oldRel, err := skillFileRel(root, oldName)
+	_ = root.Close()
+	if err != nil {
+		return err
+	}
+	if oldRel != oldName+".md" {
+		return fmt.Errorf("skill %q keeps its files in the %s folder: rename its folder by hand, then "+
+			"change the name field in its SKILL.md (%w)", oldName, oldName, ErrSkillNotEditable)
+	}
+	if newName == oldName {
+		return nil
+	}
+	return RefuseExistingSkill(agentSkillsDir, newName)
 }
 
 // ApplySkillRename writes the skill under its new name, removes the old file,
@@ -2103,6 +2276,10 @@ func ApplySkillRename(agentSkillsDir string, removeSkill func(string) bool, appe
 		return err
 	}
 
+	if err := CheckSkillRename(agentSkillsDir, oldName, s.Name); err != nil {
+		return err
+	}
+
 	root, err := openSkillRoot(agentSkillsDir)
 	if err != nil {
 		return err
@@ -2114,7 +2291,7 @@ func ApplySkillRename(agentSkillsDir string, removeSkill func(string) bool, appe
 		return err
 	}
 
-	// Remove old file (confined to root).
+	// Remove old file (confined to root). CheckSkillRename made it flat.
 	if err := root.Remove(oldName + ".md"); err != nil && !os.IsNotExist(err) {
 		logger.Info("old skill file removal failed (new file written successfully)", "old", oldName, "new", s.Name, "error", err)
 	}
@@ -2126,10 +2303,13 @@ func ApplySkillRename(agentSkillsDir string, removeSkill func(string) bool, appe
 	return nil
 }
 
-// RemoveSkillFile deletes "<name>.md" from the agent's skills directory through
-// an os.Root, so the removal is confined to that directory and cannot escape it
-// via traversal or symlink. A missing file or missing directory is not an
-// error. Callers handle the in-memory removal separately.
+// RemoveSkillFile deletes name's skill file (skillFileRel) from the agent's
+// skills directory through an os.Root, so the removal is confined to that
+// directory and cannot escape it via traversal or symlink. For a
+// directory-form skill only SKILL.md goes: the loader then skips the folder,
+// and its other files stay for a revert to come back to. A missing file or
+// missing directory is not an error. Callers handle the in-memory removal
+// separately.
 func RemoveSkillFile(agentSkillsDir, name string) error {
 	if err := ValidateSkillName(name); err != nil {
 		return err
@@ -2143,43 +2323,24 @@ func RemoveSkillFile(agentSkillsDir, name string) error {
 	}
 	defer func() { _ = root.Close() }()
 
-	if err := root.Remove(name + ".md"); err != nil && !os.IsNotExist(err) {
+	rel, err := skillFileRel(root, name)
+	if err != nil {
+		return err
+	}
+	if err := root.Remove(rel); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("removing skill file: %w", err)
 	}
 	return nil
 }
 
-// BuildSkillPayload constructs the canonical +++ frontmatter + body format.
-//
-// This is the single frontmatter writer behind every CRUD surface (config MCP,
-// external MCP, REST), so a field missing here is silently dropped from any
-// skill that is updated or patched. The optional fields (the two caps and
-// requires) are omitted when empty, leaving skills that use none of them
-// byte-identical to what earlier versions wrote.
-//
-// Table-valued fields (requires) must stay LAST in fm: a TOML table header
-// captures every key after it, so a scalar declared below one would be parsed
-// as a member of that table.
+// BuildSkillPayload writes a new skill file (skill.RenderNew: TOML, +++). It is
+// the create path on every surface; edits go through MergeSkillFields, which
+// keeps the skill's dialect and unknown keys.
 func BuildSkillPayload(name, description, version string, triggers []string, body string, maxToolRounds, maxOutputTokens int, requiresTools []string) string {
-	type fm struct {
-		Name            string              `toml:"name"`
-		Description     string              `toml:"description,omitempty"`
-		Version         string              `toml:"version,omitempty"`
-		Triggers        []string            `toml:"triggers,omitempty"`
-		MaxToolRounds   int                 `toml:"max_tool_rounds,omitempty"`
-		MaxOutputTokens int                 `toml:"max_output_tokens,omitempty"`
-		Requires        skill.SkillRequires `toml:"requires,omitempty"`
-	}
-	data, _ := toml.Marshal(fm{
-		Name:            name,
-		Description:     description,
-		Version:         version,
-		Triggers:        triggers,
-		MaxToolRounds:   maxToolRounds,
-		MaxOutputTokens: maxOutputTokens,
-		Requires:        skill.SkillRequires{Tools: requiresTools},
-	})
-	return "+++\n" + strings.TrimSpace(string(data)) + "\n+++\n\n" + strings.TrimSpace(body)
+	return skill.RenderNew(skill.Fields{
+		Name: name, Description: description, Version: version, Triggers: triggers,
+		MaxToolRounds: maxToolRounds, MaxOutputTokens: maxOutputTokens, RequiresTools: requiresTools,
+	}, body)
 }
 
 // BuildSchedulePayload marshals the schedule config to TOML for storage as

@@ -7416,6 +7416,15 @@
                             }
                         }
                     },
+                    "422": {
+                        "description": "The skill's file cannot take this edit (unknown frontmatter keys would change, or a directory skill's folder is not named after it or is being renamed); edit it by hand",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "500": {
                         "description": "Update failed",
                         "schema": {
