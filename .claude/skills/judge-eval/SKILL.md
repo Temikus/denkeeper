@@ -68,8 +68,9 @@ pair you have already seen, and never look up your earlier verdict.
    3. Record the operator's call with `eval_verdict` and
       `judge_ident: "operator"`. The item stays pending.
    4. When every mark is in, hand the same item ids to a subagent. Give it the
-      ids and this skill, tell it to judge them as in step 3, and tell it
-      nothing about the operator's calls. You have seen the marks, so your own
+      ids and this skill, tell it to judge them as in step 3 with its own
+      verdicts (never `judge_ident: "operator"`), and tell it nothing about the
+      operator's calls. You have seen the marks, so your own
       verdict on these items would not be independent.
    5. `eval_summary` reports the agreement rate. **Below roughly 80 %
       agreement, stop and fix the rubric below before judging the rest.** A

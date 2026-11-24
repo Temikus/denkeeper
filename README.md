@@ -432,7 +432,7 @@ upgrade: judge win-rate 62% over 45 judged pair(s) meets the 55% threshold, and 
   ↳ wins overall; regresses on tool_heavy
 ```
 
-`GET /eval/runs/{id}/pairs` is the unblinded view of the same evidence — which variant produced each side, every verdict with its dimensions and notes, and the resolved outcome per pair. It is REST-only on purpose: the judge's MCP tools must not be able to look up which side was which while they can still judge; `eval_samples` opens once every item has a verdict.
+`GET /eval/runs/{id}/pairs` is the unblinded view of the same evidence — which variant produced each side, every verdict with its dimensions and notes, and the resolved outcome per pair. It is REST-only on purpose: the judge's MCP tools must not be able to look up which side was which while they can still judge; `eval_samples` opens once the run is terminal and every item has a judge verdict (operator marks don't count).
 
 The Evals page renders the same evidence: the verdict with its gate table, the scorecard, and each judged pair with the judge's dimensions and notes. Full docs: [Evals](https://denkeeper.io/docs/concepts/evals/).
 
