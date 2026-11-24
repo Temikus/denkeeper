@@ -1,9 +1,11 @@
 <script>
+  import { tick, untrack } from 'svelte'
   import { api } from '../api.js'
   import { relativeTime } from '../relativeTime.js'
+  import { attention, refreshAttention } from '../attention.js'
   import {
-    DECIDER_APPROVE_DEFAULT, DECIDER_DENY_DEFAULT,
-    summarize, histogram, disagreements, suggestion,
+    DECIDER_APPROVE_DEFAULT, DECIDER_DENY_DEFAULT, CHECK_LABELS, floorScore,
+    summarize, histogram, disagreements, suggestion, isFresh, isLater, reviewedUpTo,
   } from '../deciderCalibration.js'
 
   // approveAt/denyAt are the Permission panel's threshold inputs: '' means the
@@ -13,10 +15,6 @@
     approveAt = $bindable(''), denyAt = $bindable(''),
   } = $props()
 
-  const CHECK_LABELS = {
-    aligned: 'aligned', scoped: 'scoped', no_injection: 'no injection', no_secrets: 'no secrets', no_leak: 'no leak',
-    no_self_grant: 'no self-grant',
-  }
   const RANGES = [{ days: 7, label: 'Last 7 days' }, { days: 30, label: 'Last 30 days' }]
   const SHOWN = 5
   const STEP = 0.01
@@ -35,6 +33,20 @@
   let W = $derived(chartW || 600)
   let dragging = $state(null)
   let svgEl = $state(null)
+  // The review mark: reviews at or before markUpTo were marked reviewed.
+  let markUpTo = $state(null)
+  let markBy = $state('')
+  let marking = $state(false)
+  let markError = $state('')
+  let statusEl = $state(null)
+  // The server's time when the rows were read (the response's `until`). The
+  // pairing window is measured on it: a browser clock running ahead would
+  // settle a review the server can still pair. NaN until a load lands, which
+  // settles only reviews that already have a verdict.
+  let serverNow = $state(NaN)
+  // Which agent and decider the rows belong to; a mark for any other is refused.
+  let loadedFor = $state('')
+  const panelKey = () => `${agent}\u0000${decider}`
 
   let seq = 0
   async function load() {
@@ -48,6 +60,16 @@
       rows = res.reviews || []
       failed = res.failed || 0
       truncated = !!res.truncated
+      // A reload read before this panel's own mark landed carries the older
+      // mark; like the server, never move it back for the same agent and decider.
+      const serverMark = res.reviewed_up_to || null
+      if (!(loadedFor === panelKey() && markUpTo && (!serverMark || isLater(markUpTo, serverMark)))) {
+        markUpTo = serverMark
+        markBy = res.reviewed_by || ''
+      }
+      markError = ''
+      serverNow = Date.parse(res.until)
+      loadedFor = panelKey()
     } catch (e) {
       if (mine !== seq) return
       // Without audit:read the panel has nothing to show; the form still works.
@@ -64,11 +86,56 @@
     load()
   })
 
+  // Re-fetch when this agent's badge count changes. A verdict that lands while
+  // the panel is open moves the badge, but the rows and nextMark are from the
+  // last load. The first count seen for an agent is the one that load saw, and
+  // a change this panel's own mark caused is already on screen.
+  let badgeSeen = null
+  let ownMark = false
+  $effect(() => {
+    const n = $attention.deciderReviews?.[agent]
+    const who = agent
+    untrack(() => {
+      const changed = badgeSeen?.agent === who && badgeSeen.n !== undefined && n !== undefined && n !== badgeSeen.n
+      if (changed && !ownMark) load()
+      badgeSeen = { agent: who, n }
+    })
+  })
+
   let A = $derived(Number(approveAt) || DECIDER_APPROVE_DEFAULT)
   let D = $derived(Number(denyAt) || DECIDER_DENY_DEFAULT)
   let stats = $derived(summarize(rows, A, D))
   let bins = $derived(histogram(rows))
   let disagreeing = $derived(disagreements(rows, A, D))
+  // Fresh disagreements first, then the reviewed ones under the divider.
+  let fresh = $derived(disagreeing.filter(d => isFresh(d, markUpTo)))
+  let ordered = $derived([...fresh, ...disagreeing.filter(d => !isFresh(d, markUpTo))])
+  let shown = $derived(ordered.slice(0, SHOWN))
+  // Index of the first reviewed row on screen; the divider goes above it.
+  let dividerAt = $derived(markUpTo && fresh.length < shown.length ? fresh.length : -1)
+  // Fresh unsafe approvals at the slider thresholds; these rows get the dot.
+  let freshUnsafe = $derived(fresh.filter(d => d.decider_verdict === 'APPROVE').length)
+  // The nav badge's count, at the saved thresholds. The pill, the button and
+  // the status follow it when this panel shows the saved decider, so they
+  // agree with the badge while the sliders hold unsaved values.
+  let serverCount = $derived(saved && Object.hasOwn($attention.deciderReviews || {}, agent)
+    ? Number($attention.deciderReviews[agent]) || 0
+    : null)
+  let toReview = $derived(serverCount ?? freshUnsafe)
+  let nextMark = $derived(reviewedUpTo(rows, serverNow))
+  // A truncated load holds only the newest reviews, so a mark would also
+  // cover older ones nobody was shown. While a load runs the rows may be the
+  // previous agent's, so there is no button until it lands.
+  let canMark = $derived(!loading && loadedFor === panelKey() && toReview > 0 && !truncated &&
+    !!nextMark && isFresh({ time: nextMark }, markUpTo))
+  let statusText = $derived.by(() => {
+    // A live region: no mark is possible mid-load, which is not news to announce.
+    if (marking || loading) return ''
+    if (toReview > 0 && truncated) return 'Too many reviews to load. Pick a shorter time range to mark them reviewed.'
+    if (toReview > 0 && !canMark) return 'Waiting on the supervisor for newer calls'
+    if (toReview === 0 && markUpTo) return 'Nothing new to review'
+    return ''
+  })
   let suggest = $derived(suggestion(rows, A, D))
   let pct = $derived(stats.total ? Math.round((stats.settled / stats.total) * 100) : 0)
   let models = $derived([...new Set(rows.map(r => r.model).filter(Boolean))])
@@ -81,8 +148,6 @@
     if (!x) return '$0'
     return x < 0.01 ? `$${x.toFixed(4)}` : `$${x.toFixed(2)}`
   }
-  // Rounded down so a shown score never passes a threshold the real one misses.
-  const floor2 = v => (Math.floor(v * 100 + 1e-9) / 100).toFixed(2)
   const pctOf = n => (stats.total ? Math.round((n / stats.total) * 100) : 0)
   const plural = (n, one, many = one + 's') => (n === 1 ? one : many)
   const these = n => (n === 1 ? 'the' : n === 2 ? 'both' : `all ${n}`)
@@ -140,6 +205,39 @@
     if (suggest?.kind === 'approve') approveAt = suggest.value
     else if (suggest?.kind === 'deny') denyAt = suggest.value
   }
+
+  // No confirm: marking removes no row and changes no behaviour. nextMark is
+  // sent as the server's own string.
+  async function markReviewed() {
+    const upTo = nextMark
+    // Rechecked here: a click can land between a prop change and the redraw.
+    if (!upTo || marking || loading || loadedFor !== panelKey()) return
+    marking = true
+    markError = ''
+    try {
+      const res = await api.markDeciderReviewed(agent, { decider, upTo })
+      markUpTo = res?.reviewed_up_to || upTo
+      markBy = res?.reviewed_by || markBy
+      // Awaited so the status reads from the new count, not the old one. The
+      // count drop is this mark's own, so it does not trigger a reload.
+      ownMark = true
+      try {
+        await refreshAttention()
+        await tick()
+      } finally {
+        ownMark = false
+      }
+      // The button is gone; keep keyboard focus here instead of <body>.
+      await tick()
+      statusEl?.focus()
+    } catch (e) {
+      markError = e.message
+    } finally {
+      marking = false
+    }
+  }
+
+  const markTitle = t => (Number.isNaN(Date.parse(t)) ? t : new Date(t).toISOString())
 
   function verdictLine(d) {
     const dec = d.decider_verdict === 'APPROVE' ? 'approved' : 'denied'
@@ -259,9 +357,26 @@
     <div class="cal-divider"></div>
 
     <div class="cal-dis-head">
-      <span class="cal-kicker">Disagreements at these thresholds</span>
-      <a class="cal-link" href="#/audit?agent={encodeURIComponent(agent)}&category=supervisor&range={days}d">Open in audit log →</a>
+      <span class="cal-dis-title">
+        <span class="cal-kicker">Disagreements at these thresholds</span>
+        {#if markUpTo && toReview}
+          <span class="pill cal-new" data-testid="calibration-new">{toReview} new since {relativeTime(markUpTo)}</span>
+        {/if}
+      </span>
+      <span class="cal-dis-actions">
+        {#if canMark}
+          <button type="button" class="btn-primary" onclick={markReviewed} disabled={marking}>
+            {marking ? 'Marking…' : 'Mark all reviewed'}
+          </button>
+        {/if}
+        <!-- Always rendered so the text change is announced, and focusable for after a mark. -->
+        <span class="hint" role="status" tabindex="-1" bind:this={statusEl}>{statusText}</span>
+        <a class="cal-link" href="#/audit?agent={encodeURIComponent(agent)}&category=supervisor&range={days}d">Open in audit log →</a>
+      </span>
     </div>
+    {#if markError}
+      <div class="inline-error" role="alert">Could not mark as reviewed: {markError}</div>
+    {/if}
     {#if disagreeing.length}
       <!-- svelte-ignore a11y_no_noninteractive_tabindex (a scroll region needs a tab stop to be reachable at all) -->
       <div class="table-wrap" tabindex="0" role="region" aria-label="Disagreements at these thresholds">
@@ -271,13 +386,21 @@
             <tr><th>Verdicts</th><th>Tool</th><th>Arguments</th><th>Lowest check</th><th>When</th></tr>
           </thead>
           <tbody>
-            {#each disagreeing.slice(0, SHOWN) as d (d.audit_id)}
+            {#each shown as d, i (d.audit_id)}
               {@const [decLine, supLine] = verdictLine(d)}
-              <tr>
-                <td class="verdicts" class:unsafe={d.decider_verdict === 'APPROVE'}>{decLine}<br />{supLine}</td>
+              {@const newUnsafe = i < fresh.length && d.decider_verdict === 'APPROVE'}
+              {#if i === dividerAt}
+                <tr class="mark-row" data-testid="calibration-mark">
+                  <td colspan="5"><span title={markTitle(markUpTo)}>Reviewed up to {relativeTime(markUpTo)}{markBy ? ` · ${markBy}` : ''}</span></td>
+                </tr>
+              {/if}
+              <tr class:reviewed={dividerAt >= 0 && i >= dividerAt}>
+                <td class="verdicts" class:unsafe={d.decider_verdict === 'APPROVE'}>
+                  {#if newUnsafe}<span class="new-dot" aria-hidden="true" title="New since the last review"></span><span class="sr-only">New: </span>{/if}{decLine}<br />{supLine}
+                </td>
                 <td class="mono">{d.tool}</td>
                 <td class="mono args" title={d.arguments}>{d.arguments}</td>
-                <td class="mono score">{CHECK_LABELS[d.lowest] || d.lowest} {floor2(d.min_score)}</td>
+                <td class="mono score">{CHECK_LABELS[d.lowest] || d.lowest} {floorScore(d.min_score)}</td>
                 <td class="muted when">{relativeTime(d.time)}</td>
               </tr>
             {/each}
@@ -392,6 +515,18 @@
   .z-deny { color: var(--danger); font-weight: 500; }
   .z-approve { color: var(--success); font-weight: 500; }
   .cal-divider { height: 1px; background: var(--border); }
+  .cal-dis-title, .cal-dis-actions { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  /* .pill in the accent tint the design uses for "new". */
+  .cal-new { background: rgba(var(--accent-rgb), 0.12); color: var(--accent); margin: 0; }
+  /* Same dot as Agents.svelte's .review-dot, which is local there too. */
+  .new-dot { display: inline-block; width: 6px; height: 6px; border-radius: 3px; background: var(--accent); margin-right: 6px; vertical-align: middle; }
+  /* Beats .cal-table td below: no row padding or border, so one rule only. */
+  .cal-table .mark-row td { padding: 8px 0; border-bottom: none; color: var(--text-muted); font-size: 12px; }
+  .cal-table tr:has(+ .mark-row) td { border-bottom: none; }
+  .mark-row span { display: flex; align-items: center; gap: 12px; }
+  .mark-row span::before, .mark-row span::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+  .reviewed td { color: var(--text-muted); }
+  .reviewed .verdicts, .reviewed .verdicts.unsafe { font-weight: 400; color: var(--text-muted); }
   .cal-link { font-size: 13px; color: var(--accent); text-decoration: none; }
   .cal-link:hover { text-decoration: underline; }
 
@@ -421,5 +556,8 @@
     .cal-stat-lead, .cal-stat:nth-child(3) { padding-left: 0; border-left: none; }
     .cal-num { font-size: 28px; line-height: 32px; }
     .args { max-width: 140px; }
+    /* The table scrolls sideways here; keep the mark text in view at the left. */
+    .mark-row span { position: sticky; left: 0; max-width: calc(100vw - 64px); }
+    .mark-row span::before { display: none; }
   }
 </style>

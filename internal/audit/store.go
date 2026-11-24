@@ -34,6 +34,16 @@ CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_events(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_category ON audit_events(category, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_agent ON audit_events(agent, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_conversation ON audit_events(conversation_id, timestamp DESC);
+-- reviewed_up_to_ns is Unix nanoseconds: RFC3339Nano text does not sort in
+-- time order within a second, and the mark must never move backwards.
+CREATE TABLE IF NOT EXISTS decider_review_marks (
+    agent TEXT NOT NULL,
+    decider TEXT NOT NULL,
+    reviewed_up_to_ns INTEGER NOT NULL,
+    reviewed_by TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (agent, decider)
+);
 `
 
 // auditMigrations add the hash-chain columns. A constant default does not
@@ -321,6 +331,34 @@ func (s *SQLiteStore) List(ctx context.Context, opts ListOpts) ([]Event, int, er
 	}
 
 	return events, total, nil
+}
+
+// ScanEvents implements Store.
+func (s *SQLiteStore) ScanEvents(ctx context.Context, opts ListOpts, fn func(Event) error) error {
+	whereClause, args := buildWhereClause(opts)
+	rows, err := s.db.QueryxContext(ctx,
+		"SELECT id, timestamp, category, action, agent, summary, detail, status, duration_ms, source, conversation_id FROM audit_events"+
+			whereClause+" ORDER BY id", args...)
+	if err != nil {
+		return fmt.Errorf("scanning audit events: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck
+	for rows.Next() {
+		var e Event
+		var ts string
+		if err := rows.Scan(&e.ID, &ts, &e.Category, &e.Action, &e.Agent,
+			&e.Summary, &e.Detail, &e.Status, &e.DurationMs, &e.Source, &e.ConversationID); err != nil {
+			return fmt.Errorf("scanning audit event: %w", err)
+		}
+		e.Timestamp, _ = time.Parse(time.RFC3339Nano, ts)
+		if err := fn(e); err != nil {
+			return err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterating audit events: %w", err)
+	}
+	return nil
 }
 
 // Stats returns aggregate counts for the audit dashboard.

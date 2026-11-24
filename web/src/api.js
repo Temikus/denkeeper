@@ -58,6 +58,13 @@ export const api = {
     if (since) params.set('since', since)
     return apiFetch(`/api/v1/agents/${encodeURIComponent(name)}/decider-reviews?${params}`)
   },
+  // {agent: n}: unsafe approvals after each agent's review mark (audit:read).
+  deciderReviewCounts: () => apiFetch('/api/v1/decider-reviews/unreviewed'),
+  // upTo is sent as given: a Date round-trip would cut it to milliseconds.
+  markDeciderReviewed: (name, { decider, upTo }) => apiFetch(`/api/v1/agents/${encodeURIComponent(name)}/decider-reviews/reviewed`, {
+    method: 'POST',
+    body: JSON.stringify({ decider, up_to: upTo }),
+  }),
 
   // Agent config mutation
   updateAgentConfig: (name, data) => apiFetch(`/api/v1/agents/${encodeURIComponent(name)}`, {

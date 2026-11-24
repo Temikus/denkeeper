@@ -1,7 +1,9 @@
 package agent
 
 import (
+	"cmp"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -71,11 +73,19 @@ type supervisorDetail struct {
 // failed counts decider reviews that errored. Enforce-mode reviews are left
 // out: the supervisor sees only the escalated calls there.
 func PairShadowReviews(events []audit.Event, decider string) (reviews []ShadowReview, failed int) {
+	// By time, ties in id order: the same order CountUnsafeApprovals uses, so
+	// the badge and the panel pair a same-timestamp review and verdict alike
+	// whatever order the store returned them in.
 	sorted := slices.Clone(events)
-	slices.SortStableFunc(sorted, func(a, b audit.Event) int { return a.Timestamp.Compare(b.Timestamp) })
+	slices.SortStableFunc(sorted, func(a, b audit.Event) int {
+		if c := a.Timestamp.Compare(b.Timestamp); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.ID, b.ID)
+	})
 
 	deciderSource := "decider:" + decider
-	pending := map[string][]int{} // pairing key → indexes into reviews awaiting a supervisor verdict
+	pending := newPairQueue[pairKey, int]() // indexes into reviews awaiting a supervisor verdict
 	for _, ev := range sorted {
 		switch {
 		case ev.Source == deciderSource:
@@ -87,8 +97,7 @@ func PairShadowReviews(events []audit.Event, decider string) (reviews []ShadowRe
 			if !ok {
 				continue
 			}
-			key := shadowPairKey(ev.ConversationID, r.Tool, r.Arguments)
-			pending[key] = append(pending[key], len(reviews))
+			pending.add(shadowPairKey(ev.ConversationID, r.Tool, r.Arguments), r.Time, len(reviews))
 			r.Arguments = cutRunes(r.Arguments, shadowArgsRunes)
 			reviews = append(reviews, r)
 		case strings.HasPrefix(ev.Source, "supervisor:"):
@@ -96,19 +105,11 @@ func PairShadowReviews(events []audit.Event, decider string) (reviews []ShadowRe
 			if json.Unmarshal([]byte(ev.Detail), &d) != nil {
 				continue
 			}
-			key := shadowPairKey(ev.ConversationID, d.Tool, d.Arguments)
-			queue := pending[key]
-			// Drop reviews whose supervisor verdict never came (none was wired,
-			// or it was cancelled) so they cannot pair with a later call.
-			for len(queue) > 0 && ev.Timestamp.Sub(reviews[queue[0]].Time) > shadowPairWindow {
-				queue = queue[1:]
-			}
-			if len(queue) == 0 {
-				pending[key] = queue
+			i, ok := pending.take(shadowPairKey(ev.ConversationID, d.Tool, d.Arguments), ev.Timestamp)
+			if !ok {
 				continue
 			}
-			r := &reviews[queue[0]]
-			pending[key] = queue[1:]
+			r := &reviews[i]
 			r.SupervisorName = d.Supervisor
 			if d.Decision != "error" {
 				r.Supervisor = d.Decision
@@ -198,8 +199,168 @@ func shadowReviewFrom(ev audit.Event) (ShadowReview, bool) {
 	return r, true
 }
 
-func shadowPairKey(convID, tool, args string) string {
+// Verdict is what the decider would decide at these thresholds. It must stay
+// in step with decideSupervisorOutcome: deny first, a missing answer escalates.
+func (r ShadowReview) Verdict(approveAt, denyAt float64) string {
+	if r.MinScore == nil {
+		return string(supervisorEscalate)
+	}
+	deny := r.MinScore
+	if r.MinDenyScore != nil {
+		deny = r.MinDenyScore
+	}
+	switch {
+	case *deny <= denyAt:
+		return string(supervisorDeny)
+	case *r.MinScore >= approveAt:
+		return string(supervisorApprove)
+	}
+	return string(supervisorEscalate)
+}
+
+// UnsafeApproval reports whether the decider would approve a call the
+// supervisor denied or escalated.
+func (r ShadowReview) UnsafeApproval(approveAt, denyAt float64) bool {
+	return r.Verdict(approveAt, denyAt) == string(supervisorApprove) &&
+		(r.Supervisor == string(supervisorDeny) || r.Supervisor == string(supervisorEscalate))
+}
+
+// CountUnsafeApprovals counts the agent's shadow reviews after `after` (the
+// review mark, or zero) that the decider would approve and the supervisor did
+// not. `after` is raised to DefaultShadowReviewWindow ago. Events load from
+// shadowPairWindow before it, so a verdict on an earlier call cannot pair with
+// a later identical one.
+//
+// Unlike the reviews list it reads the whole window, so a busy agent is never
+// undercounted, and it stays linear: one ScanEvents pass, keeping a few fields
+// per event rather than the event and its Detail. It pairs through the same
+// pairQueue and order as PairShadowReviews, so the badge and the panel pair
+// the events they both scan identically; past the panel's scan cap the badge
+// sees reviews the panel does not.
+func CountUnsafeApprovals(ctx context.Context, store audit.Store, agentName, decider string, after time.Time, approveAt, denyAt float64) (int, error) {
+	now := time.Now().UTC()
+	if floor := now.Add(-DefaultShadowReviewWindow); after.Before(floor) {
+		after = floor
+	}
+	since := after.Add(-shadowPairWindow)
+	deciderSource := "decider:" + decider
+	var events []countEvent
+	err := store.ScanEvents(ctx, audit.ListOpts{
+		Categories: []string{audit.CategorySupervisor}, Agent: agentName, Since: &since, Until: &now,
+	}, func(ev audit.Event) error {
+		if ce, ok := countEventFrom(ev, deciderSource, approveAt, denyAt); ok {
+			events = append(events, ce)
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("scanning supervisor events: %w", err)
+	}
+	// The same order as PairShadowReviews: by time, ties in id order.
+	slices.SortStableFunc(events, func(a, b countEvent) int {
+		if c := a.at.Compare(b.at); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.id, b.id)
+	})
+
+	pending := newPairQueue[[sha256.Size]byte, countEvent]()
+	n := 0
+	for _, e := range events {
+		if e.review {
+			pending.add(e.key, e.at, e)
+			continue
+		}
+		r, ok := pending.take(e.key, e.at)
+		if ok && r.wouldApprove && r.at.After(after) &&
+			(e.decision == string(supervisorDeny) || e.decision == string(supervisorEscalate)) {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// countEvent is what the badge count keeps from one supervisor-category event.
+// The pairing key is hashed, since arguments can be as large as the call.
+type countEvent struct {
+	at           time.Time
+	id           int64
+	key          [sha256.Size]byte
+	review       bool   // a decider review; otherwise a supervisor verdict
+	wouldApprove bool   // review: the decider would approve at the count's thresholds
+	decision     string // verdict: APPROVE, DENY, ESCALATE or error
+}
+
+func countEventFrom(ev audit.Event, deciderSource string, approveAt, denyAt float64) (countEvent, bool) {
+	switch {
+	case ev.Source == deciderSource:
+		if ev.Status == audit.StatusError {
+			return countEvent{}, false
+		}
+		r, ok := shadowReviewFrom(ev)
+		if !ok {
+			return countEvent{}, false
+		}
+		return countEvent{at: ev.Timestamp, id: ev.ID, key: hashPairKey(ev.ConversationID, r.Tool, r.Arguments),
+			review: true, wouldApprove: r.Verdict(approveAt, denyAt) == string(supervisorApprove)}, true
+	case strings.HasPrefix(ev.Source, "supervisor:"):
+		var d supervisorDetail
+		if json.Unmarshal([]byte(ev.Detail), &d) != nil {
+			return countEvent{}, false
+		}
+		return countEvent{at: ev.Timestamp, id: ev.ID, key: hashPairKey(ev.ConversationID, d.Tool, d.Arguments),
+			decision: d.Decision}, true
+	}
+	return countEvent{}, false
+}
+
+// pairKey identifies one tool call: there is no shared call id between the
+// decider's and the supervisor's events.
+type pairKey = string
+
+func shadowPairKey(convID, tool, args string) pairKey {
 	return convID + "\x00" + tool + "\x00" + args
+}
+
+func hashPairKey(convID, tool, args string) [sha256.Size]byte {
+	return sha256.Sum256([]byte(shadowPairKey(convID, tool, args)))
+}
+
+// pairQueue holds decider reviews waiting for the supervisor's verdict on the
+// same call. PairShadowReviews and CountUnsafeApprovals both pair through it.
+type pairQueue[K comparable, V any] struct {
+	pending map[K][]pendingReview[V]
+}
+
+type pendingReview[V any] struct {
+	at time.Time
+	v  V
+}
+
+func newPairQueue[K comparable, V any]() *pairQueue[K, V] {
+	return &pairQueue[K, V]{pending: map[K][]pendingReview[V]{}}
+}
+
+func (q *pairQueue[K, V]) add(key K, at time.Time, v V) {
+	q.pending[key] = append(q.pending[key], pendingReview[V]{at: at, v: v})
+}
+
+// take pairs a verdict at `at` with the oldest waiting review of the same call,
+// first in first out. Reviews older than shadowPairWindow are dropped first:
+// their verdict never came (no supervisor was wired, or it was cancelled), and
+// they must not pair with a later call.
+func (q *pairQueue[K, V]) take(key K, at time.Time) (V, bool) {
+	queue := q.pending[key]
+	for len(queue) > 0 && at.Sub(queue[0].at) > shadowPairWindow {
+		queue = queue[1:]
+	}
+	if len(queue) == 0 {
+		q.pending[key] = queue
+		var zero V
+		return zero, false
+	}
+	q.pending[key] = queue[1:]
+	return queue[0].v, true
 }
 
 func cutRunes(s string, n int) string {

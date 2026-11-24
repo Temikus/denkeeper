@@ -384,6 +384,22 @@ describe('handleToolEvent via SSE path', () => {
     expect(agentMsg.approvals[0].status).toBe('auto_approved')
   })
 
+  test('tool_approval keeps the shadow verdict on info and pending cards, null without one', async () => {
+    const shadow = { agent: 'pamela', decider: 'jev', verdict: 'APPROVE', lowest: 'scoped', score: 0.97 }
+    mockStreamChat.mockImplementation(async (agent, sid, msg, onChunk, onDone, onToolEvent) => {
+      onToolEvent({ type: 'tool_approval', tool: 'kv_set', tool_id: 'tc-1', text: 'Escalated', approval_status: 'supervisor_escalated', shadow })
+      onToolEvent({ type: 'tool_approval', tool: 'kv_set', tool_id: 'tc-1', approval_id: 'a1', text: 'Run tool: kv_set', shadow })
+      onToolEvent({ type: 'tool_approval', tool: 'web_search', tool_id: 'tc-2', approval_id: 'a2', text: 'Run tool: web_search' })
+      onDone('sess-1')
+    })
+
+    await sendMessage('save it')
+    const [info, pending, plain] = get(chatState).messages[1].approvals
+    expect(info.shadow).toEqual(shadow)
+    expect(pending.shadow).toEqual(shadow)
+    expect(plain.shadow).toBeNull()
+  })
+
   test('thinking sets status text', async () => {
     mockStreamChat.mockImplementation(async (agent, sid, msg, onChunk, onDone, onToolEvent) => {
       onToolEvent({ type: 'thinking', text: 'Analyzing...' })

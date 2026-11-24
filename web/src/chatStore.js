@@ -179,7 +179,7 @@ function handleToolEvent(agentMsg, evt) {
     if (INFO_APPROVAL_STATUSES.has(evt.approval_status)) {
       agentMsg.approvals = [...agentMsg.approvals, {
         id: evt.approval_id, tool: evt.tool, tool_id: evt.tool_id, text: evt.text,
-        status: evt.approval_status, resolving: false,
+        status: evt.approval_status, resolving: false, shadow: evt.shadow || null,
       }]
     } else {
       agentMsg.status = `Waiting for approval: ${evt.tool}`
@@ -190,6 +190,7 @@ function handleToolEvent(agentMsg, evt) {
         humanOnly: !!evt.approval_human_only,
         // High-risk call (#586): no auto-approve buttons; warning and flagged args shown.
         risk: evt.approval_risk || null,
+        shadow: evt.shadow || null,
       }]
     }
   }

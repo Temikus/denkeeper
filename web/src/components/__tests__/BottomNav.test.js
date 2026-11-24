@@ -38,4 +38,23 @@ describe('BottomNav', () => {
     expect(tab.querySelector('.badge')).toHaveTextContent('3')
     expect(tab).toHaveTextContent('3 pending')
   })
+
+  test('the Agents tab shows a badge only while there is something to review', async () => {
+    const { getByText } = render(BottomNav, { props: { active: '' } })
+    const tab = getByText('Agents').closest('button')
+    expect(tab.querySelector('.badge')).toBeNull()
+
+    attention.set({ pendingApprovals: 0, unhealthyTools: [], deciderReviews: { default: 2 } })
+    await Promise.resolve()
+
+    expect(tab.querySelector('.badge')).toHaveTextContent('2')
+    expect(tab).toHaveTextContent('2 to review')
+
+    // "Only while": once the reviews are marked, the badge goes.
+    attention.set({ pendingApprovals: 0, unhealthyTools: [], deciderReviews: { default: 0 } })
+    await Promise.resolve()
+
+    expect(tab.querySelector('.badge')).toBeNull()
+    expect(tab).not.toHaveTextContent('to review')
+  })
 })

@@ -73,6 +73,8 @@ data: {"type":"done","session_id":"abc123"}
 
 **SSE event types:** `content`, `thinking`, `tool_start`, `tool_end`, `tool_approval`, `usage`, `done`, `error`.
 
+When a shadow-mode [decision model](/docs/concepts/deciders/) reviewed the call, a `tool_approval` event also carries `shadow`: `{"agent", "decider", "verdict", "lowest", "score"}`, the decider's verdict at its current thresholds and its lowest check. Without one, the key is left out.
+
 ### `GET /api/v1/ws`
 
 **Scope:** `chat`
@@ -363,6 +365,34 @@ Query parameters: `decider` (default: the agent's `supervisor_decider`) and `sin
 - `decider_cost` and `supervisor_cost`. `supervisor_cost` is `null` for reviews recorded before the supervisor's cost was audited.
 
 Enforce-mode reviews are not listed. In enforce mode the supervisor only sees the calls the decider escalated, so a comparison would be skewed.
+
+The response also carries the review mark for this decider: `reviewed_up_to` (RFC3339, `null` until someone marks the reviews) and `reviewed_by` (left out when empty).
+
+### `POST /api/v1/agents/{name}/decider-reviews/reviewed`
+
+**Scope:** `agents:write`
+
+Marks the agent's shadow reviews as reviewed up to a time. This is "Mark all reviewed" on the calibration panel.
+
+```json
+{"decider": "jev", "up_to": "2026-11-23T10:00:00.123456789Z"}
+```
+
+`decider` is optional and defaults as for the list above. `up_to` is the time of the newest review you have seen, never "now". The mark only moves forward: an older `up_to` leaves the stored mark in place. The response is the stored mark, `{"agent", "decider", "reviewed_up_to", "reviewed_by"}`, where `reviewed_by` is the API key name or login that made the call. Returns `400` for a missing, malformed, future or out-of-range `up_to` (before 1677-09-21), or when no decider is named and none is set on the agent.
+
+The scope is `agents:write`, so a key with it can clear the badge that `GET /decider-reviews/unreviewed` shows to `audit:read` keys, without being able to read the reviews themselves. The mark is not written to the audit log yet; the stored row keeps who moved it and when.
+
+### `GET /api/v1/decider-reviews/unreviewed`
+
+**Scope:** `audit:read`
+
+Counts, per agent, the shadow reviews after its review mark where the decider would approve at its current thresholds and the supervisor denied or escalated. This is the number on the Agents badge in the dashboard.
+
+```json
+{"pamela": 2, "default": 0}
+```
+
+Only running agents with a shadow-mode decider are listed. The count looks back at most 30 days, and is reused for up to a minute per agent; marking an agent reviewed clears it at once.
 
 ## Persona
 

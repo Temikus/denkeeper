@@ -7,7 +7,8 @@
   import ModelSelector from '../components/ModelSelector.svelte'
   import FallbackRulesModal from '../components/FallbackRulesModal.svelte'
   import DeciderCalibration from '../components/DeciderCalibration.svelte'
-  import { DECIDER_APPROVE_DEFAULT, DECIDER_DENY_DEFAULT, summarize } from '../deciderCalibration.js'
+  import { DECIDER_APPROVE_DEFAULT, DECIDER_DENY_DEFAULT } from '../deciderCalibration.js'
+  import { attention } from '../attention.js'
 
   let agents = $state([])
   let selected = $state(null)
@@ -17,7 +18,11 @@
   let enabledProviders = $state([])  // ['anthropic', 'openrouter', ...]
   let defaultProvider = $state('')   // global default_provider from /llm/providers
   let deciders = $state([])          // [[llm.deciders]] entries: [{ name, provider, model, ... }]
-  let deciderToReview = $state(0)    // shadow approvals the supervisor did not make, at the saved thresholds
+  // Unreviewed shadow approvals the supervisor did not make, per agent, from
+  // the attention poll. A key without audit:read gets an empty map.
+  const toReview = name => Number($attention.deciderReviews?.[name]) || 0
+  const reviewTitle = (n, dec, sup) => `${n} new ${n === 1 ? 'call' : 'calls'} ${dec} approved and ${sup || 'the supervisor'} didn't`
+  let deciderToReview = $derived(detail ? toReview(detail.name) : 0)
   let decisionProviderReady = $state(false) // an enabled provider can back a decision model
 
   // Inline rename state
@@ -102,25 +107,9 @@
       detail = await api.agent(a.name)
       initConfigForm(detail)
       loadAllSections(a.name)
-      loadDeciderToReview(detail)
     } catch(e) {
       error = e.message
     }
-  }
-
-  // Counts for the Permission card's "jev · N to review" line. A failure
-  // (no audit:read, no audit log) just leaves the plain mode label.
-  async function loadDeciderToReview(d) {
-    deciderToReview = 0
-    if (!d.supervisor_decider || (d.supervisor_decider_mode || 'shadow') !== 'shadow') return
-    try {
-      const since = new Date(Date.now() - 30 * 86400000).toISOString()
-      const res = await api.deciderReviews(d.name, { decider: d.supervisor_decider, since })
-      if (detail?.name !== d.name) return
-      deciderToReview = summarize(res.reviews || [],
-        d.supervisor_decider_approve_at || DECIDER_APPROVE_DEFAULT,
-        d.supervisor_decider_deny_at || DECIDER_DENY_DEFAULT).unsafeApprovals
-    } catch { /* non-critical */ }
   }
 
   // #/agents/<name>?card=permission[&decider=<name>] opens the Permission
@@ -681,7 +670,7 @@
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
               </div>
               <div class="mobile-card-info">
-                <div class="mobile-card-name">{a.display_name || a.name}</div>
+                <div class="mobile-card-name">{#if toReview(a.name)}<span class="review-dot" aria-hidden="true"></span>{/if}{a.display_name || a.name}{#if toReview(a.name)}<span class="sr-only">, {toReview(a.name)} to review</span>{/if}</div>
                 <div class="mobile-card-model">{a.llm_provider || 'default'} / {a.llm_model || '—'}</div>
               </div>
               <svg class="mobile-card-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
@@ -731,7 +720,7 @@
               </div>
             {:else}
               <div class="name">
-                <span class="name-text">{a.display_name || a.name}</span>
+                <span class="name-text">{#if toReview(a.name)}<span class="review-dot" aria-hidden="true"></span>{/if}{a.display_name || a.name}{#if toReview(a.name)}<span class="sr-only">, {toReview(a.name)} to review</span>{/if}</span>
                 {#if a.name !== 'default'}
                   <button class="edit-btn" onclick={(e) => startRename(a.name, e)} title="Rename agent">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.83 2.83 0 114 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
@@ -830,7 +819,7 @@
             </div>
             {#if detail.supervisor_decider}
               <div class="stat-sub" data-testid="permission-decider">
-                {#if deciderToReview}<span class="review-dot" aria-hidden="true"></span>{detail.supervisor_decider} · {deciderToReview} to review
+                {#if deciderToReview}<span title={reviewTitle(deciderToReview, detail.supervisor_decider, detail.supervisor)}><span class="review-dot" aria-hidden="true"></span>{detail.supervisor_decider} · {deciderToReview} to review</span>
                 {:else}{detail.supervisor_decider} · {detail.supervisor_decider_mode || 'shadow'}{/if}
               </div>
             {/if}
