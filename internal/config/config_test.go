@@ -5757,3 +5757,73 @@ on_leaked_tool_call = "hold"
 		t.Fatalf("expected validation error naming on_leaked_tool_call, got %v", err)
 	}
 }
+
+func TestSkillIndex_OnWithoutSkillsSection(t *testing.T) {
+	cfg, err := Parse([]byte(baseConfig))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.Skills.IndexEnabled() {
+		t.Error("IndexEnabled() = false with no [skills] section, want true")
+	}
+}
+
+func TestSkillIndex_GlobalOff(t *testing.T) {
+	cfg, err := Parse([]byte(baseConfig + "\n[skills]\nindex = false\n"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Skills.IndexEnabled() {
+		t.Error("IndexEnabled() = true with index = false")
+	}
+}
+
+const skillIndexAgents = `
+[telegram]
+token = "123456:ABC-DEF"
+allowed_users = [111222333]
+
+[llm.openrouter]
+api_key = "sk-or-test-key"
+
+[[agents]]
+name = "default"
+persona_dir = "/agents/default"
+adapters = ["telegram"]
+
+[[agents]]
+name = "on"
+persona_dir = "/agents/on"
+skill_index = true
+
+[[agents]]
+name = "off"
+persona_dir = "/agents/off"
+skill_index = false
+`
+
+func TestSkillIndex_AgentInheritsGlobal(t *testing.T) {
+	cfg, err := Parse([]byte(skillIndexAgents))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.Agents[0].EffectiveSkillIndex(true) {
+		t.Error("agent without skill_index did not inherit global true")
+	}
+	if cfg.Agents[0].EffectiveSkillIndex(false) {
+		t.Error("agent without skill_index did not inherit global false")
+	}
+}
+
+func TestSkillIndex_AgentOverridesGlobal(t *testing.T) {
+	cfg, err := Parse([]byte(skillIndexAgents))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.Agents[1].EffectiveSkillIndex(false) {
+		t.Error("skill_index = true under a global false is off")
+	}
+	if cfg.Agents[2].EffectiveSkillIndex(cfg.Skills.IndexEnabled()) {
+		t.Error("skill_index = false under the global default is on")
+	}
+}

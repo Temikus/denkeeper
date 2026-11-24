@@ -15,6 +15,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/audit"
 	"github.com/Temikus/denkeeper/internal/llm"
+	"github.com/Temikus/denkeeper/internal/scheduler"
 )
 
 // maxTraceFieldLen caps tool arguments and results stored in a sample's trace.
@@ -451,6 +452,26 @@ func SampleConvID(runID, taskID int64, k int, variantID int64) string {
 	return fmt.Sprintf("eval:%d:%d:%d:%d", runID, taskID, k, variantID)
 }
 
+// PromptForRun is the prompt a run sends for a task: a scheduled header is
+// moved to the run's clock, anything else is verbatim. Every place a run shows
+// a task's prompt goes through it, so the judge sees what the model was sent.
+// The task row keeps the original.
+func PromptForRun(prompt string, asOf time.Time) string {
+	if asOf.IsZero() {
+		return prompt
+	}
+	out, _ := scheduler.RetimeScheduledText(prompt, asOf)
+	return out
+}
+
+// retimeTasks applies PromptForRun to a run's tasks, for the read paths that
+// list them.
+func retimeTasks(tasks []Task, asOf time.Time) {
+	for i := range tasks {
+		tasks[i].Prompt = PromptForRun(tasks[i].Prompt, asOf)
+	}
+}
+
 // runSample executes one (task, k, variant) sample and persists its row. A
 // sample failure is recorded and never propagated: a provider hiccup fails
 // that sample, not the run.
@@ -474,7 +495,7 @@ func (r *Runner) runSample(ctx context.Context, st *runState, task Task, k int, 
 
 	msg := adapter.IncomingMessage{
 		ConversationID: convID,
-		Text:           task.Prompt,
+		Text:           PromptForRun(task.Prompt, st.run.AsOf),
 		UserName:       "eval",
 		Timestamp:      st.run.AsOf,
 	}

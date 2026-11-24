@@ -144,7 +144,7 @@ func TestMCPServer_ToolList(t *testing.T) {
 
 	expected := []string{"panic", "resume", "panic_status", "agent_list", "agent_info",
 		"schedule_list", "schedule_create", "schedule_update", "schedule_delete",
-		"audit_events", "audit_summary", "decider_reviews"}
+		"audit_events", "audit_summary", "decider_reviews", "persona_get", "persona_update"}
 	for _, name := range expected {
 		if !toolNames[name] {
 			t.Errorf("expected tool %q in list", name)

@@ -32,23 +32,26 @@ const (
 // for. The endpoint itself needs agents:read on top of eval:read (it reports
 // the permission tier and probes the persona); the two families sourced from
 // other subsystems are dropped when the caller lacks their read scope.
-func (s *Server) probeScopeSkips(w http.ResponseWriter, r *http.Request) (map[string]struct{}, bool) {
-	if _, ok, _ := s.authenticate(r.Context(), r, "agents:read"); !ok {
+// toolsRead reports tools:read: without it the denial probes, which every agent
+// gets, stay canned rather than naming one of the agent's tools.
+func (s *Server) probeScopeSkips(w http.ResponseWriter, r *http.Request) (skips map[string]struct{}, toolsRead, ok bool) {
+	if _, agentsRead, _ := s.authenticate(r.Context(), r, "agents:read"); !agentsRead {
 		writeJSON(w, http.StatusForbidden, map[string]string{
 			"error": "insufficient scope: probes read agent configuration, so agents:read is required alongside eval:read",
 		})
-		return nil, false
+		return nil, false, false
 	}
-	skips := map[string]struct{}{}
-	if _, ok, _ := s.authenticate(r.Context(), r, "skills:read"); !ok {
+	skips = map[string]struct{}{}
+	if _, skillsRead, _ := s.authenticate(r.Context(), r, "skills:read"); !skillsRead {
 		skips[eval.ProbeSkillInstruction] = struct{}{}
 	}
-	if _, ok, _ := s.authenticate(r.Context(), r, "tools:read"); !ok {
+	_, toolsRead, _ = s.authenticate(r.Context(), r, "tools:read")
+	if !toolsRead {
 		// The approval-policy probe names a tool and quotes the auto-approve
 		// list, both of which live behind tools:read.
 		skips[eval.ProbeApprovalPolicy] = struct{}{}
 	}
-	return skips, true
+	return skips, toolsRead, true
 }
 
 // autoApproveTools returns the tool names this agent may run unattended:
@@ -78,7 +81,7 @@ func (s *Server) autoApproveTools(ctx context.Context, agentName string) []strin
 
 // handleEvalProbes godoc
 // @Summary Generate spec-derived behavioural probes
-// @Description Generates eval test cases top-down from the agent's own written intent — its permission tier, auto-approve policy, persona sections and skill frontmatter — rather than from usage history. Covers what a history-sampled set structurally cannot: denial compliance, permission-tier boundaries, and budget hints are behaviours a well-behaved incumbent never produced, so no past turn demonstrates them. Every probe carries free-text notes describing what a good answer looks like, surfaced to the judge as context and never parsed as assertions. Generation is deterministic for a given agent, so passing set= suppresses probes that set already carries. Nothing is written — accepting a probe is a separate call to the task create endpoint. Requires agents:read alongside eval:read, since probes quote the agent's configuration back; the skill and approval-policy families are omitted for callers without skills:read and tools:read respectively.
+// @Description Generates eval test cases top-down from the agent's own written intent — its permission tier, auto-approve policy, persona sections and skill frontmatter — rather than from usage history. Covers what a history-sampled set structurally cannot: denial compliance, permission-tier boundaries, and budget hints are behaviours a well-behaved incumbent never produced, so no past turn demonstrates them. Every probe carries free-text notes describing what a good answer looks like, surfaced to the judge as context and never parsed as assertions. Generation is deterministic for a given agent, so passing set= suppresses probes that set already carries. Nothing is written — accepting a probe is a separate call to the task create endpoint. Requires agents:read alongside eval:read, since probes quote the agent's configuration back; the skill and approval-policy families are omitted for callers without skills:read and tools:read respectively. With tools:read the denial-compliance probes name one of the agent's write tools; without it they use canned text that names no tool.
 // @Tags eval
 // @Produce json
 // @Security BearerAuth
@@ -117,7 +120,7 @@ func (s *Server) handleEvalProbes(w http.ResponseWriter, r *http.Request) {
 		limit = min(n, probeMaxLimit)
 	}
 
-	skips, ok := s.probeScopeSkips(w, r)
+	skips, toolsRead, ok := s.probeScopeSkips(w, r)
 	if !ok {
 		return
 	}
@@ -126,15 +129,19 @@ func (s *Server) handleEvalProbes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	opts := eval.ProbeOpts{
+		AutoApproveTools: s.autoApproveTools(r.Context(), agentName),
+		SkipKinds:        skips,
+		Limit:            limit,
+		Exclude:          exclude,
+	}
+	if toolsRead {
+		opts.IsReadOnly = e.IsReadOnlyTool
+	}
 	writeJSON(w, http.StatusOK, evalProbesResult{
 		Agent:          e.Name(),
 		PermissionTier: e.PermissionTier(),
-		Probes: eval.GenerateProbes(e, eval.ProbeOpts{
-			AutoApproveTools: s.autoApproveTools(r.Context(), agentName),
-			SkipKinds:        skips,
-			Limit:            limit,
-			Exclude:          exclude,
-		}),
+		Probes:         eval.GenerateProbes(e, opts),
 	})
 }
 

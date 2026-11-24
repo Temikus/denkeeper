@@ -55,6 +55,15 @@ describe('DeciderCalibration', () => {
     expect(rows[1].textContent).toContain('no injection 0.02')
   })
 
+  test('labels the no_self_grant check in the disagreements', async () => {
+    serveReviews([review(1, 0.97, 'DENY', { tool: 'kv_set', lowest: 'no_self_grant' })])
+    render(DeciderCalibration, { props })
+
+    await waitFor(() => screen.getByTestId('calibration-disagreements'))
+    const row = screen.getByTestId('calibration-disagreements').querySelector('tbody tr')
+    expect(row.textContent).toContain('no self-grant 0.97')
+  })
+
   test('using the suggested threshold recomputes the panel', async () => {
     serveReviews([review(1, 0.97, 'DENY'), review(2, 0.99, 'APPROVE')])
     render(DeciderCalibration, { props })

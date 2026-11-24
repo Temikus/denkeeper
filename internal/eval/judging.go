@@ -21,9 +21,15 @@ type PendingItem struct {
 	RunID    int64  `db:"run_id"   json:"run_id"`
 	TaskID   int64  `db:"task_id"  json:"task_id"`
 	Category string `db:"category" json:"category"`
-	// Prompt is the task's own text, which is identical for both sides and so
-	// leaks nothing.
+	// Prompt is the task's text as the run sent it (PromptForRun), which is
+	// identical for both sides and so leaks nothing.
 	Prompt string `db:"prompt" json:"prompt"`
+}
+
+// pendingRow carries the run's clock beside a pending item, for PromptForRun.
+type pendingRow struct {
+	PendingItem
+	AsOf time.Time `db:"as_of"`
 }
 
 // BlindedToolCall is one tool call as the judge sees it. Built field by field
@@ -101,10 +107,11 @@ func (s *Store) ListItems(ctx context.Context, runID int64) ([]JudgmentItem, err
 // queue: the interactive calibration pass judges ~20 items, and taking the
 // first 20 would calibrate against whichever tasks happen to sort first.
 func (s *Store) ListPending(ctx context.Context, runID int64, limit, sampleN int) ([]PendingItem, error) {
-	q := `SELECT i.id AS item_id, i.pair_id, p.run_id, p.task_id, t.category, t.prompt
+	q := `SELECT i.id AS item_id, i.pair_id, p.run_id, p.task_id, t.category, t.prompt, r.as_of
 	      FROM eval_judgment_items i
 	      JOIN eval_pairs p ON p.id = i.pair_id
 	      JOIN eval_tasks t ON t.id = p.task_id
+	      JOIN eval_runs r ON r.id = p.run_id
 	      WHERE i.status = ?`
 	args := []any{ItemPending}
 	if runID > 0 {
@@ -113,9 +120,14 @@ func (s *Store) ListPending(ctx context.Context, runID int64, limit, sampleN int
 	}
 	q += ` ORDER BY i.id`
 
-	out := []PendingItem{}
-	if err := s.db.SelectContext(ctx, &out, q, args...); err != nil {
+	var rows []pendingRow
+	if err := s.db.SelectContext(ctx, &rows, q, args...); err != nil {
 		return nil, fmt.Errorf("listing pending judgment items: %w", err)
+	}
+	out := make([]PendingItem, len(rows))
+	for i, r := range rows {
+		out[i] = r.PendingItem
+		out[i].Prompt = PromptForRun(r.Prompt, r.AsOf)
 	}
 	if sampleN > 0 && sampleN < len(out) {
 		// Fisher-Yates over the same crypto/rand source the blinding coin uses.
@@ -149,6 +161,10 @@ func (s *Store) GetBlindedItem(ctx context.Context, itemID int64) (*BlindedItem,
 	if err != nil {
 		return nil, err
 	}
+	run, err := s.GetRun(ctx, pair.RunID)
+	if err != nil {
+		return nil, err
+	}
 	first, err := s.GetSample(ctx, pair.SampleA)
 	if err != nil {
 		return nil, err
@@ -167,7 +183,7 @@ func (s *Store) GetBlindedItem(ctx context.Context, itemID int64) (*BlindedItem,
 		ItemID:    item.ID,
 		RunID:     pair.RunID,
 		TaskID:    task.ID,
-		Prompt:    task.Prompt,
+		Prompt:    PromptForRun(task.Prompt, run.AsOf),
 		Category:  task.Category,
 		Notes:     task.Notes,
 		Status:    item.Status,

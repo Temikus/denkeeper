@@ -131,9 +131,7 @@ func TestDryRun_SuppressesWritesAndExecutesReads(t *testing.T) {
 	if !result.ToolCalls[0].Success {
 		t.Error("a suppressed call must not read as a failure — nothing is at fault")
 	}
-	if !strings.Contains(result.ToolCalls[0].Result, "write suppressed") {
-		t.Errorf("suppressed result = %q, want the suppression marker", result.ToolCalls[0].Result)
-	}
+	assertNeutralStub(t, result.ToolCalls[0].Result, "write_thing")
 	if got := result.ToolCalls[1].Outcome; got != "ok" {
 		t.Errorf("read outcome = %q, want ok", got)
 	}
@@ -368,6 +366,94 @@ func TestDryRun_UnknownToolIsSuppressed(t *testing.T) {
 	}
 	if got := result.ToolCalls[0].Outcome; got != outcomeSuppressed {
 		t.Errorf("unknown tool outcome = %q, want %q", got, outcomeSuppressed)
+	}
+	// An unclassified tool may be a read, so its stub must not claim success.
+	assertNeutralStub(t, result.ToolCalls[0].Result, "mystery_tool")
+}
+
+// assertNeutralStub checks a suppressed call's result names the tool, keeps
+// the [dry-run: prefix and does not claim the call succeeded.
+func assertNeutralStub(t *testing.T, got, tool string) {
+	t.Helper()
+	if !strings.HasPrefix(got, "[dry-run:") {
+		t.Errorf("suppressed result = %q, want the [dry-run: prefix", got)
+	}
+	if !strings.Contains(got, tool) {
+		t.Errorf("suppressed result = %q, want it to name %s", got, tool)
+	}
+	for _, old := range []string{"assume success", "write suppressed"} {
+		if strings.Contains(got, old) {
+			t.Errorf("suppressed result = %q, must not say %q: the call may have been a read", got, old)
+		}
+	}
+}
+
+func TestSuppressedToolResult_TellsTheModelBothHalves(t *testing.T) {
+	got := suppressedToolResult("search_emails")
+	for _, want := range []string{
+		`"search_emails" not executed`,
+		"If this was a write, treat it as done.",
+		"If it was a read, its result is unknown",
+		"do not guess it or repeat the call, and carry on without it",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("stub = %q, want it to contain %q", got, want)
+		}
+	}
+}
+
+func TestDryRun_ModelReceivesTheNeutralStub(t *testing.T) {
+	// The record is what the transcript shows; the tool message is what the
+	// model reads on the next round. Pin the second one.
+	provider := &capturingProvider{responses: []*llm.ChatResponse{
+		toolCallResponse("c1", "write_thing", `{"value":"x"}`),
+		{Content: "done", FinishReason: "stop", Model: "test-model"},
+	}}
+	e, _, _, _ := newPolicyTestEngineWithProvider(t, provider, "autonomous")
+
+	if _, err := e.DryRun(context.Background(), adapter.IncomingMessage{Text: "go"}, dryRunPolicy()); err != nil {
+		t.Fatalf("DryRun: %v", err)
+	}
+	if len(provider.requests) < 2 {
+		t.Fatalf("provider received %d requests, want 2", len(provider.requests))
+	}
+	var toolMsg *llm.Message
+	for i, m := range provider.requests[1].Messages {
+		if m.Role == "tool" && m.ToolCallID == "c1" {
+			toolMsg = &provider.requests[1].Messages[i]
+		}
+	}
+	if toolMsg == nil {
+		t.Fatalf("second request carried no tool message for c1: %+v", provider.requests[1].Messages)
+	}
+	// The round's budget hint is appended after the stub, so match the prefix.
+	if want := suppressedToolResult("write_thing"); !strings.HasPrefix(toolMsg.Content, want) {
+		t.Errorf("tool message = %q, want it to start with %q", toolMsg.Content, want)
+	}
+	assertNeutralStub(t, toolMsg.Content, "write_thing")
+}
+
+func TestDryRun_SuppressedToolEndEventSaysNotExecuted(t *testing.T) {
+	e, _, _, _ := newPolicyTestEngine(t, []*llm.ChatResponse{
+		toolCallResponse("c1", "write_thing", `{"value":"x"}`),
+		{Content: "done", FinishReason: "stop", Model: "test-model"},
+	}, "autonomous")
+
+	var ends []ChatEvent
+	onEvent := func(ev ChatEvent) {
+		if ev.Type == "tool_end" {
+			ends = append(ends, ev)
+		}
+	}
+	policy := dryRunPolicy()
+	if _, err := e.chatWithApproval(context.Background(), adapter.IncomingMessage{Text: "go"}, &policy, onEvent); err != nil {
+		t.Fatalf("chatWithApproval: %v", err)
+	}
+	if len(ends) != 1 {
+		t.Fatalf("got %d tool_end events, want 1: %+v", len(ends), ends)
+	}
+	if got := ends[0].Text; got != "suppressed — not executed" {
+		t.Errorf("tool_end text = %q, want %q", got, "suppressed — not executed")
 	}
 }
 

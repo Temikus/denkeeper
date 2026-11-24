@@ -4,8 +4,21 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 )
+
+// DefaultTTLFor returns the longest configured prefix that key starts with and
+// its TTL, or ("", 0) when none matches. Matching is case-sensitive with no
+// wildcards. kv_set and BackfillTTL both use it, so they cannot disagree.
+func DefaultTTLFor(defaults map[string]time.Duration, key string) (prefix string, ttl time.Duration) {
+	for p, d := range defaults {
+		if strings.HasPrefix(key, p) && len(p) > len(prefix) {
+			prefix, ttl = p, d
+		}
+	}
+	return prefix, ttl
+}
 
 // dwTerm matches one numeric day- or week-suffixed term (e.g. "30d", "2.5w")
 // so it can be rewritten into hours before time.ParseDuration sees it. No

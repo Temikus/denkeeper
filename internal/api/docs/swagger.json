@@ -481,7 +481,7 @@
                         }
                     },
                     "400": {
-                        "description": "Unknown section",
+                        "description": "Unknown section, or the agent has no persona",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -576,7 +576,7 @@
                         }
                     },
                     "400": {
-                        "description": "Unknown section or invalid JSON",
+                        "description": "Unknown section, no persona, or invalid JSON",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -2657,7 +2657,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Generates eval test cases top-down from the agent's own written intent — its permission tier, auto-approve policy, persona sections and skill frontmatter — rather than from usage history. Covers what a history-sampled set structurally cannot: denial compliance, permission-tier boundaries, and budget hints are behaviours a well-behaved incumbent never produced, so no past turn demonstrates them. Every probe carries free-text notes describing what a good answer looks like, surfaced to the judge as context and never parsed as assertions. Generation is deterministic for a given agent, so passing set= suppresses probes that set already carries. Nothing is written — accepting a probe is a separate call to the task create endpoint. Requires agents:read alongside eval:read, since probes quote the agent's configuration back; the skill and approval-policy families are omitted for callers without skills:read and tools:read respectively.",
+                "description": "Generates eval test cases top-down from the agent's own written intent — its permission tier, auto-approve policy, persona sections and skill frontmatter — rather than from usage history. Covers what a history-sampled set structurally cannot: denial compliance, permission-tier boundaries, and budget hints are behaviours a well-behaved incumbent never produced, so no past turn demonstrates them. Every probe carries free-text notes describing what a good answer looks like, surfaced to the judge as context and never parsed as assertions. Generation is deterministic for a given agent, so passing set= suppresses probes that set already carries. Nothing is written — accepting a probe is a separate call to the task create endpoint. Requires agents:read alongside eval:read, since probes quote the agent's configuration back; the skill and approval-policy families are omitted for callers without skills:read and tools:read respectively. With tools:read the denial-compliance probes name one of the agent's write tools; without it they use canned text that names no tool.",
                 "produces": [
                     "application/json"
                 ],
@@ -3294,7 +3294,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Mines past turns for ones worth saving as test cases: any rejected or failed tool call, three or more tool rounds, a reply cost in the pool's top decile, or a command-triggered skill. Candidates are stratified across the categories rather than ranked overall, since a set drawn purely by interestingness would be all failures and represent nothing the agent normally does. Turns already saved as a task are skipped, and a turn carrying no signal is never offered. Nothing is written — accepting a candidate is a separate call to the task create endpoint.",
+                "description": "Mines past turns for ones worth saving as test cases: any rejected or failed tool call, three or more tool rounds, a reply cost in the pool's top decile, or a command-triggered skill. Candidates are stratified across the categories rather than ranked overall, since a set drawn purely by interestingness would be all failures and represent nothing the agent normally does. Turns already saved as a task are skipped, and a turn carrying no signal is never offered. Candidates from a scheduled skill run carry suggested judge notes (`notes`) that name the skill. The notes quote the skill's description only when the caller has skills:read. Nothing is written — accepting a candidate is a separate call to the task create endpoint.",
                 "produces": [
                     "application/json"
                 ],
@@ -9197,15 +9197,15 @@
                     "type": "number"
                 },
                 "lowest": {
-                    "description": "check with the lowest score; \"\" when an answer is missing",
+                    "description": "check with the lowest score; \"\" when an answer is missing, except a review missing only self_grant (it predates that question and is scored on the checks it has)",
                     "type": "string"
                 },
                 "min_deny_score": {
-                    "description": "lowest check that can deny (no_leak only escalates); nil when an answer is missing",
+                    "description": "lowest check that can deny (no_leak and no_self_grant only escalate); nil when an answer is missing, except a review missing only self_grant",
                     "type": "number"
                 },
                 "min_score": {
-                    "description": "nil: an answer is missing, so the call always escalates",
+                    "description": "nil: an answer is missing, so the call always escalates; set for a review missing only self_grant, scored on the checks it has",
                     "type": "number"
                 },
                 "model": {
@@ -9675,6 +9675,10 @@
                 },
                 "message_id": {
                     "type": "integer"
+                },
+                "notes": {
+                    "description": "Notes is suggested judge context, saved with the task when the\ncandidate is accepted. Set only for a turn a schedule fired for a skill.",
+                    "type": "string"
                 },
                 "preceding": {
                     "type": "array",

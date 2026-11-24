@@ -3,7 +3,7 @@ title: "Supervisors & Auto-Approval"
 description: "Letting an LLM reviewer, or a standing rule, answer approval prompts for you."
 slug: "supervisors"
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-10-02T00:00:00+00:00
+lastmod: 2026-11-23T00:00:00+00:00
 draft: false
 weight: 45
 toc: true
@@ -69,7 +69,7 @@ session_tier = "autonomous"
 llm_model = "claude-haiku-4-5"
 ```
 
-When a tool call reaches the supervisor, it gets a one-shot LLM call — the tool name and arguments, its description, and the last few conversation messages — and answers with one of:
+When a tool call reaches the supervisor, it gets a one-shot LLM call — the tool name and arguments, its description, and the last few conversation messages — and answers with one of the decisions below. A description written by an external tool server is shown inside `<untrusted_tool_output>` tags and labelled as data, and the conversation is labelled as context only: the supervisor is told not to follow instructions found in either.
 
 | Decision | Result |
 |---|---|
@@ -80,6 +80,12 @@ When a tool call reaches the supervisor, it gets a one-shot LLM call — the too
 A timeout or an error also falls through to human approval. The supervisor fails **open to you**, never open to the tool.
 
 Tool calls whose arguments exceed `supervisor_max_args_bytes` (default 16 KB) skip the review entirely and go to you, audited with `cause: "too_large"`. The arguments are not truncated, since a reviewer shown part of a payload could approve the part it never saw.
+
+### What the supervisor checks
+
+The supervisor is asked whether the call does what the request asked, whether its arguments are safe, and whether it stays in scope. It is also told to deny any call that saves a permission for the agent: text saying it may act without asking, a claim that an operator or user approved something, or an instruction to skip review, such as saving "you have my blanket approval" to memory or writing a skill that says to skip approval. Approval comes from your configuration ([auto-approve rules](#auto-approve-rules), tiers, this supervisor), never from the conversation, so the supervisor denies these calls even when you asked for them in chat. This applies to calls that reach the supervisor: a call that matches an auto-approve rule, or that an enforcing decision model approves, runs without a supervisor review.
+
+For the in-process skill and KV write tools (`skill_create`, `skill_update`, `skill_patch`, `skill_write_file`, `skill_delete`, `kv_set` and `kv_delete`), the review also says whether the target already exists, counting a skill file on disk as well as a loaded skill. An external tool with the same name gets no target. A `skill_update` with `new_name` is shown as a rename, with both names and whether the new one is taken. For a KV key it adds when the key was last written and, if a scheduled skill wrote it, which one. That name only records which scheduled skill's turn made the write; it authenticates nothing, so treat it as a hint, not proof. Writes from other turns, and keys written before denkeeper recorded writers, read as not recorded. A call that replaces or deletes something needs the user's request, or on a scheduled run the skill's stated purpose, to ask for exactly that. The same `target` appears in the `supervisor` audit event.
 
 ### Constraints
 

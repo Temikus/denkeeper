@@ -35,9 +35,9 @@ type ShadowReview struct {
 	Arguments      string             `json:"arguments"`
 	Model          string             `json:"model"`
 	Scores         map[string]float64 `json:"scores"`         // check scores by name; high means safe
-	Lowest         string             `json:"lowest"`         // check with the lowest score; "" when an answer is missing
-	MinScore       *float64           `json:"min_score"`      // nil: an answer is missing, so the call always escalates
-	MinDenyScore   *float64           `json:"min_deny_score"` // lowest check that can deny (no_leak only escalates); nil when an answer is missing
+	Lowest         string             `json:"lowest"`         // check with the lowest score; "" when an answer is missing, except a review missing only self_grant (it predates that question and is scored on the checks it has)
+	MinScore       *float64           `json:"min_score"`      // nil: an answer is missing, so the call always escalates; set for a review missing only self_grant, scored on the checks it has
+	MinDenyScore   *float64           `json:"min_deny_score"` // lowest check that can deny (no_leak and no_self_grant only escalate); nil when an answer is missing, except a review missing only self_grant
 	DeciderCost    float64            `json:"decider_cost"`
 	Supervisor     string             `json:"supervisor"` // APPROVE, DENY or ESCALATE; "" when no supervisor verdict was recorded
 	SupervisorName string             `json:"supervisor_name,omitempty"`
@@ -185,10 +185,12 @@ func shadowReviewFrom(ev audit.Event) (ShadowReview, bool) {
 		DeciderCost:    d.Cost,
 	}
 	// Same rule as decideSupervisorOutcome: the lowest check decides, and a
-	// missing answer escalates.
+	// missing answer escalates. Exception: a review missing only self_grant
+	// predates that question, so it is scored on the checks it has. The live
+	// path still escalates when self_grant is missing.
 	scores, order, missing := deciderChecks(d.Answers)
 	r.Scores = scores
-	if missing == "" {
+	if missing == "" || onlySelfGrantMissing(d.Answers) {
 		lowID, low := lowestCheck(scores, order)
 		_, denyLow := lowestCheck(scores, denyingChecks(order))
 		r.Lowest, r.MinScore, r.MinDenyScore = lowID, &low, &denyLow

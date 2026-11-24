@@ -15,7 +15,7 @@ import (
 // @Param        name     path      string  true  "Agent name"
 // @Param        section  path      string  true  "Persona section name (identity, soul, user, memory)"
 // @Success      200  {object}  map[string]interface{}  "section, content, editable, agent_mutable"
-// @Failure      400  {object}  map[string]string       "Unknown section"
+// @Failure      400  {object}  map[string]string       "Unknown section, or the agent has no persona"
 // @Failure      401  {object}  map[string]string       "Unauthorized"
 // @Failure      403  {object}  map[string]string       "Forbidden — requires agents:read scope"
 // @Failure      404  {object}  map[string]string       "Agent not found"
@@ -27,6 +27,10 @@ func (s *Server) handleGetPersona(w http.ResponseWriter, r *http.Request) {
 	e := s.deps.Dispatcher.Agent(agentName)
 	if e == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("agent %q not found", agentName)})
+		return
+	}
+	if e.PersonaSections() == nil {
+		writeNoPersona(w, agentName)
 		return
 	}
 
@@ -57,7 +61,7 @@ func (s *Server) handleGetPersona(w http.ResponseWriter, r *http.Request) {
 // @Param        section  path      string             true  "Persona section name (identity, soul, user, memory)"
 // @Param        body     body      object{content=string}  true  "New section content"
 // @Success      200  {object}  map[string]string  "agent, section, status"
-// @Failure      400  {object}  map[string]string  "Unknown section or invalid JSON"
+// @Failure      400  {object}  map[string]string  "Unknown section, no persona, or invalid JSON"
 // @Failure      401  {object}  map[string]string  "Unauthorized"
 // @Failure      403  {object}  map[string]string  "Forbidden — requires agents:write scope"
 // @Failure      404  {object}  map[string]string  "Agent not found"
@@ -70,6 +74,10 @@ func (s *Server) handleUpdatePersona(w http.ResponseWriter, r *http.Request) {
 	e := s.deps.Dispatcher.Agent(agentName)
 	if e == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("agent %q not found", agentName)})
+		return
+	}
+	if e.PersonaSections() == nil {
+		writeNoPersona(w, agentName)
 		return
 	}
 
@@ -99,5 +107,13 @@ func (s *Server) handleUpdatePersona(w http.ResponseWriter, r *http.Request) {
 		"agent":   agentName,
 		"section": section,
 		"status":  "updated",
+	})
+}
+
+// writeNoPersona answers a persona request for an agent that has none. It is
+// checked before the section, or every section would read as unknown.
+func writeNoPersona(w http.ResponseWriter, agentName string) {
+	writeJSON(w, http.StatusBadRequest, map[string]string{
+		"error": fmt.Sprintf("agent %q has no persona configured", agentName),
 	})
 }

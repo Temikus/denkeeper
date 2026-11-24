@@ -9,6 +9,7 @@ package mcpserver
 
 import (
 	"log/slog"
+	"time"
 
 	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/api"
@@ -32,6 +33,8 @@ type ScheduleManager interface {
 	RegisterAndStart(cfg scheduler.Config, job scheduler.JobFunc) error
 	GetEntry(name string) (scheduler.Entry, bool)
 	Unregister(name string) error
+	// Location is the zone cron expressions run in (ops_report's expected_fires).
+	Location() *time.Location
 }
 
 // Deps holds the application dependencies the MCP server needs.

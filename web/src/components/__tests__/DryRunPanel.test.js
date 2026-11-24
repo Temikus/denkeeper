@@ -1,5 +1,5 @@
 import { describe, test, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/svelte'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/svelte'
 import { http, HttpResponse } from 'msw'
 import { server } from '../../test/server.js'
 import { token, authMode } from '../../store.js'
@@ -44,7 +44,7 @@ function makeTranscript(overrides = {}) {
       {
         tool: 'kv_set', server: 'config', round: 2, outcome: 'suppressed', suppressed: true,
         duration_ms: 0, arguments: '{"key":"log:heartbeat:2026-07-06"}',
-        result: '[dry-run: write suppressed — kv_set not executed; assume success]',
+        result: '[dry-run: "kv_set" not executed. If this was a write, treat it as done. If it was a read, its result is unknown: do not guess it or repeat the call, and carry on without it.]',
       },
     ],
     ...overrides,
@@ -101,9 +101,9 @@ describe('DryRunPanel', () => {
     await clickRun()
 
     const row = await screen.findByText('kv_set')
-    expect(screen.queryByText(/write suppressed — kv_set not executed/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/"kv_set" not executed\. If this was a write/)).not.toBeInTheDocument()
     await fireEvent.click(row.closest('button'))
-    expect(screen.getByText(/write suppressed — kv_set not executed/)).toBeInTheDocument()
+    expect(screen.getByText(/"kv_set" not executed\. If this was a write/)).toBeInTheDocument()
   })
 
   test('surfaces an error inline with a retry', async () => {
@@ -230,6 +230,186 @@ describe('DryRunPanel', () => {
 
       await pickCompare()
       expect(screen.queryByText(/Morning\. Nothing needs you/)).not.toBeInTheDocument()
+    })
+
+    // The candidate run is held open by a promise the test settles, so the
+    // waiting state is observed rather than raced.
+    function deferred() {
+      let resolve, reject
+      const promise = new Promise((res, rej) => { resolve = res; reject = rej })
+      return { promise, resolve, reject }
+    }
+
+    const primaryCol = (c) => c.querySelector('.body .col:not(.right)')
+    const rightCol = (c) => c.querySelector('.col.right')
+
+    async function startWithPendingCandidate() {
+      const pending = deferred()
+      const run = vi.fn()
+        .mockResolvedValueOnce(makeTranscript())
+        .mockReturnValueOnce(pending.promise)
+      const { container } = render(DryRunPanel, { props: { run } })
+      await pickCompare()
+      await clickRun()
+      await screen.findByText(/Morning\. Nothing needs you/)
+      return { run, pending, container }
+    }
+
+    test('shows a placeholder column while the candidate runs', async () => {
+      const { container } = await startWithPendingCandidate()
+
+      const right = rightCol(container)
+      expect(right).not.toBeNull()
+      expect(within(right).getByText('moonshotai/kimi-k3')).toBeInTheDocument()
+      expect(within(right).getByText('CANDIDATE')).toBeInTheDocument()
+      expect(within(right).getByText(/Running through the agent/)).toBeInTheDocument()
+      // Announced by the panel's persistent live region, not this div.
+      expect(within(right).queryByRole('status')).toBeNull()
+      expect(container.querySelector('.body.split')).not.toBeNull()
+      expect(primaryCol(container).querySelector('.lane-args')).toBeNull()
+    })
+
+    const strip = (c) => c.querySelector('.deltas')
+    const liveStatus = (c) => c.querySelector('.sr-only[role="status"]')
+
+    test('reserves the delta strip and caveat while the candidate runs', async () => {
+      const { container } = await startWithPendingCandidate()
+
+      expect(strip(container)).not.toBeNull()
+      const rounds = within(strip(container)).getByText('Rounds').closest('.delta')
+      expect(rounds.querySelector('.delta-from')).toHaveTextContent('3 →')
+      expect(container.querySelectorAll('.delta-pending')).toHaveLength(4)
+      expect(screen.getByText(/a smoke test, not a verdict/i)).toBeInTheDocument()
+    })
+
+    // Same element before and after: the strip is filled in, not inserted.
+    test('the reserved strip fills in with real values when the candidate lands', async () => {
+      const { pending, container } = await startWithPendingCandidate()
+      const reserved = strip(container)
+
+      pending.resolve(makeTranscript({ model: 'kimi-k3', rounds: 4, response: 'Candidate answer.' }))
+      await screen.findByText('Candidate answer.')
+      expect(strip(container)).toBe(reserved)
+      expect(container.querySelector('.delta-pending')).toBeNull()
+      expect(screen.getByText('3 → 4')).toBeInTheDocument()
+    })
+
+    test('a failed candidate keeps the strip in place with no values', async () => {
+      const { pending, container } = await startWithPendingCandidate()
+      const reserved = strip(container)
+
+      pending.reject(new Error('candidate: provider timeout'))
+      await within(rightCol(container)).findByRole('alert')
+      expect(strip(container)).toBe(reserved)
+      const marks = [...container.querySelectorAll('.delta-pending')].map(m => m.textContent)
+      expect(marks).toEqual(['—', '—', '—', '—'])
+    })
+
+    test('announces the candidate run in a live region that is always present', async () => {
+      const pending = deferred()
+      const primaryRun = deferred()
+      const run = vi.fn().mockReturnValueOnce(primaryRun.promise).mockReturnValueOnce(pending.promise)
+      const { container } = render(DryRunPanel, { props: { run } })
+      expect(liveStatus(container)).toHaveTextContent(/^$/)
+
+      await pickCompare()
+      await clickRun()
+      expect(liveStatus(container)).toHaveTextContent(/^$/)
+
+      primaryRun.resolve(makeTranscript())
+      await screen.findByText(/Morning\. Nothing needs you/)
+      expect(liveStatus(container)).toHaveTextContent('Running the candidate…')
+
+      pending.resolve(makeTranscript({ model: 'kimi-k3', response: 'Candidate answer.' }))
+      await screen.findByText('Candidate answer.')
+      expect(liveStatus(container)).toHaveTextContent(/^$/)
+    })
+
+    // A result that lands after the comparison was removed must not draw
+    // deltas over what is now a single column.
+    test('clearing the comparison mid-run drops the late candidate result', async () => {
+      const { pending, container } = await startWithPendingCandidate()
+
+      await fireEvent.click(screen.getByLabelText('Remove comparison'))
+      pending.resolve(makeTranscript({ model: 'kimi-k3', response: 'Candidate answer.' }))
+      await waitFor(() => expect(screen.getByText(/Compare with/)).toBeInTheDocument())
+
+      expect(strip(container)).toBeNull()
+      expect(rightCol(container)).toBeNull()
+      expect(container.querySelector('.body.split')).toBeNull()
+      expect(screen.queryByText('Candidate answer.')).not.toBeInTheDocument()
+      expect(screen.getByText(/Morning\. Nothing needs you/)).toBeInTheDocument()
+    })
+
+    test('the primary column keeps its shape when the candidate lands', async () => {
+      const { pending, container } = await startWithPendingCandidate()
+      expect(primaryCol(container).querySelector('.lane-args')).toBeNull()
+
+      pending.resolve(makeTranscript({ model: 'kimi-k3', response: 'Candidate answer.' }))
+      await screen.findByText('Candidate answer.')
+      expect(screen.queryByText(/Running through the agent/)).not.toBeInTheDocument()
+      expect(screen.getByText('Rounds')).toBeInTheDocument()
+      expect(primaryCol(container).querySelector('.lane-args')).toBeNull()
+    })
+
+    test('a failed candidate reports in its own column and keeps the primary', async () => {
+      const { pending, container } = await startWithPendingCandidate()
+
+      pending.reject(new Error('candidate: provider timeout'))
+      const right = rightCol(container)
+      expect(await within(right).findByRole('alert')).toHaveTextContent('candidate: provider timeout')
+      expect(screen.getByText(/Morning\. Nothing needs you/)).toBeInTheDocument()
+      expect(container.querySelector('.body.split')).not.toBeNull()
+      expect(container.querySelector('.error-state')).toBeNull()
+    })
+
+    test('retrying a failed candidate reruns only the candidate', async () => {
+      const { run, pending, container } = await startWithPendingCandidate()
+      pending.reject(new Error('candidate: provider timeout'))
+      await within(rightCol(container)).findByRole('alert')
+
+      const retry = deferred()
+      run.mockReturnValueOnce(retry.promise)
+      await fireEvent.click(within(rightCol(container)).getByText('Try again'))
+      expect(run).toHaveBeenCalledTimes(3)
+      expect(run).toHaveBeenNthCalledWith(3, 'moonshotai/kimi-k3')
+      expect(screen.getByRole('button', { name: 'Running…' })).toBeDisabled()
+
+      retry.resolve(makeTranscript({ model: 'kimi-k3', response: 'Candidate answer.' }))
+      await screen.findByText('Candidate answer.')
+      expect(within(rightCol(container)).queryByRole('alert')).not.toBeInTheDocument()
+    })
+
+    test('a failed primary in a compare run shows the top-level error only', async () => {
+      const run = vi.fn().mockRejectedValueOnce(new Error('dry run failed: provider timeout'))
+      const { container } = render(DryRunPanel, { props: { run } })
+      await pickCompare()
+      await clickRun()
+
+      await screen.findByText(/dry run failed: provider timeout/)
+      expect(container.querySelector('.error-state')).not.toBeNull()
+      expect(rightCol(container)).toBeNull()
+      expect(run).toHaveBeenCalledTimes(1)
+    })
+
+    test('while the primary runs, the wait is announced once and no column shows', async () => {
+      const pending = deferred()
+      const run = vi.fn().mockReturnValueOnce(pending.promise)
+      const { container } = render(DryRunPanel, { props: { run } })
+      await pickCompare()
+      await clickRun()
+
+      expect(screen.getAllByText(/Running through the agent/)).toHaveLength(1)
+      expect(rightCol(container)).toBeNull()
+    })
+
+    test('a single-model run keeps the full-width, uncompact layout', async () => {
+      const { container } = render(DryRunPanel, { props: { run: okRun } })
+      await clickRun()
+      await screen.findByText(/Morning\. Nothing needs you/)
+
+      expect(container.querySelector('.body.split')).toBeNull()
+      expect(container.querySelector('.col').querySelector('.lane-args')).not.toBeNull()
     })
   })
 })

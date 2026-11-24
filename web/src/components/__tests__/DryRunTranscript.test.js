@@ -85,3 +85,19 @@ describe('DryRunTranscript — serving upstream', () => {
     expect(screen.getByTestId('upstream')).toHaveTextContent('via bedrock')
   })
 })
+
+// A compare run's candidate column appears before its transcript exists, and
+// its header must match the finished one exactly.
+describe('DryRunTranscript — header only', () => {
+  test('renders the model and label, and nothing a finished run would show', () => {
+    const { container } = render(DryRunTranscript, {
+      props: { model: 'moonshotai/kimi-k3', label: 'CANDIDATE', accent: true },
+    })
+    expect(screen.getByText('moonshotai/kimi-k3')).toBeInTheDocument()
+    expect(screen.getByText('CANDIDATE')).toBeInTheDocument()
+    expect(container.querySelector('.dot-model.accent')).not.toBeNull()
+    expect(container.querySelector('.summary')).toBeNull()
+    expect(container.querySelector('.rows')).toBeNull()
+    expect(container.querySelector('.response')).toBeNull()
+  })
+})

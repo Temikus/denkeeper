@@ -3,7 +3,7 @@ title: "Dry Runs & Previews"
 description: "Seeing what a skill or schedule would do before it does it."
 slug: "dry-runs"
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-25T00:00:00+00:00
+lastmod: 2026-11-22T00:00:00+00:00
 draft: false
 weight: 55
 toc: true
@@ -28,6 +28,8 @@ What changes is everything around it:
 | Read-only tools | Execute | Execute |
 | Every other tool | Executes | Returns a suppressed marker |
 | Current date | Now | `as_of`, if given |
+
+For a suppressed call the model is told the call was not executed, that a write can be treated as done, and that a read's result is unknown. To get real data from an external tool in a preview, declare it read-only in its `[tools.*]` entry: set `idempotent = true` if every tool on the server is read-only, list it in `idempotent_tools`, or set `trust_annotations = true` if the server marks it `readOnlyHint`.
 
 Isolation is **structural, not filtered** — the persistence step returns immediately rather than writing and later hiding. There is no dry-run data to leak, because none is created.
 

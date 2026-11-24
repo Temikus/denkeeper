@@ -89,6 +89,7 @@ An empty variant runs the agent's live config. By convention the incumbent is li
 - `k` is how many samples each (task, variant) pair runs, so the metrics have something to average over. Defaults to `[eval] default_k`.
 - `sample_tasks` runs a **stratified random subset** of the set instead of all of it — the cheap first signal. The server draws it, and the drawn ids are pinned on the run, so a task added to the set afterwards cannot retroactively change what the run was measuring. `0`, or a value at or above the set size, runs everything.
 - `cost_cap` defaults to `[eval] max_cost_per_run`.
+- A case saved from a scheduled turn runs with its `[Scheduled: …]` header moved to the run's clock (`as_of`, the run's creation time unless set), keeping the gap to its last run, and the judge and results show that header while the saved case keeps the original.
 
 `POST /api/v1/eval/estimate` prices a prospective run before it exists, with the same request shape. The per-(task, variant) basis is, in order: **history** (the task's source conversation has real telemetry, giving an honest per-exchange average, scaled by the list-price ratio when the variant runs a different model), **list price** (the advertised per-million-token price against a nominal per-turn budget), or **unknown**. Nothing is fabricated — a variant that can be priced neither way reports `basis: "unknown"` with a zero range, and the caller shows the hard cap alone.
 

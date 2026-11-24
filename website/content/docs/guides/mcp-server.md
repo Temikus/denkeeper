@@ -53,7 +53,7 @@ Behind a reverse proxy, set `api.external_url` so generated URLs are correct.
 | Area | Tools |
 |---|---|
 | Chat | `chat` |
-| Agents | `agent_list`, `agent_info`, `agent_update` |
+| Agents | `agent_list`, `agent_info`, `agent_update`, `persona_get`, `persona_update` |
 | Skills | `skill_list`, `skill_get`, `skill_create`, `skill_update`, `skill_delete`, `skill_revert` |
 | Schedules | `schedule_list`, `schedule_create`, `schedule_update`, `schedule_delete` |
 | Sessions | `session_list`, `session_messages`, `session_search`, `session_clear`, `session_compact` |
@@ -62,7 +62,7 @@ Behind a reverse proxy, set `api.external_url` so generated URLs are correct.
 | Channels | `channel_list` |
 | Audit | `audit_events`, `audit_summary`, `decider_reviews` |
 | Evals | `eval_pending`, `eval_get_pair`, `eval_verdict`, `eval_summary`, `eval_run_status`, `eval_samples` |
-| Telemetry | `cost_summary`, `telemetry_summary` |
+| Telemetry | `cost_summary`, `telemetry_summary`, `ops_report` |
 | KV | `kv_get`, `kv_set`, `kv_list`, `kv_delete` |
 | Tasks | `task_list`, `task_get`, `task_create`, `task_checkout`, `task_comment`, `task_update` |
 | Safety | `panic`, `panic_status`, `resume` |
@@ -70,6 +70,8 @@ Behind a reverse proxy, set `api.external_url` so generated URLs are correct.
 `agent_info` reports an agent's name, tier, provider, model, and skills, and adds `supervisor`, `supervisor_decider`, `persona_sections`, and `channels` only when they are non-empty — presence is the signal. `supervisor_decider` gives the [decision model](/docs/concepts/deciders/)'s name, model, mode, and thresholds; `agent_list` shows its name only. Supervisor and decider information is read from live wiring, so it reflects the state after a config reload or an API change rather than what the file said at startup. `agent_info` also reports `max_tool_rounds`, and `max_output_tokens` when it is not the provider default.
 
 `agent_update` (`agents:write`) changes an agent's `max_output_tokens` and `max_tool_rounds`. The change applies from the next LLM call and is saved to the config file. The result's `persisted` is `false` when there is no file or the save failed.
+
+`persona_get` (`agents:read`) reads one persona section of an agent: `identity`, `soul`, `user` or `memory`. `persona_update` (`agents:write`) replaces that section with the text you send. It replaces the whole section, so read it first and send the full new text; for `identity` that means the whole file, frontmatter included. An empty `soul` is refused, and the `user` character limit applies. Both work like the REST `GET` and `PUT /api/v1/agents/{name}/persona/{section}`, and the change applies from the agent's next turn.
 
 `skill_create` and `skill_update` take an optional `max_output_tokens`, the skill's own cap on output tokens per completion for turns it drives. It lowers a cap set on the agent or in `[llm]`, and is sent as is when neither sets one, even above the provider default (4096 on Anthropic). On `skill_update`, omit it to keep the current value and pass `0` to remove it.
 
@@ -83,7 +85,7 @@ They are also journaled. Before any skill write, the file's exact prior bytes ar
 
 **Editing skills where you write code.** Skills are markdown with frontmatter; an IDE agent with `skill_*` tools can draft and revise them against the real instance instead of you pasting into a web form.
 
-**Answering questions about the running system.** `audit_events`, `telemetry_summary`, and `cost_summary` turn "why did the 7am job cost so much yesterday" into a question you can just ask.
+**Answering questions about the running system.** `audit_events`, `telemetry_summary`, and `cost_summary` turn "why did the 7am job cost so much yesterday" into a question you can just ask. `ops_report` hands back one agent's computed health numbers for the last 7 days by default, up to 30 (spend against the window before, tool and skill outcomes, expected against actual schedule fires, KV key counts), so an audit does not have to add them up from raw events. Spend counts completed turns only. Spend, tools and skills are counted per conversation (a conversation moved from another agent brings its earlier turns along), and expected fires assume the current schedule ran for the whole window. `actual_fires` comes from the audit log, so it needs `[audit]` enabled and covers at most the audit retention window; without it the report lists it as unavailable. It needs `audit:read` and an `agent`.
 
 **Judging an eval run.** The `eval_*` tools let a client work a finished run's queue of blinded A/B pairs and decide whether a candidate model is an upgrade. `eval_get_pair` withholds everything that would identify a side — model, provider, variant name, cost, latency, usage — so the judge decides on the responses and their tool traces alone; `eval_summary` unblinds and applies the decision rule. Until the run is finished and every judgment item has a judge verdict, `eval_summary` returns only completeness and, per candidate, the pair counts and operator-judge agreement; the per-variant breakdown and verdict appear once judging is done. `eval_samples` returns a run's samples with the variant behind each one; it is refused until the run is terminal and every judgment item has a judge verdict, and from then on the run takes no more verdicts, so the MCP judge tools never show which variant is which while the run can still take verdicts. The REST `/pairs` and `/samples` views are unblinded and accept the same `eval:read` key, so connect the judge through MCP only: keep the key in the MCP client's config, and don't give the judge the key itself or a way to call the REST API. `eval_verdict` is the only writer among them and it writes verdicts only: a key scoped `eval:read,eval:write` can judge a run but cannot start one, which is the right shape for a judging key since runs spend real tokens. The repo's `/judge-eval` skill carries the rubric and drives the loop. See [Evals](/docs/concepts/evals/) for the loop these tools sit inside.
 
