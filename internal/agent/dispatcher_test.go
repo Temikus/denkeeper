@@ -2783,3 +2783,26 @@ func TestDispatcher_HumanOnlyApproval_OnlyApproveAndDeny(t *testing.T) {
 	}
 	check("activity log", me.sends[0], true)
 }
+
+// Every rendering path tells the person why this prompt has no auto-approve
+// buttons; an ordinary tool call does not get the line.
+func TestDispatcher_HumanOnlyApproval_SaysWhy(t *testing.T) {
+	msg := adapter.IncomingMessage{Adapter: "slack", ExternalID: "chat-1"}
+	for _, humanOnly := range []bool{true, false} {
+		evt := ChatEvent{Type: "tool_approval", Tool: "tool_add", Text: "{}", ApprovalCallback: "appr:1", ApprovalHumanOnly: humanOnly}
+		a := &mockAdapter{name: "slack"}
+		d := &Dispatcher{adapters: map[string]adapter.Adapter{"slack": a}, logger: testLogger()}
+		d.handleToolApproval(context.Background(), a, msg, evt, false, nil)
+		d.handleToolApproval(context.Background(), a, msg, evt, true, nil)
+		me := &mockMessageEditor{msgID: "m1"}
+		d.handleToolApproval(context.Background(), a, msg, evt, false, newTestActivityLog(me))
+		if len(a.sent) != 2 || len(me.sends) != 1 {
+			t.Fatalf("humanOnly=%v: sends = %d/%d, want 2/1", humanOnly, len(a.sent), len(me.sends))
+		}
+		for path, out := range map[string]adapter.OutgoingMessage{"standalone": a.sent[0], "debug": a.sent[1], "activity log": me.sends[0]} {
+			if got := strings.Contains(out.Text, humanOnlyApprovalNote); got != humanOnly {
+				t.Errorf("humanOnly=%v, %s: note present = %v; text %q", humanOnly, path, got, out.Text)
+			}
+		}
+	}
+}

@@ -301,7 +301,7 @@ Global MCP settings.
     init_retry_backoff = "2s"        # backoff between retries
     url_allowlist = []               # allowed hosts for SSE servers
     env_passthrough = []             # extra parent env vars to forward into all stdio subprocesses; DENKEEPER_* always filtered
-    allowed_commands = []            # exact stdio commands runtime-added tools may run (empty = no allowlist; non-admin REST keys then cannot add stdio tools)
+    allowed_commands = []            # exact stdio commands runtime-added tools may run (empty = no allowlist; non-admin REST keys then cannot add stdio tools); only npx/uvx are pin-checked
 
 ### [[schedules]]
 

@@ -58,6 +58,53 @@ func TestAddTool_NonAdminCommandOffAllowlist_Rejected(t *testing.T) {
 	}
 }
 
+// allowlistServer serves a non-admin key with [mcp] allowed_commands = ["npx"].
+func allowlistServer(t *testing.T) (*Server, *tool.Manager) {
+	t.Helper()
+	cfgPath := t.TempDir() + "/denkeeper.toml"
+	if err := os.WriteFile(cfgPath, []byte("[telegram]\ntoken = \"test\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mgr := tool.NewManager(testLogger(), config.MCPConfig{RequestTimeoutSecs: 10, AllowedCommands: []string{"npx"}})
+	deps := testDeps()
+	deps.LifecycleMgr = tool.NewLifecycleManager(mgr, cfgPath, 50, testLogger())
+	return New(testConfig(toolsWriteKey()), deps, testLogger()), mgr
+}
+
+// With the allowlist set the REST gate lets a non-admin stdio add through, so
+// the lifecycle check is what stops NODE_OPTIONS running code inside npx.
+func TestAddTool_NonAdminCodeLoadingEnvWithAllowlist_Rejected(t *testing.T) {
+	srv, mgr := allowlistServer(t)
+	rec := postJSON(srv, "/api/v1/tools", `{"name":"x","command":"npx","args":["-y","some-pkg@1.0.0"],`+
+		`"env":{"NODE_OPTIONS":"--import=data:text/javascript,process.exit(7)"}}`)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "NODE_OPTIONS") {
+		t.Fatalf("status = %d, body %s; want 400 naming NODE_OPTIONS", rec.Code, rec.Body)
+	}
+	if _, ok := mgr.ServerToolConfig("x"); ok {
+		t.Error("tool registered despite the rejection")
+	}
+}
+
+func TestUpdateTool_NonAdminEnvOnlyCodeLoadingWithAllowlist_Rejected(t *testing.T) {
+	srv, mgr := allowlistServer(t)
+	off := false
+	mgr.RegisterDisabled("gh", config.ToolConfig{Command: "npx", Args: []string{"pkg@1.0.0"}, Enabled: &off}, "test", false)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/tools/gh", strings.NewReader(
+		`{"command":"npx","args":["pkg@1.0.0"],"env":{"NODE_OPTIONS":"--require=/tmp/x.js"}}`))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "NODE_OPTIONS") {
+		t.Fatalf("status = %d, body %s; want 400 naming NODE_OPTIONS", rec.Code, rec.Body)
+	}
+	if got, _ := mgr.ServerToolConfig("gh"); len(got.Env) != 0 {
+		t.Errorf("refused env stored: %v", got.Env)
+	}
+}
+
 func TestAddPlugin_NonAdminSubprocess_Forbidden(t *testing.T) {
 	deps := testDeps()
 	deps.LifecycleMgr = testLifecycleMgr(t)

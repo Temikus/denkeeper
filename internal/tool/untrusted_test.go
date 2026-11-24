@@ -117,6 +117,38 @@ func TestValidatePinnedPackageArgs_UvxIndexOverridesRefused(t *testing.T) {
 	}
 }
 
+// These name a file or URL that can replace the pinned version or load a
+// config that moves the index.
+func TestValidatePinnedPackageArgs_UvxFileAndProjectFlagsRefused(t *testing.T) {
+	for _, flag := range []string{"--overrides", "--constraints", "-c", "--build-constraints", "-b",
+		"--config-file", "--directory", "--project"} {
+		requireRefusedOption(t, "uvx", []string{flag, "/tmp/x", "pkg==1.0"})
+	}
+}
+
+// --python with a path runs that executable as the interpreter.
+func TestValidatePinnedPackageArgs_UvxPythonOnlyBareVersion(t *testing.T) {
+	for _, args := range [][]string{
+		{"--python", "3.12", "pkg==1.0"},
+		{"-p", "3", "pkg==1.0"},
+		{"--python=3.12.4", "pkg==1.0"},
+	} {
+		if err := ValidatePinnedPackageArgs("uvx", args); err != nil {
+			t.Errorf("uvx %v: unexpected error %v", args, err)
+		}
+	}
+	for _, args := range [][]string{
+		{"--python", "/tmp/evil", "pkg==1.0"},
+		{"-p=./python", "pkg==1.0"},
+		{"--python", "pypy@3.10", "pkg==1.0"},
+		{"--python"},
+	} {
+		if err := ValidatePinnedPackageArgs("uvx", args); err == nil {
+			t.Errorf("uvx %v: accepted, want rejection", args)
+		}
+	}
+}
+
 // Every entry in a launcher's refused set must hit the refused branch, in
 // both the separate-value and --flag=value forms, so a typo or a move into
 // valueFlags/boolFlags fails here. The "cannot be pinned" message tells the
@@ -241,6 +273,96 @@ func TestLifecycleAddTool_SSEIgnoresCommandAllowlist(t *testing.T) {
 	m := NewManager(testLogger(), config.MCPConfig{AllowedCommands: []string{"npx"}})
 	if err := m.checkRuntimeCommand(config.ToolConfig{Transport: "sse", URL: "https://example.com"}); err != nil {
 		t.Errorf("sse tool rejected by the command allowlist: %v", err)
+	}
+}
+
+func TestValidateRuntimeEnv_RefusesCodeLoadingNames(t *testing.T) {
+	for _, name := range []string{
+		"NODE_OPTIONS", "node_options", "NODE_PATH", "NODE_EXTRA_CA_CERTS",
+		"npm_config_registry", "NPM_CONFIG_USERCONFIG", "npm_config_globalconfig",
+		"UV_INDEX_URL", "UV_DEFAULT_INDEX", "UV_EXTRA_INDEX_URL", "UV_FIND_LINKS",
+		"UV_INSECURE_HOST", "UV_CONFIG_FILE", "UV_OVERRIDE", "uv_python",
+		"PIP_INDEX_URL", "pip_extra_index_url",
+		"PYTHONPATH", "PYTHONSTARTUP", "PYTHONHOME", "PYTHONUSERBASE",
+		"LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT", "DYLD_INSERT_LIBRARIES", "dyld_library_path",
+		"BASH_ENV", "ENV", "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS",
+		"PERL5OPT", "PERL5LIB", "RUBYOPT", "RUBYLIB",
+		"PATH", "HOME", "XDG_CONFIG_HOME", "SSL_CERT_FILE", "SSL_CERT_DIR",
+	} {
+		err := ValidateRuntimeEnv(map[string]string{"API_KEY": "x", name: "v"})
+		if err == nil {
+			t.Errorf("%s: accepted, want rejection", name)
+			continue
+		}
+		if !strings.Contains(err.Error(), name) {
+			t.Errorf("%s: error %q does not name the variable", name, err)
+		}
+	}
+}
+
+func TestValidateRuntimeEnv_AllowsOrdinaryNames(t *testing.T) {
+	env := map[string]string{
+		"GITHUB_TOKEN": "x", "PYTHONUNBUFFERED": "1", "NODE_ENV": "production",
+		"LOG_LEVEL": "debug", "ENVIRONMENT": "prod", "UVICORN_PORT": "8000",
+	}
+	if err := ValidateRuntimeEnv(env); err != nil {
+		t.Errorf("ordinary env refused: %v", err)
+	}
+}
+
+// With the allowlist set, a non-admin REST key reaches only this check, so it
+// is what stops NODE_OPTIONS running other code inside an allowed npx.
+func TestLifecycleAddTool_CodeLoadingEnvRefused(t *testing.T) {
+	lm := newAllowlistLifecycleMgr(t, "npx")
+	err := lm.AddTool(context.Background(), "evil", config.ToolConfig{
+		Command: "npx", Args: []string{"-y", "pkg@1.0.0"},
+		Env: map[string]string{"NODE_OPTIONS": "--import=data:text/javascript,process.exit(7)"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "NODE_OPTIONS") {
+		t.Fatalf("err = %v, want a NODE_OPTIONS rejection", err)
+	}
+	if len(lm.ListTools()) != 0 {
+		t.Error("tool registered despite the rejection")
+	}
+}
+
+// An env-only edit leaves the command line alone but changes what the
+// respawned child runs, so it is checked too.
+func TestLifecycleUpdateTool_EnvOnlyChangeRechecked(t *testing.T) {
+	lm := newAllowlistLifecycleMgr(t, "npx")
+	off := false
+	stored := config.ToolConfig{Command: "npx", Args: []string{"pkg@1.0.0"}, Env: map[string]string{"A": "1"}, Enabled: &off}
+	lm.toolMgr.RegisterDisabled("gh", stored, "test", false)
+
+	next := stored
+	next.Env = map[string]string{"A": "1", "npm_config_registry": "https://evil.example"}
+	err := lm.UpdateTool(context.Background(), "gh", next)
+	if err == nil || !strings.Contains(err.Error(), "npm_config_registry") {
+		t.Fatalf("err = %v, want an npm_config_registry rejection", err)
+	}
+	got, _ := lm.toolMgr.ServerToolConfig("gh")
+	if _, ok := got.Env["npm_config_registry"]; ok {
+		t.Error("refused env was stored")
+	}
+
+	next.Env = map[string]string{"A": "2"}
+	if err := lm.UpdateTool(context.Background(), "gh", next); err != nil {
+		t.Errorf("ordinary env change refused: %v", err)
+	}
+}
+
+// An env-only edit checks the env alone, so an operator's TOML tool whose
+// command is not on the allowlist keeps a harmless env edit.
+func TestLifecycleUpdateTool_EnvOnlyChangeSkipsCommandCheck(t *testing.T) {
+	lm := newAllowlistLifecycleMgr(t, "npx")
+	off := false
+	stored := config.ToolConfig{Command: "/opt/operator/mcp", Enabled: &off}
+	lm.toolMgr.RegisterDisabled("op", stored, "test", false)
+
+	next := stored
+	next.Env = map[string]string{"LOG_LEVEL": "debug"}
+	if err := lm.UpdateTool(context.Background(), "op", next); err != nil {
+		t.Errorf("env-only edit of an operator tool refused: %v", err)
 	}
 }
 

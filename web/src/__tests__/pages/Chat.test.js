@@ -239,6 +239,7 @@ describe('Chat page', () => {
     expect(screen.getByLabelText('Deny tool_add')).toBeInTheDocument()
     expect(screen.queryByLabelText('Approve tool_add for 15 minutes')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('Always approve tool_add')).not.toBeInTheDocument()
+    expect(screen.getByText('Installs code that runs on this machine, so it needs your approval every time.')).toBeInTheDocument()
   })
 
   test('labels a decider approval as the decider, with its reason', async () => {
@@ -467,6 +468,54 @@ describe('Chat page', () => {
       expect(screen.getByText('Pending approvals (1)')).toBeInTheDocument()
       expect(screen.getByText('Run tool: fetch_data')).toBeInTheDocument()
     })
+  })
+
+  test('pending banner shows a human-only tool_add with no auto-approve buttons', async () => {
+    server.use(
+      http.get('/api/v1/approvals', ({ request }) => {
+        const url = new URL(request.url)
+        if (url.searchParams.get('status') === 'pending') {
+          return HttpResponse.json([
+            { id: 'appr-ha', agent_name: 'default', adapter_name: 'telegram', external_id: '12345678', kind: 'install_tool', status: 'pending',
+              summary: 'Execute tool "tool_add" with args: {"name":"gh","command":"npx"}' },
+          ])
+        }
+        return HttpResponse.json([])
+      })
+    )
+
+    render(Chat)
+    await waitFor(() => {
+      expect(screen.getByText('Pending approvals (1)')).toBeInTheDocument()
+    })
+    expect(screen.getByLabelText('Approve tool tool_add')).toBeInTheDocument()
+    expect(screen.getByLabelText('Deny tool tool_add')).toBeInTheDocument()
+    expect(screen.queryByText('15 min')).not.toBeInTheDocument()
+    expect(screen.queryByText('Always')).not.toBeInTheDocument()
+    expect(screen.getByText('Installs code that runs on this machine, so it needs your approval every time.')).toBeInTheDocument()
+  })
+
+  // Config MCP's own install requests ("Install tool: …") are not engine tool
+  // calls, so the banner leaves them to the Approvals page.
+  test('pending banner skips install_tool rows that are not engine tool calls', async () => {
+    server.use(
+      http.get('/api/v1/approvals', ({ request }) => {
+        const url = new URL(request.url)
+        if (url.searchParams.get('status') === 'pending') {
+          return HttpResponse.json([
+            { id: 'appr-cfg', agent_name: 'default', adapter_name: 'telegram', external_id: '12345678', kind: 'install_tool', status: 'pending', summary: 'Install tool: gh (npx)' },
+            { id: 'appr-tc', agent_name: 'default', adapter_name: 'telegram', external_id: '12345678', kind: 'tool_call', status: 'pending', summary: 'Run tool: fetch_data' },
+          ])
+        }
+        return HttpResponse.json([])
+      })
+    )
+
+    render(Chat)
+    await waitFor(() => {
+      expect(screen.getByText('Pending approvals (1)')).toBeInTheDocument()
+    })
+    expect(screen.queryByText('Install tool: gh (npx)')).not.toBeInTheDocument()
   })
 
   // --- Channel selector interaction tests ---

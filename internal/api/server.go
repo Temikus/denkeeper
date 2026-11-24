@@ -1877,7 +1877,7 @@ func (s *Server) handleCreateAutoApprove(w http.ResponseWriter, r *http.Request)
 		// The engine never consults rules for these, so a rule would be inert;
 		// refusing it says so instead of listing a rule that does nothing.
 		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": body.Tool + " starts a program on the host and always needs a one-off approval; it cannot be auto-approved",
+			"error": body.Tool + " runs code on this machine and always needs a one-off approval; it cannot be auto-approved",
 		})
 		return
 	}
@@ -2055,8 +2055,10 @@ func (s *Server) lifecycleRequired(w http.ResponseWriter) bool {
 // It also gates what the tool spawns. Without [mcp] allowed_commands nothing
 // restricts a stdio command, so a non-admin key may not add one or change an
 // existing tool's command line or env (prev is the stored config on an update,
-// nil on an add). Env counts because the respawned child reads it: a value such
-// as NODE_OPTIONS can make an operator's command run other code. With the allowlist set, LifecycleManager enforces it for everyone.
+// nil on an add). Env counts because the respawned child reads it. With the
+// allowlist set, this lets the call through and LifecycleManager checks it for
+// every caller: the command against the allowlist, npx/uvx pins, and env names
+// that load code (tool.ValidateRuntimeEnv).
 func (s *Server) allowToolEnvRefs(w http.ResponseWriter, r *http.Request, cfg config.ToolConfig, prev *config.ToolConfig) bool {
 	err := tool.ValidateUntrustedEnvRefs(cfg.Env, cfg.URL, cfg.Headers)
 	if err == nil && len(cfg.EnvPassthrough) > 0 {

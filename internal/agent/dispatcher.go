@@ -1593,10 +1593,14 @@ func (d *Dispatcher) routeApprovalStatus(ctx context.Context, a adapter.Adapter,
 func (d *Dispatcher) sendDebugApprovalPrompt(ctx context.Context, a adapter.Adapter, msg adapter.IncomingMessage, evt ChatEvent) {
 	// The debug prompt has always used the adapter's default layout.
 	buttons, _ := approvalButtons(evt.ApprovalCallback, evt.ApprovalHumanOnly, "🔄 Auto (15 min)", "♾️ Auto (always)")
+	ask := "Approve?"
+	if evt.ApprovalHumanOnly {
+		ask = humanOnlyApprovalNote + "\nApprove?"
+	}
 	err := a.Send(ctx, adapter.OutgoingMessage{
-		Text: fmt.Sprintf("Agent wants to execute tool **%s**\n\n```\n%s\n```\n\nApprove?",
+		Text: fmt.Sprintf("Agent wants to execute tool **%s**\n\n```\n%s\n```\n\n%s",
 			truncateEscaped(evt.Tool, toolNameMaxBytes),
-			truncateEscaped(evt.Text, approvalArgsMaxBytes)),
+			truncateEscaped(evt.Text, approvalArgsMaxBytes), ask),
 		ExternalID: msg.ExternalID,
 		Adapter:    msg.Adapter,
 		Buttons:    buttons,
@@ -1615,6 +1619,7 @@ func (d *Dispatcher) sendStandaloneApprovalPrompt(ctx context.Context, a adapter
 	text := renderApprovalSection(
 		truncateEscaped(evt.Tool, toolNameMaxBytes),
 		truncateEscaped(evt.Text, approvalArgsMaxBytes),
+		evt.ApprovalHumanOnly,
 	)
 	buttons, layout := approvalButtons(evt.ApprovalCallback, evt.ApprovalHumanOnly, "🔄 15 min", "♾️ Always")
 	err := a.Send(ctx, adapter.OutgoingMessage{
@@ -1741,9 +1746,9 @@ const (
 	// rendered in an approval prompt.
 	approvalArgsMaxBytes = 2000
 	// approvalSectionOverheadBytes covers the approval section's fixed markup
-	// (header, expandable blockquote tags, separator newline) plus the
-	// ellipsis each truncated field may append.
-	approvalSectionOverheadBytes = 80
+	// (header, expandable blockquote tags, separator newline), the ellipsis
+	// each truncated field may append, and a human-only prompt's note line.
+	approvalSectionOverheadBytes = 80 + len(humanOnlyApprovalNote) + 1
 	// approvalSectionMaxBytes is the resulting ceiling on a rendered approval
 	// section.
 	approvalSectionMaxBytes = approvalArgsMaxBytes + toolNameMaxBytes + approvalSectionOverheadBytes
@@ -1805,10 +1810,19 @@ func truncateEscaped(s string, maxBytes int) string {
 // renderApprovalSection builds the approval header plus the expandable args
 // block. tool and args must already be truncated to their escaped-width
 // budgets; the result is then bounded by approvalSectionMaxBytes.
-func renderApprovalSection(tool, args string) string {
-	return fmt.Sprintf("🔧 <b>%s</b> — approve?\n<blockquote expandable>%s</blockquote>",
-		html.EscapeString(tool), html.EscapeString(args))
+func renderApprovalSection(tool, args string, humanOnly bool) string {
+	note := ""
+	if humanOnly {
+		note = "\n" + humanOnlyApprovalNote
+	}
+	return fmt.Sprintf("🔧 <b>%s</b> — approve?%s\n<blockquote expandable>%s</blockquote>",
+		html.EscapeString(tool), note, html.EscapeString(args))
 }
+
+// humanOnlyApprovalNote explains a human-only prompt's missing auto-approve
+// buttons. It is plain text, safe in HTML and Markdown, and counted in
+// approvalSectionOverheadBytes.
+const humanOnlyApprovalNote = "Installs code that runs on this machine, so it needs your approval every time."
 
 // renderLines builds the activity blockquote for a chunk, without any approval
 // section. This is the quantity budgeted by chunkLinesBudget — measuring the
@@ -1838,7 +1852,7 @@ func (l *activityLog) renderChunk(c *logChunk, isLast bool) string {
 	if !isLast || l.pending == nil {
 		return lines
 	}
-	approval := renderApprovalSection(l.pending.tool, l.pending.args)
+	approval := renderApprovalSection(l.pending.tool, l.pending.args, l.pending.humanOnly)
 	if lines == "" {
 		return approval
 	}

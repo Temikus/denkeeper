@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"regexp"
 	"slices"
 	"sync"
@@ -172,11 +173,15 @@ func (lm *LifecycleManager) UpdateTool(ctx context.Context, name string, cfg con
 
 	cfg = preserveUnsetFields(cfg, oldCfg)
 
-	// An edit that keeps the stored command line (a UI save that only touched
-	// timeouts or disabled tools) is not re-checked: that command came from the
-	// operator or already passed. A changed one is checked like an add.
+	// A changed command line is checked like an add. An env-only edit checks
+	// the env alone, since the respawned child reads it; the command came from
+	// the operator or already passed. Other edits are not re-checked.
 	if CommandLineChanged(oldCfg, cfg) {
 		if err := lm.toolMgr.checkRuntimeCommand(cfg); err != nil {
+			return err
+		}
+	} else if transportOf(cfg) == "stdio" && !maps.Equal(oldCfg.Env, cfg.Env) {
+		if err := ValidateRuntimeEnv(cfg.Env); err != nil {
 			return err
 		}
 	}
