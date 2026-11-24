@@ -2,12 +2,13 @@
   // The server's high-risk classification of a pending call (#586): a fixed
   // warning plus the arguments that make it risky, shown in full and open.
   // `risk` is { level, warning, flagged: [{ name, value }] }; values are text.
-  // `id` lets a button point at this block with aria-describedby.
-  let { risk, id = undefined } = $props()
+  // `id` lets a button point at this block with aria-describedby. `pending`
+  // adds the one-off instruction, for prompts that still await an answer.
+  let { risk, id = undefined, pending = false } = $props()
 </script>
 
 <div class="approval-risk" {id}>
-  <p class="risk-head"><span class="pill risk-pill">High risk</span> {risk.warning}</p>
+  <p class="risk-head"><span class="pill risk-pill">High risk</span> {risk.warning}{#if pending} <span class="risk-ask">Approve once or deny.</span>{/if}</p>
   {#if risk.flagged?.length}
     <dl class="risk-args">
       {#each risk.flagged as arg (arg.name)}
@@ -21,8 +22,11 @@
 <style>
   .approval-risk { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
   .risk-head { margin: 0; font-size: 12px; line-height: 1.45; }
-  /* The shared .pill is muted; this one marks danger with the existing token. */
-  .risk-pill { color: var(--danger); background: transparent; border: 1px solid var(--danger); margin: 0; }
+  /* The shared .pill is muted; this one marks danger with the existing token.
+     Plain --danger text drops under 4.5:1 on the pending tints (4.39 on the
+     light banner), so the text is darkened toward --text; the border, a
+     non-text mark, keeps --danger. */
+  .risk-pill { color: color-mix(in srgb, var(--danger) 70%, var(--text)); background: transparent; border: 1px solid var(--danger); margin: 0; }
   .risk-args { margin: 0; display: flex; flex-direction: column; gap: 2px; }
   .risk-args dt { font-size: 11px; color: var(--text-muted); font-family: monospace; }
   /* Flagged values are never cut: they wrap at any width. */

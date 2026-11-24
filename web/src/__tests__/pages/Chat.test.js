@@ -242,6 +242,38 @@ describe('Chat page', () => {
     expect(screen.getByText('Adds a tool server or plugin the agent can use, so it needs your approval every time.')).toBeInTheDocument()
   })
 
+  // The engine marks tool_add both human-only and high-risk: one explanation,
+  // the risk block's, plus the one-off instruction; not #600's hint as well.
+  test('tool_add as the engine sends it shows one explanation and "Approve once or deny."', async () => {
+    const risk = { level: 'high', warning: 'Adds a tool server: starts a program on this host or connects to a remote server.', flagged: [{ name: 'command', value: '"npx"' }] }
+    server.use(
+      http.post('/api/v1/chat', () => {
+        const encoder = new TextEncoder()
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode('data: ' + JSON.stringify({ type: 'tool_approval', approval_id: 'a1', tool: 'tool_add', text: 'add', approval_human_only: true, approval_risk: risk }) + '\n\n'))
+          },
+        })
+        return new HttpResponse(stream, { headers: { 'Content-Type': 'text/event-stream' } })
+      })
+    )
+
+    render(Chat)
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/Type a message/)).toBeInTheDocument()
+    })
+    await fireEvent.input(screen.getByPlaceholderText(/Type a message/), { target: { value: 'add a tool' } })
+    await fireEvent.click(document.querySelector('.btn-send'))
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Approve tool_add')).toBeInTheDocument()
+    })
+    expect(screen.getByText(/Adds a tool server: starts a program/)).toBeInTheDocument()
+    expect(screen.getByText('Approve once or deny.')).toBeInTheDocument()
+    expect(screen.queryByText('Adds a tool server or plugin the agent can use, so it needs your approval every time.')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Always approve tool_add')).not.toBeInTheDocument()
+  })
+
   test('high-risk approval shows the warning and no auto-approve buttons', async () => {
     const risk = { level: 'high', warning: 'Replaces the LLM fallback rules: which provider and model requests switch to.', flagged: [{ name: 'rules', value: '[{"provider":"x"}]' }] }
     server.use(
@@ -556,6 +588,7 @@ describe('Chat page', () => {
     expect(screen.queryByText('15 min')).not.toBeInTheDocument()
     expect(screen.queryByText('Always')).not.toBeInTheDocument()
     expect(screen.getByText('Sets the permission tier this schedule runs at.', { exact: false })).toBeInTheDocument()
+    expect(screen.getByText('Approve once or deny.')).toBeInTheDocument()
     // Outside the closed "Show arguments" details, so visible without a click.
     const flagged = screen.getByText('"autonomous"', { selector: '.approval-risk code' })
     expect(flagged.closest('details')).toBeNull()

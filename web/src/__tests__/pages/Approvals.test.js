@@ -152,6 +152,8 @@ describe('Approvals page', () => {
     expect(screen.getByText('Sets the permission tier this schedule runs at.', { exact: false })).toBeInTheDocument()
     expect(screen.getByText('"autonomous"', { selector: '.approval-risk code' })).toBeInTheDocument()
     expect(screen.getByText('schedule_update')).toBeInTheDocument()
+    // The Approve/Deny instruction belongs to the chat prompts, not this table.
+    expect(screen.queryByText('Approve once or deny.')).not.toBeInTheDocument()
   })
 
   test('empty state message when no approvals', async () => {

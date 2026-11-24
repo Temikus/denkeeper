@@ -470,7 +470,7 @@
           <div class="pending-info">
             <span><span class="tool-name">{label}</span>{#if call?.retry} <span class="pill">{call.retry}</span>{/if}</span>
             {#if appr.risk}
-              <ApprovalRisk risk={appr.risk} id="banner-risk-{appr.id}" />
+              <ApprovalRisk risk={appr.risk} id="banner-risk-{appr.id}" pending />
             {/if}
             {#if call?.args === null || call?.args?.length}
               <details class="pending-args">
@@ -479,7 +479,9 @@
               </details>
             {/if}
             <span class="pending-meta">{appr.agent_name} · {appr.adapter_name}:{appr.external_id?.slice(0, 8)}</span>
-            {#if appr.kind === 'install_tool'}
+            <!-- The risk block explains a high-risk tool_add/plugin_add, so the
+                 human-only hint shows only without one. -->
+            {#if appr.kind === 'install_tool' && !appr.risk}
               <span class="hint">{HUMAN_ONLY_HINT}</span>
             {/if}
           </div>
@@ -567,7 +569,7 @@
                     <span class="tool-name">{appr.tool}</span>
                     {#if appr.status === 'pending'}
                       {#if appr.risk}
-                        <div class="card-risk"><ApprovalRisk risk={appr.risk} id="card-risk-{appr.id}" /></div>
+                        <div class="card-risk"><ApprovalRisk risk={appr.risk} id="card-risk-{appr.id}" pending /></div>
                       {/if}
                       <div class="approval-actions">
                         <button class="btn-appr btn-ok" onclick={() => resolveApproval(appr, true)} disabled={appr.resolving} aria-label="Approve {appr.tool}" aria-describedby={appr.risk ? `card-risk-${appr.id}` : undefined}>Approve</button>
@@ -577,7 +579,7 @@
                           <button class="btn-appr btn-auto" onclick={() => resolveApproval(appr, true, 'permanent')} disabled={appr.resolving} title="Permanently auto-approve this tool for this agent" aria-label="Always approve {appr.tool}">Always</button>
                         {/if}
                       </div>
-                      {#if appr.humanOnly}
+                      {#if appr.humanOnly && !appr.risk}
                         <span class="hint human-only-hint">{HUMAN_ONLY_HINT}</span>
                       {/if}
                     {:else}
