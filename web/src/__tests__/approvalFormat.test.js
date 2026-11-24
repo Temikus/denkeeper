@@ -2,28 +2,43 @@ import { describe, test, expect } from 'vitest'
 import { parseToolCall, shadowLine } from '../approvalFormat.js'
 
 const shadowOf = (verdict, extra = {}) => ({ agent: 'pamela', decider: 'jev', verdict, lowest: 'scoped', score: 0.978, ...extra })
-const card = (status, shadow) => ({ status, shadow })
+const card = (status, shadow, extra = {}) => ({ status, shadow, ...extra })
+const text = line => line && line.verdict + line.detail
 
 describe('shadowLine', () => {
-  test('a pending card with a score shows the lowest check as evidence, floored', () => {
-    expect(shadowLine(card('pending', shadowOf('ESCALATE')))).toEqual({ kind: 'evidence', text: 'jev lowest check: scoped 0.97' })
-    expect(shadowLine(card('pending', shadowOf('APPROVE', { lowest: 'no_self_grant', score: 0.991 }))))
-      .toEqual({ kind: 'evidence', text: 'jev lowest check: no self-grant 0.99' })
+  test('a pending card leads with what the decider would do, then the lowest check, floored', () => {
+    const approve = shadowLine(card('pending', shadowOf('APPROVE')))
+    expect(approve).toMatchObject({ kind: 'evidence', verdict: 'jev would approve', tone: 'approve' })
+    expect(text(approve)).toBe('jev would approve · lowest: scoped 0.97 · shadow mode, so you still decide')
+    const deny = shadowLine(card('pending', shadowOf('DENY', { lowest: 'no_self_grant', score: 0.041 })))
+    expect(deny.tone).toBe('deny')
+    expect(text(deny)).toBe('jev would deny · lowest: no self-grant 0.04 · shadow mode, so you still decide')
   })
 
-  test('a pending card with no score shows nothing', () => {
-    expect(shadowLine(card('pending', shadowOf('ESCALATE', { lowest: '', score: undefined })))).toBeNull()
+  test('a pending card the decider would escalate reads as unsure, in no colour', () => {
+    const line = shadowLine(card('pending', shadowOf('ESCALATE')))
+    expect(line.tone).toBeNull()
+    expect(text(line)).toBe('jev is unsure · lowest: scoped 0.97 · shadow mode, so you still decide')
   })
 
-  test('would have approved, when the call was denied or escalated', () => {
+  test('a pending card with no score still says what the decider would do', () => {
+    const line = shadowLine(card('pending', shadowOf('ESCALATE', { lowest: '', score: undefined })))
+    expect(text(line)).toBe('jev is unsure · shadow mode, so you still decide')
+  })
+
+  test('would have approved, when the call was denied or escalated, with the lowest check', () => {
     for (const status of ['supervisor_denied', 'supervisor_escalated', 'denied']) {
-      expect(shadowLine(card(status, shadowOf('APPROVE')))).toMatchObject({ kind: 'disagree', text: 'jev would have approved' })
+      const line = shadowLine(card(status, shadowOf('APPROVE')))
+      expect(line).toMatchObject({ kind: 'disagree', verdict: 'jev would have approved', tone: 'approve' })
+      expect(text(line)).toBe('jev would have approved · scoped 0.97 · shadow mode, so this had no effect')
     }
   })
 
   test('would have denied, when the call was approved', () => {
     for (const status of ['supervisor_approved', 'approved']) {
-      expect(shadowLine(card(status, shadowOf('DENY')))).toMatchObject({ kind: 'disagree', text: 'jev would have denied' })
+      const line = shadowLine(card(status, shadowOf('DENY', { lowest: 'aligned', score: 0.04 })))
+      expect(line).toMatchObject({ kind: 'disagree', verdict: 'jev would have denied', tone: 'deny' })
+      expect(text(line)).toBe('jev would have denied · aligned 0.04 · shadow mode, so this had no effect')
     }
   })
 
@@ -36,6 +51,15 @@ describe('shadowLine', () => {
     expect(shadowLine(card('pending', undefined))).toBeNull()
   })
 
+  test('a human answer to an escalated call has no line: the escalated card shows it', () => {
+    const escalated = card('supervisor_escalated', shadowOf('APPROVE'), { tool_id: 'tc-1' })
+    const answered = card('denied', shadowOf('APPROVE'), { tool_id: 'tc-1' })
+    expect(shadowLine(answered, [escalated, answered])).toBeNull()
+    expect(shadowLine(escalated, [escalated, answered])).not.toBeNull()
+    // Another call's escalation does not hide this one.
+    expect(shadowLine(answered, [{ ...escalated, tool_id: 'tc-2' }, answered])).not.toBeNull()
+  })
+
   test('the link names the reviewed agent, URL-encoded', () => {
     const line = shadowLine(card('supervisor_denied', shadowOf('APPROVE', { agent: 'ops/bot #1' })))
     expect(line.href).toBe('#/agents/ops%2Fbot%20%231?card=permission')
@@ -43,7 +67,7 @@ describe('shadowLine', () => {
 
   test('a disagreement with no agent keeps its text but has no link', () => {
     const line = shadowLine(card('supervisor_denied', shadowOf('APPROVE', { agent: '' })))
-    expect(line.text).toBe('jev would have approved')
+    expect(line.verdict).toBe('jev would have approved')
     expect(line.href).toBeNull()
   })
 })

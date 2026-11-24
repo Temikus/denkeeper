@@ -262,16 +262,32 @@ describe('Chat page', () => {
     }
     const shadow = verdict => ({ agent: 'pamela bot', decider: 'jev', verdict, lowest: 'scoped', score: 0.978 })
 
-    test('a pending card shows the decider evidence and no link', async () => {
-      await streamCards([{ type: 'tool_approval', approval_id: 'a1', tool: 'kv_set', text: 'set', shadow: shadow('ESCALATE') }])
-      const line = await screen.findByText('jev lowest check: scoped 0.97')
+    test('a pending card leads with the verdict, above the buttons, and has no link', async () => {
+      await streamCards([{ type: 'tool_approval', approval_id: 'a1', tool: 'kv_set', text: 'set', shadow: shadow('APPROVE') }])
+      const verdict = await screen.findByText('jev would approve')
+      const line = verdict.closest('.shadow-line')
+      expect(line.textContent.trim()).toBe('jev would approve · lowest: scoped 0.97 · shadow mode, so you still decide')
       expect(line.closest('.approval-card')).toHaveClass('pending')
+      const approve = screen.getByLabelText('Approve kv_set')
+      expect(line.compareDocumentPosition(approve) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
       expect(screen.queryByRole('link', { name: /Calibration/ })).not.toBeInTheDocument()
+    })
+
+    test('an escalated call the human then denies shows one disagreement, not two', async () => {
+      await streamCards([
+        { type: 'tool_approval', tool: 'kv_set', tool_id: 'tc-1', text: 'Escalated by supervisor (argus)', approval_status: 'supervisor_escalated', shadow: shadow('APPROVE') },
+        { type: 'tool_approval', approval_id: 'a1', tool: 'kv_set', tool_id: 'tc-1', text: 'set', shadow: shadow('APPROVE') },
+      ])
+      await fireEvent.click(await screen.findByLabelText('Deny kv_set'))
+      // The card redraws as denied, with no buttons left to press twice.
+      await waitFor(() => expect(screen.queryByLabelText('Deny kv_set')).not.toBeInTheDocument())
+      expect(document.querySelectorAll('.shadow-line.disagree')).toHaveLength(1)
     })
 
     test('a supervisor denial the decider would approve links to calibration', async () => {
       await streamCards([{ type: 'tool_approval', tool: 'kv_set', tool_id: 'tc-1', text: 'Denied by supervisor (argus): no', approval_status: 'supervisor_denied', shadow: shadow('APPROVE') }])
       const line = await screen.findByText('jev would have approved')
+      expect(line.closest('.shadow-line').textContent).toContain('jev would have approved · scoped 0.97 · shadow mode, so this had no effect')
       const link = screen.getByRole('link', { name: 'Calibration for jev' })
       expect(link).toHaveAttribute('href', '#/agents/pamela%20bot?card=permission')
       // Not faded like a settled denial: the line must keep its contrast.
