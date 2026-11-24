@@ -57,11 +57,19 @@ func (s *gateStore) List(_ context.Context, _ ListOpts) ([]Event, int, error) {
 	return nil, 0, nil
 }
 
+func (s *gateStore) ScanEvents(context.Context, ListOpts, func(Event) error) error { return nil }
+
 func (s *gateStore) Stats(_ context.Context, _ StatsOpts) (*Stats, error) {
 	return &Stats{}, nil
 }
 
 func (s *gateStore) PruneBefore(_ context.Context, _ time.Time) (int, error) { return 0, nil }
+
+func (s *gateStore) ReviewMark(context.Context, string, string) (ReviewMark, bool, error) {
+	return ReviewMark{}, false, nil
+}
+
+func (s *gateStore) SetReviewMark(_ context.Context, m ReviewMark) (ReviewMark, error) { return m, nil }
 
 func (s *gateStore) Close() error { return nil }
 

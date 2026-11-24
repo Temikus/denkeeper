@@ -179,7 +179,7 @@ function handleToolEvent(agentMsg, evt) {
     if (INFO_APPROVAL_STATUSES.has(evt.approval_status)) {
       agentMsg.approvals = [...agentMsg.approvals, {
         id: evt.approval_id, tool: evt.tool, tool_id: evt.tool_id, text: evt.text,
-        status: evt.approval_status, resolving: false,
+        status: evt.approval_status, resolving: false, shadow: evt.shadow || null,
       }]
     } else {
       agentMsg.status = `Waiting for approval: ${evt.tool}`
@@ -188,6 +188,7 @@ function handleToolEvent(agentMsg, evt) {
         status: 'pending', resolving: false,
         // tool_add / plugin_add: one-off approval only, no auto-approve buttons.
         humanOnly: !!evt.approval_human_only,
+        shadow: evt.shadow || null,
       }]
     }
   }

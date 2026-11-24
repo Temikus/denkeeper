@@ -242,6 +242,72 @@ describe('Chat page', () => {
     expect(screen.getByText('Adds a tool server or plugin the agent can use, so it needs your approval every time.')).toBeInTheDocument()
   })
 
+  describe('shadow decider line', () => {
+    async function streamCards(events) {
+      server.use(
+        http.post('/api/v1/chat', () => {
+          const encoder = new TextEncoder()
+          const stream = new ReadableStream({
+            start(controller) {
+              for (const e of events) controller.enqueue(encoder.encode(`data: ${JSON.stringify(e)}\n\n`))
+            },
+          })
+          return new HttpResponse(stream, { headers: { 'Content-Type': 'text/event-stream' } })
+        })
+      )
+      render(Chat)
+      await waitFor(() => expect(screen.getByPlaceholderText(/Type a message/)).toBeInTheDocument())
+      await fireEvent.input(screen.getByPlaceholderText(/Type a message/), { target: { value: 'save it' } })
+      await fireEvent.click(document.querySelector('.btn-send'))
+    }
+    const shadow = verdict => ({ agent: 'pamela bot', decider: 'jev', verdict, lowest: 'scoped', score: 0.978 })
+
+    test('a pending card leads with the verdict, above the buttons, and has no link', async () => {
+      await streamCards([{ type: 'tool_approval', approval_id: 'a1', tool: 'kv_set', text: 'set', shadow: shadow('APPROVE') }])
+      const verdict = await screen.findByText('jev would approve')
+      const line = verdict.closest('.shadow-line')
+      expect(line.textContent.trim()).toBe('jev would approve · lowest: scoped 0.97 · shadow mode, so you still decide')
+      expect(line.closest('.approval-card')).toHaveClass('pending')
+      const approve = screen.getByLabelText('Approve kv_set')
+      expect(line.compareDocumentPosition(approve) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      expect(screen.queryByRole('link', { name: /Calibration/ })).not.toBeInTheDocument()
+    })
+
+    test('an escalated call the human then denies shows one disagreement, not two', async () => {
+      await streamCards([
+        { type: 'tool_approval', tool: 'kv_set', tool_id: 'tc-1', text: 'Escalated by supervisor (argus)', approval_status: 'supervisor_escalated', shadow: shadow('APPROVE') },
+        { type: 'tool_approval', approval_id: 'a1', tool: 'kv_set', tool_id: 'tc-1', text: 'set', shadow: shadow('APPROVE') },
+      ])
+      await fireEvent.click(await screen.findByLabelText('Deny kv_set'))
+      // The card redraws as denied, with no buttons left to press twice.
+      await waitFor(() => expect(screen.queryByLabelText('Deny kv_set')).not.toBeInTheDocument())
+      expect(document.querySelectorAll('.shadow-line.disagree')).toHaveLength(1)
+    })
+
+    test('a supervisor denial the decider would approve links to calibration', async () => {
+      await streamCards([{ type: 'tool_approval', tool: 'kv_set', tool_id: 'tc-1', text: 'Denied by supervisor (argus): no', approval_status: 'supervisor_denied', shadow: shadow('APPROVE') }])
+      const line = await screen.findByText('jev would have approved')
+      expect(line.closest('.shadow-line').textContent).toContain('jev would have approved · scoped 0.97 · shadow mode, so this had no effect')
+      const link = screen.getByRole('link', { name: 'Calibration for jev' })
+      expect(link).toHaveAttribute('href', '#/agents/pamela%20bot?card=permission')
+      // Not faded like a settled denial: the line must keep its contrast.
+      expect(line.closest('.approval-card')).not.toHaveClass('denied')
+    })
+
+    test('a supervisor approval the decider would deny is not faded', async () => {
+      await streamCards([{ type: 'tool_approval', tool: 'kv_set', tool_id: 'tc-1', text: 'Approved by supervisor (argus): ok', approval_status: 'supervisor_approved', shadow: shadow('DENY') }])
+      const line = await screen.findByText('jev would have denied')
+      expect(line.closest('.approval-card')).not.toHaveClass('auto')
+    })
+
+    test('a card with no shadow has no decider line', async () => {
+      await streamCards([{ type: 'tool_approval', tool: 'kv_set', tool_id: 'tc-1', text: 'Denied by supervisor (argus): no', approval_status: 'supervisor_denied' }])
+      await screen.findByText('Denied by supervisor (argus): no')
+      expect(document.querySelector('.shadow-line')).toBeNull()
+      expect(screen.queryByRole('link', { name: /Calibration/ })).not.toBeInTheDocument()
+    })
+  })
+
   test('labels a decider approval as the decider, with its reason', async () => {
     server.use(
       http.post('/api/v1/chat', () => {

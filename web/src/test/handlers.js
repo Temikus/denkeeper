@@ -416,7 +416,12 @@ export const handlers = [
     return agent ? HttpResponse.json(agent) : new HttpResponse(null, { status: 404 })
   }),
   http.patch('/api/v1/agents/:name', () => HttpResponse.json({ ok: true })),
-  http.get('/api/v1/agents/:name/decider-reviews', ({ params }) => HttpResponse.json({ agent: params.name, decider: 'jev', supervisor: '', reviews: [], failed: 0, truncated: false })),
+  http.get('/api/v1/agents/:name/decider-reviews', ({ params }) => HttpResponse.json({ agent: params.name, decider: 'jev', supervisor: '', reviews: [], failed: 0, truncated: false, reviewed_up_to: null })),
+  http.get('/api/v1/decider-reviews/unreviewed', () => HttpResponse.json({})),
+  http.post('/api/v1/agents/:name/decider-reviews/reviewed', async ({ params, request }) => {
+    const body = await request.json()
+    return HttpResponse.json({ agent: params.name, decider: body.decider || 'jev', reviewed_up_to: body.up_to, reviewed_by: 'test' })
+  }),
   http.post('/api/v1/agents', async ({ request }) => {
     const body = await request.json()
     return HttpResponse.json({

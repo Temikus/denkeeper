@@ -123,6 +123,19 @@ type Server struct {
 	// wsHub manages active WebSocket connections. Nil when WebSocket is disabled.
 	wsHub *WSHub
 
+	// deciderCounts memoizes unreviewed decider-review counts per agent for
+	// deciderCountTTL; a review mark deletes the agent's entry and bumps its
+	// deciderCountGen, so a count that started before the mark is not stored.
+	deciderCountMu  sync.Mutex
+	deciderCounts   map[string]deciderCountEntry
+	deciderCountGen map[string]uint64
+	// deciderCountRuns holds the count scan in flight per agent, decider and
+	// thresholds; a second caller waits for it instead of scanning again.
+	deciderCountRuns map[deciderCountKey]*deciderCountRun
+	// deciderCountTimeout bounds one shared scan; zero means
+	// deciderCountScanTimeout. A field so tests need not wait a minute.
+	deciderCountTimeout time.Duration
+
 	// pairing marks chat-app types with a pairing long poll in progress; only
 	// one may poll a bot's updates at a time.
 	pairingMu sync.Mutex
@@ -216,6 +229,8 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("PUT /api/v1/agents/{name}/persona/{section}", s.RequireScope("agents:write", s.handleUpdatePersona))
 	mux.HandleFunc("PUT /api/v1/agents/{name}/identity", s.RequireScope("agents:write", s.handleUpdateIdentity))
 	mux.HandleFunc("GET /api/v1/agents/{name}/decider-reviews", s.RequireScope("audit:read", s.handleDeciderReviews))
+	mux.HandleFunc("POST /api/v1/agents/{name}/decider-reviews/reviewed", s.RequireScope("agents:write", s.handleMarkDeciderReviewed))
+	mux.HandleFunc("GET /api/v1/decider-reviews/unreviewed", s.RequireScope("audit:read", s.handleDeciderReviewCounts))
 	mux.HandleFunc("GET /api/v1/costs", s.RequireScope("costs:read", s.handleCosts))
 	mux.HandleFunc("GET /api/v1/models", s.RequireScope("agents:read", s.handleModels))
 	mux.HandleFunc("GET /api/v1/models/details", s.RequireScope("agents:read", s.handleModelDetails))
@@ -1948,6 +1963,13 @@ func (s *Server) handleDeleteAutoApprove(w http.ResponseWriter, r *http.Request)
 type contextKey string
 
 const keyNameKey contextKey = "api_key_name"
+
+// requestKeyName is the caller's API key name, or login for a session, as
+// RequireScope stored it; "" outside a RequireScope route.
+func requestKeyName(ctx context.Context) string {
+	v, _ := ctx.Value(keyNameKey).(string)
+	return v
+}
 
 // RequireScope returns middleware that checks for a valid API key with the
 // required scope. Use this to wrap individual route handlers.

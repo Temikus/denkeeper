@@ -307,10 +307,21 @@ func deciderSessionKey(decider, agent, convID string) string {
 	return key
 }
 
+// ShadowVerdict is a shadow-mode decider's verdict on the call a
+// tool_approval event is about.
+type ShadowVerdict struct {
+	Agent   string   `json:"agent"`            // the reviewed agent
+	Decider string   `json:"decider"`          // [[llm.deciders]] name
+	Verdict string   `json:"verdict"`          // APPROVE, DENY or ESCALATE at the thresholds in force
+	Lowest  string   `json:"lowest,omitempty"` // lowest check id; "" when an answer is missing
+	Score   *float64 `json:"score,omitempty"`  // that check's score
+}
+
 // runSupervisorDecider scores the call and audits the verdict. ok is false in
 // shadow mode and on any failure: the caller must then ignore the verdict, so
-// a failed decider can never approve.
-func (e *Engine) runSupervisorDecider(ctx context.Context, stage *deciderStage, in *supervisorReviewInput, convID string) (decision supervisorDecision, reason string, ok bool) {
+// a failed decider can never approve. shadow is non-nil only for a shadow-mode
+// answer and is for display: it must never feed a decision.
+func (e *Engine) runSupervisorDecider(ctx context.Context, stage *deciderStage, in *supervisorReviewInput, convID string) (decision supervisorDecision, reason string, shadow *ShadowVerdict, ok bool) {
 	// Fail closed rather than review in the model's less accurate mode: an
 	// oversized call goes to the supervisor or a human as too_large.
 	d := stage.decider.WithinDefaultMode()
@@ -360,7 +371,7 @@ func (e *Engine) runSupervisorDecider(ctx context.Context, stage *deciderStage, 
 		ev.Summary = fmt.Sprintf("ERROR %s: %v", in.tool, err)
 		ev.Status = audit.StatusError
 		e.emitDeciderAudit(ctx, ev, detail)
-		return supervisorEscalate, "", false
+		return supervisorEscalate, "", nil, false
 	}
 
 	decision, reason = decideSupervisorOutcome(resp.Answers, stage.cfg.ApproveAt, stage.cfg.DenyAt)
@@ -381,10 +392,38 @@ func (e *Engine) runSupervisorDecider(ctx context.Context, stage *deciderStage, 
 		)
 		detail["decision"], detail["would_decide"] = "shadow", string(decision)
 		ev.Summary = fmt.Sprintf("SHADOW would %s %s: %s", decision, in.tool, reason)
+		shadow = newShadowVerdict(e.name, d.Name(), decision, resp.Answers)
 	}
 	ev.Status = audit.StatusOK
 	e.emitDeciderAudit(ctx, ev, detail)
-	return decision, reason, enforcing
+	return decision, reason, shadow, enforcing
+}
+
+// newShadowVerdict carries the same lowest check and score a ShadowReview
+// would for these answers.
+func newShadowVerdict(agentName, decider string, decision supervisorDecision, answers map[string]llm.Answer) *ShadowVerdict {
+	sv := &ShadowVerdict{Agent: agentName, Decider: decider, Verdict: string(decision)}
+	scores, order, missing := deciderChecks(answers)
+	if missing == "" {
+		id, low := lowestCheck(scores, order)
+		sv.Lowest, sv.Score = id, &low
+	}
+	return sv
+}
+
+// withShadowVerdict sets shadow on the pending and supervisor_* tool_approval
+// events onEvent receives. It returns onEvent itself when either is nil:
+// awaitToolApproval reads a nil handler as "no operator can be asked".
+func withShadowVerdict(onEvent ChatEventFunc, shadow *ShadowVerdict) ChatEventFunc {
+	if onEvent == nil || shadow == nil {
+		return onEvent
+	}
+	return func(ev ChatEvent) {
+		if ev.Type == "tool_approval" && (ev.ApprovalStatus == "" || strings.HasPrefix(ev.ApprovalStatus, "supervisor_")) {
+			ev.Shadow = shadow
+		}
+		onEvent(ev)
+	}
 }
 
 // resolveDeciderVerdict acts on an enforce-mode verdict. done is false when

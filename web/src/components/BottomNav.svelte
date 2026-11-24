@@ -1,8 +1,10 @@
 <script>
   import { navigate } from '../router.js'
-  import { attention } from '../attention.js'
+  import { attention, deciderReviewTotal } from '../attention.js'
 
   let { active = '' } = $props()
+
+  let toReview = $derived(deciderReviewTotal($attention))
 
   const tabs = [
     { id: 'overview', label: 'Overview' },
@@ -49,6 +51,9 @@
           <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2" />
           <circle cx="12" cy="7" r="4" />
         </svg>
+        {#if toReview > 0}
+          <span class="badge" aria-hidden="true" title="{toReview} new {toReview === 1 ? 'call' : 'calls'} a decider approved and the supervisor didn't">{toReview}</span>
+        {/if}
       {:else if tab.id === 'more'}
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
           <circle cx="12" cy="12" r="1" />
@@ -59,6 +64,9 @@
       <span class="tab-label">{tab.label}</span>
       {#if tab.id === 'approvals' && $attention.pendingApprovals > 0}
         <span class="sr-only">, {$attention.pendingApprovals} pending</span>
+      {/if}
+      {#if tab.id === 'agents' && toReview > 0}
+        <span class="sr-only">, {toReview} to review</span>
       {/if}
     </button>
   {/each}

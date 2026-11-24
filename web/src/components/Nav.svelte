@@ -4,7 +4,7 @@
   import { navigate } from '../router.js'
   import { token, authMode, theme } from '../store.js'
   import { api } from '../api.js'
-  import { attention } from '../attention.js'
+  import { attention, deciderReviewTotal } from '../attention.js'
   import { topLinks, visibleSections } from '../navItems.js'
   import { features } from '../features.js'
   import { setup, showSetupReminder, openWizard } from '../setupStore.js'
@@ -45,7 +45,18 @@
   })
 
   function badge(id) {
-    return id === 'approvals' ? $attention.pendingApprovals : 0
+    if (id === 'approvals') return $attention.pendingApprovals
+    if (id === 'agents') return deciderReviewTotal($attention)
+    return 0
+  }
+
+  // Screen-reader text after a link's count.
+  const badgeNoun = id => (id === 'agents' ? 'to review' : 'pending')
+
+  // Matches the calibration panel's wording; the nav has no decider names.
+  function badgeTitle(id, n) {
+    if (id !== 'agents') return undefined
+    return `${n} new ${n === 1 ? 'call' : 'calls'} a decider approved and the supervisor didn't`
   }
 
   // Closing a group must not hide a pending count inside it.
@@ -138,7 +149,7 @@
         >
           <span class="section-label">
             {section.label}{#if !open}<span class="count">{` · ${section.items.length}`}</span>{/if}
-            {#if !open && groupBadge(section) > 0}<span class="badge group-badge" aria-hidden="true">{groupBadge(section)}</span><span class="sr-only">({groupBadge(section)} pending)</span>{/if}
+            {#if !open && groupBadge(section) > 0}<span class="badge group-badge" aria-hidden="true">{groupBadge(section)}</span><span class="sr-only">({groupBadge(section)} need attention)</span>{/if}
             {#if hasProblem(section)}<span class="problem-dot" title="A tool server is unhealthy"></span><span class="sr-only">(a tool server is unhealthy)</span>{/if}
           </span>
           <svg class="chevron" class:open width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><polyline points="9 6 15 12 9 18"/></svg>
@@ -154,7 +165,7 @@
                 onclick={(e) => { e.preventDefault(); navigate(l.id) }}
               >
                 <span>{l.label}</span>
-                {#if badge(l.id) > 0}<span class="badge" aria-hidden="true">{badge(l.id)}</span><span class="sr-only">, {badge(l.id)} pending</span>{/if}
+                {#if badge(l.id) > 0}<span class="badge" aria-hidden="true" title={badgeTitle(l.id, badge(l.id))}>{badge(l.id)}</span><span class="sr-only">, {badge(l.id)} {badgeNoun(l.id)}</span>{/if}
               </a>
             </li>
           {/each}

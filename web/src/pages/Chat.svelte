@@ -9,7 +9,7 @@
   import KebabMenu from '../components/KebabMenu.svelte'
   import SaveTestCase from '../components/SaveTestCase.svelte'
   import ToolCallArgs from '../components/ToolCallArgs.svelte'
-  import { parseToolCall } from '../approvalFormat.js'
+  import { parseToolCall, shadowLine } from '../approvalFormat.js'
 
   const HUMAN_ONLY_HINT = 'Adds a tool server or plugin the agent can use, so it needs your approval every time.'
 
@@ -241,18 +241,31 @@
     }
   }
 
+  // Applies patch to a card as a new object: the card {#each} does not redraw
+  // an item whose reference is unchanged, so mutating it in place shows
+  // nothing. The message object itself stays, since chatStore keeps mutating
+  // it while the turn streams; chatStore finds cards through the array, so it
+  // picks up the copy.
+  function patchCard(appr, patch) {
+    chatState.update(s => {
+      for (const m of s.messages) {
+        if (!m.approvals?.some(a => a === appr || (appr.id && a.id === appr.id))) continue
+        m.approvals = m.approvals.map(a => (a === appr || (appr.id && a.id === appr.id)) ? { ...a, ...patch } : a)
+      }
+      return { ...s, messages: [...s.messages] }
+    })
+  }
+
   async function resolveApproval(appr, approve, autoApproveScope) {
-    appr.resolving = true
-    $chatState.messages = [...$chatState.messages]
+    patchCard(appr, { resolving: true })
     try {
       await resolveApprovalAction(appr, approve, autoApproveScope)
       // Update status on success so the approval card reflects the
-      // action without waiting for the tool_start SSE event.
-      appr.status = approve ? 'approved' : 'denied'
-      $chatState.messages = [...$chatState.messages]
+      // action without waiting for the tool_start SSE event (a denial
+      // gets none).
+      patchCard(appr, { status: approve ? 'approved' : 'denied' })
     } catch (e) {
-      appr.resolving = false
-      $chatState.messages = [...$chatState.messages]
+      patchCard(appr, { resolving: false })
       chatState.update(s => ({ ...s, error: 'Approval failed: ' + e.message }))
     }
   }
@@ -554,13 +567,23 @@
               Tools: {totalCalls} {totalCalls === 1 ? 'call' : 'calls'}{#if pendingCount > 0} <span class="pending-count">({pendingCount} pending)</span>{/if}{#if runningCount > 0} <span class="running-count">({runningCount} running)</span>{/if}{#if errorCount > 0} <span class="error-count">({errorCount} failed)</span>{/if}
             </summary>
             {#if msg.approvals?.length > 0}
+              {#snippet shadowRow(line)}
+                <span class="hint shadow-line" class:disagree={line.kind === 'disagree'}>
+                  <span><strong class="shadow-verdict {line.tone || ''}">{line.verdict}</strong>{line.detail}</span>
+                  {#if line.href}<a href={line.href} aria-label="Calibration for {line.decider}">Calibration <span aria-hidden="true">→</span></a>{/if}
+                </span>
+              {/snippet}
               <div class="approval-cards">
                 {#each msg.approvals as appr}
-                  <div class="approval-card" class:pending={appr.status === 'pending'} class:auto={appr.status === 'auto_approved' || appr.status === 'supervisor_approved'} class:denied={appr.status === 'supervisor_denied' || appr.status === 'auto_denied'} class:running={appr.execStatus === 'running'} class:error={appr.execStatus === 'error'}>
+                  {@const line = shadowLine(appr, msg.approvals)}
+                  <!-- A disagreement is not faded: .auto and .denied would drop its line below 4.5:1. -->
+                  <div class="approval-card" class:pending={appr.status === 'pending'} class:auto={line?.kind !== 'disagree' && (appr.status === 'auto_approved' || appr.status === 'supervisor_approved')} class:denied={line?.kind !== 'disagree' && (appr.status === 'supervisor_denied' || appr.status === 'auto_denied')} class:running={appr.execStatus === 'running'} class:error={appr.execStatus === 'error'}>
                     <span class="approval-icon" aria-hidden="true">{appr.execStatus ? toolStatusIcon(appr.execStatus) : approvalStatusIcon(appr.status)}</span>
                     <span class="sr-only">{appr.execStatus || approvalStatusLabel(appr.status, appr.text)}</span>
                     <span class="tool-name">{appr.tool}</span>
                     {#if appr.status === 'pending'}
+                      <!-- Evidence goes before the decision it informs. -->
+                      {#if line}{@render shadowRow(line)}{/if}
                       <div class="approval-actions">
                         <button class="btn-appr btn-ok" onclick={() => resolveApproval(appr, true)} disabled={appr.resolving} aria-label="Approve {appr.tool}">Approve</button>
                         <button class="btn-appr btn-bad" onclick={() => resolveApproval(appr, false)} disabled={appr.resolving} aria-label="Deny {appr.tool}">Deny</button>
@@ -588,6 +611,7 @@
                     {#if appr.execError}
                       <span class="tool-error">{appr.execError}</span>
                     {/if}
+                    {#if line && appr.status !== 'pending'}{@render shadowRow(line)}{/if}
                   </div>
                 {/each}
               </div>
@@ -918,6 +942,23 @@
   .approval-card.pending { border-color: var(--accent); background: rgba(99,102,241,0.06); }
   /* The card wraps; the hint takes its own row under the buttons. */
   .human-only-hint { width: 100%; }
+  /* A shadow decider's line (shared .hint type) takes its own row too. Local:
+     no shared class is dashed, and the dash sets a disagreement apart. */
+  .shadow-line {
+    width: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 8px;
+    margin-top: 2px;
+    overflow-wrap: anywhere;
+  }
+  .shadow-line.disagree { border-top: 1px dashed var(--border); padding-top: 4px; }
+  .shadow-line a { color: var(--accent); white-space: nowrap; }
+  /* Mixed toward --text: plain --success is 3.6:1 on the light card, and
+     --danger 4.47:1 on the pending tint; the mix clears 4.5:1 on both. */
+  .shadow-verdict { font-weight: 600; color: var(--text); }
+  .shadow-verdict.approve { color: color-mix(in srgb, var(--success) 70%, var(--text)); }
+  .shadow-verdict.deny { color: color-mix(in srgb, var(--danger) 70%, var(--text)); }
   .approval-card.auto { opacity: 0.7; }
   .approval-card.denied { opacity: 0.85; }
   .approval-icon { font-family: monospace; font-weight: bold; width: 16px; text-align: center; }
