@@ -323,6 +323,70 @@ func TestRuntimeRefusals_PointAtTheConfigFile(t *testing.T) {
 	}
 }
 
+// Proxies with disabled TLS checks, git's own commands and config, the rest
+// of the Python and Node option families, npm and corepack settings, and
+// BROWSER each let a pinned launcher fetch or run something else.
+func TestValidateRuntimeEnv_RefusesWiderFamilies(t *testing.T) {
+	for _, name := range []string{
+		"NODE_TLS_REJECT_UNAUTHORIZED", "node_tls_reject_unauthorized", "NODE_REPL_EXTERNAL_MODULE",
+		"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "ALL_PROXY", "all_proxy", "FTP_PROXY",
+		"GIT_SSH_COMMAND", "git_ssh_command", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_COUNT", "GIT_EXEC_PATH",
+		"PYTHONWARNINGS", "pythonwarnings", "PYTHONBREAKPOINT", "PYTHONINSPECT", "PYTHON_COLORS",
+		"NPM_TOKEN", "npm_execpath", "COREPACK_NPM_REGISTRY", "corepack_home",
+		"BROWSER", "browser", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+	} {
+		err := ValidateRuntimeEnv(map[string]string{name: "v"})
+		if err == nil {
+			t.Errorf("%s: accepted, want rejection", name)
+			continue
+		}
+		if !strings.Contains(err.Error(), name) {
+			t.Errorf("%s: error %q does not name the variable", name, err)
+		}
+	}
+}
+
+// The OS splits an env entry at its first "=", so a key such as
+// "PATH=/attacker/bin" would set PATH while getting past every exact-name
+// check. Only identifier names are accepted.
+func TestValidateRuntimeEnv_RefusesNamesThatAreNotIdentifiers(t *testing.T) {
+	for _, name := range []string{
+		"PATH=/x", "HOME=/x", "ENV=x", "=C:", "BAD\x00NAME", "MY VAR", "", "9LIVES", "A-B",
+	} {
+		if err := ValidateRuntimeEnv(map[string]string{name: "v"}); err == nil {
+			t.Errorf("%q: accepted, want rejection", name)
+		}
+	}
+	if err := ValidateRuntimeEnv(map[string]string{"_PRIVATE": "1", "Mixed_Case9": "1"}); err != nil {
+		t.Errorf("identifier names refused: %v", err)
+	}
+}
+
+// OpenSSL config can load an engine or provider library, COMSPEC is npm's
+// Windows script shell, and uv finds its interpreter through VIRTUAL_ENV and
+// CONDA_PREFIX.
+func TestValidateRuntimeEnv_RefusesOpenSSLShellAndInterpreterNames(t *testing.T) {
+	for _, name := range []string{"OPENSSL_CONF", "openssl_modules", "COMSPEC", "comspec", "VIRTUAL_ENV", "CONDA_PREFIX", "conda_prefix"} {
+		if err := ValidateRuntimeEnv(map[string]string{name: "v"}); err == nil {
+			t.Errorf("%s: accepted, want rejection", name)
+		}
+	}
+}
+
+// Harmless members of the refused families stay allowed: they change output,
+// not what runs or where it comes from.
+func TestValidateRuntimeEnv_AllowsHarmlessFamilyMembers(t *testing.T) {
+	for _, name := range []string{
+		"NODE_ENV", "node_env", "NODE_NO_WARNINGS",
+		"PYTHONUNBUFFERED", "pythonunbuffered", "PYTHONIOENCODING", "PYTHONDONTWRITEBYTECODE",
+		"NO_PROXY", "no_proxy",
+	} {
+		if err := ValidateRuntimeEnv(map[string]string{name: "1"}); err != nil {
+			t.Errorf("%s: refused: %v", name, err)
+		}
+	}
+}
+
 func TestValidateRuntimeEnv_AllowsOrdinaryNames(t *testing.T) {
 	env := map[string]string{
 		"GITHUB_TOKEN": "x", "PYTHONUNBUFFERED": "1", "NODE_ENV": "production",

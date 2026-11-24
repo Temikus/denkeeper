@@ -344,6 +344,11 @@ func countAgreement(items []JudgmentItem, judge, operator map[int64]Verdict) (in
 		if !ok {
 			continue
 		}
+		// A mark recorded after the judge's call was not blind. RecordVerdict
+		// now refuses those; this drops rows written before it did.
+		if op.CreatedAt.After(jv.CreatedAt) {
+			continue
+		}
 		total++
 		if op.Winner == jv.Winner {
 			agreed++
@@ -371,7 +376,7 @@ func pairRubrics(items []JudgmentItem, judge map[int64]Verdict) (rubrics, idents
 }
 
 // verdictsByItem splits stored verdicts into the judge's and the operator's,
-// keeping the newest of each per item.
+// keeping the newest of each per item by its latest call (UpdatedAt).
 func verdictsByItem(verdicts []Verdict) (judge, operator map[int64]Verdict) {
 	judge = make(map[int64]Verdict, len(verdicts))
 	operator = make(map[int64]Verdict, len(verdicts))
@@ -381,7 +386,7 @@ func verdictsByItem(verdicts []Verdict) (judge, operator map[int64]Verdict) {
 			target = operator
 		}
 		prev, ok := target[v.ItemID]
-		if !ok || v.CreatedAt.After(prev.CreatedAt) {
+		if !ok || v.UpdatedAt.After(prev.UpdatedAt) {
 			target[v.ItemID] = v
 		}
 	}

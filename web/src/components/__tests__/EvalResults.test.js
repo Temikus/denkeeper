@@ -171,7 +171,8 @@ describe('EvalResults — judgment pending', () => {
 
     await waitFor(() => expect(screen.getByTestId('judge-here-4')).toBeInTheDocument())
     expect(screen.getByTestId('judgment-pending-4')).toHaveTextContent('judge-model')
-    expect(screen.getByTestId('judgment-pending-4')).toHaveTextContent('$0.50')
+    expect(screen.getByTestId('judgment-pending-4')).toHaveTextContent(
+      "grades them here, unattended · up to $0.50. Items it grades can't be marked for calibration afterwards, so mark any first.")
 
     await fireEvent.click(screen.getByTestId('judge-here-4'))
     await waitFor(() => expect(started).toBe('2'))
@@ -223,7 +224,13 @@ describe('EvalResults — judgment pending', () => {
     // Without a model behind it, what the decider cannot settle stays pending,
     // and the hint must not promise otherwise.
     expect(screen.getByTestId('judgment-pending-4')).toHaveTextContent('jev grades what it is sure of here')
-    expect(screen.getByTestId('judgment-pending-4')).toHaveTextContent('stays pending')
+    // No cap: the sentence ends straight after "pending", with no stray space.
+    expect(screen.getByTestId('judgment-pending-4')).toHaveTextContent('the rest stays pending.')
+    // Operator marks are refused on judged items, so the hint says to mark
+    // first, and must not claim the run stops taking verdicts: items stay pending.
+    expect(screen.getByTestId('judgment-pending-4')).toHaveTextContent(
+      "Items it grades can't be marked for calibration afterwards, so mark any first.")
+    expect(screen.getByTestId('judgment-pending-4')).not.toHaveTextContent('takes no more verdicts')
   })
 
   test('says when two judges split the pairs between them', async () => {

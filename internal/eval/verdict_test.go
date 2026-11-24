@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 // testOpts are the shipped defaults, spelled out so a test that moves one
@@ -323,23 +324,28 @@ func TestVerdict_OperatorAgreementIsReported(t *testing.T) {
 	ctx := context.Background()
 	f.cleanRun(t)
 	f.createPairs(t)
-	f.judgeRun(t, func(Pair) int64 { return f.variants[1].ID })
+	cand := f.variants[1].ID
 
 	items, err := f.store.ListItems(ctx, f.run.ID)
 	if err != nil {
 		t.Fatalf("ListItems: %v", err)
 	}
-	judged, err := f.store.ListVerdicts(ctx, f.run.ID)
+	pairs, err := f.store.ListPairs(ctx, f.run.ID)
 	if err != nil {
-		t.Fatalf("ListVerdicts: %v", err)
+		t.Fatalf("ListPairs: %v", err)
 	}
-	byItem := make(map[int64]Verdict, len(judged))
-	for _, v := range judged {
-		byItem[v.ItemID] = v
+	byPair := make(map[int64]Pair, len(pairs))
+	for _, p := range pairs {
+		byPair[p.ID] = p
 	}
-	// Agree on three of four calibration items.
+	// The operator marks first, since a mark on a judged item is refused.
+	// Pick the letter the judge will pick, except on item 0: three of four agree.
 	for i, it := range items {
-		winner := byItem[it.ID].Winner
+		assign, err := DecodeAssignment(byPair[it.PairID].Assignment)
+		if err != nil {
+			t.Fatalf("DecodeAssignment: %v", err)
+		}
+		winner := letterFor(assign, it.PresentationOrder, cand)
 		if i == 0 {
 			winner = WinnerTie
 		}
@@ -349,6 +355,7 @@ func TestVerdict_OperatorAgreementIsReported(t *testing.T) {
 			t.Fatalf("RecordVerdict(operator): %v", err)
 		}
 	}
+	f.judgeRun(t, func(Pair) int64 { return cand })
 
 	vv := f.onlyVerdict(t, f.summarizeWith(t, testOpts()))
 	ag := vv.Judgment.OperatorAgreement
@@ -357,6 +364,151 @@ func TestVerdict_OperatorAgreementIsReported(t *testing.T) {
 	}
 	if ag.Items != 4 || ag.Agreed != 3 || ag.Rate != 0.75 {
 		t.Errorf("agreement = %+v, want 3 of 4 at 0.75", *ag)
+	}
+}
+
+func TestCountAgreement_SkipsMarkRecordedAfterJudge(t *testing.T) {
+	judgedAt := time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
+	items := []JudgmentItem{{ID: 1}, {ID: 2}}
+	judge := map[int64]Verdict{
+		1: {ItemID: 1, Winner: WinnerA, CreatedAt: judgedAt},
+		2: {ItemID: 2, Winner: WinnerA, CreatedAt: judgedAt},
+	}
+	operator := map[int64]Verdict{
+		1: {ItemID: 1, Winner: WinnerA, CreatedAt: judgedAt.Add(-time.Minute)}, // blind: counted
+		2: {ItemID: 2, Winner: WinnerA, CreatedAt: judgedAt.Add(time.Minute)},  // after the judge: skipped
+	}
+
+	total, agreed := countAgreement(items, judge, operator)
+	if total != 1 || agreed != 1 {
+		t.Errorf("countAgreement = (%d, %d), want (1, 1): the late mark must not count", total, agreed)
+	}
+}
+
+// Marks written by the old flow (operator after judge) stay in the table but
+// drop out of the figure. RecordVerdict now refuses them, so insert them by SQL.
+func TestVerdict_LateOperatorMarksAreNotCounted(t *testing.T) {
+	f := newPairFixture(t, 1, []string{CategoryChat})
+	ctx := context.Background()
+	f.cleanRun(t)
+	f.createPairs(t)
+	f.judgeRun(t, func(Pair) int64 { return f.variants[1].ID })
+
+	judged, err := f.store.ListVerdicts(ctx, f.run.ID)
+	if err != nil {
+		t.Fatalf("ListVerdicts: %v", err)
+	}
+	for _, v := range judged {
+		if _, err := f.store.db.ExecContext(ctx,
+			`INSERT INTO eval_verdicts (item_id, winner, dimensions, notes, judge_ident, rubric_version, created_at, updated_at)
+			 VALUES (?, ?, '{}', '', ?, '', ?, ?)`,
+			v.ItemID, v.Winner, JudgeOperator, v.CreatedAt.Add(time.Hour), v.CreatedAt.Add(time.Hour)); err != nil {
+			t.Fatalf("inserting late operator mark: %v", err)
+		}
+	}
+
+	vv := f.onlyVerdict(t, f.summarizeWith(t, testOpts()))
+	if ag := vv.Judgment.OperatorAgreement; ag != nil {
+		t.Errorf("agreement = %+v, want nil: every mark came after the judge's call", *ag)
+	}
+}
+
+// A re-judge must not move the judge's timestamp past an old-flow mark, or
+// the mark would start counting again.
+func TestVerdict_LateMarkStaysExcludedAfterReJudge(t *testing.T) {
+	f := newPairFixture(t, 1, []string{CategoryChat})
+	ctx := context.Background()
+	f.cleanRun(t)
+	f.createPairs(t)
+	item := f.items(t)[0] // the other item stays pending, so a re-judge is accepted
+
+	mustRecord(t, f.store, item.ID, WinnerA, "claude-code")
+	judgedAt := time.Now().UTC().Add(-time.Hour)
+	if _, err := f.store.db.ExecContext(ctx,
+		`UPDATE eval_verdicts SET created_at = ? WHERE item_id = ?`, judgedAt, item.ID); err != nil {
+		t.Fatalf("backdating judge verdict: %v", err)
+	}
+	if _, err := f.store.db.ExecContext(ctx,
+		`INSERT INTO eval_verdicts (item_id, winner, dimensions, notes, judge_ident, rubric_version, created_at, updated_at)
+		 VALUES (?, ?, '{}', '', ?, '', ?, ?)`,
+		item.ID, WinnerA, JudgeOperator, judgedAt.Add(30*time.Minute), judgedAt.Add(30*time.Minute)); err != nil {
+		t.Fatalf("inserting late operator mark: %v", err)
+	}
+
+	mustRecord(t, f.store, item.ID, WinnerB, "claude-code")
+
+	judge := verdictsBy(t, f.store, f.run.ID, "claude-code")
+	if len(judge) != 1 || judge[0].Winner != WinnerB {
+		t.Fatalf("judge verdicts = %+v, want one row with the re-judged winner", judge)
+	}
+	if !judge[0].CreatedAt.Equal(judgedAt) {
+		t.Errorf("judge created_at = %v, want the first call's %v", judge[0].CreatedAt, judgedAt)
+	}
+	vv := f.onlyVerdict(t, f.summarizeWith(t, testOpts()))
+	if ag := vv.Judgment.OperatorAgreement; ag != nil {
+		t.Errorf("agreement = %+v, want nil: the mark came after the judge's first call", *ag)
+	}
+}
+
+// Two judge idents on one item: the one whose first call is older re-records,
+// and its new call is the one that counts.
+func TestVerdict_ReJudgeByOlderIdentIsTheVerdictThatCounts(t *testing.T) {
+	f := newPairFixture(t, 1, []string{CategoryChat})
+	f.cleanRun(t)
+	f.createPairs(t)
+	cand, base := f.variants[1].ID, f.variants[0].ID
+	pairs, err := f.store.ListPairs(context.Background(), f.run.ID)
+	if err != nil {
+		t.Fatalf("ListPairs: %v", err)
+	}
+	assign, err := DecodeAssignment(pairs[0].Assignment)
+	if err != nil {
+		t.Fatalf("DecodeAssignment: %v", err)
+	}
+	items := f.items(t)
+	first, second := items[0], items[1]
+
+	// Both idents pick the baseline on item 1, then "older" (first call older)
+	// switches to the candidate. Item 2 goes to the candidate, so the pair is a
+	// win only if item 1 reads older's latest call; newer's stale call makes a tie.
+	mustRecord(t, f.store, first.ID, letterFor(assign, first.PresentationOrder, base), "older")
+	mustRecord(t, f.store, first.ID, letterFor(assign, first.PresentationOrder, base), "newer")
+	mustRecord(t, f.store, first.ID, letterFor(assign, first.PresentationOrder, cand), "older")
+	mustRecord(t, f.store, second.ID, letterFor(assign, second.PresentationOrder, cand), "newer")
+
+	vv := f.onlyVerdict(t, f.summarizeWith(t, testOpts()))
+	if j := vv.Judgment; j.Wins != 1 || j.Losses != 0 || j.Ties != 0 {
+		t.Errorf("judgment = %d/%d/%d wins/losses/ties, want 1/0/0: older's re-judge on item 1 must count",
+			j.Wins, j.Losses, j.Ties)
+	}
+}
+
+// RecordVerdict returns the stored row: on a re-judge that is the first
+// call's id and time, not a fresh insert's.
+func TestRecordVerdict_ReJudgeReturnsStoredIDAndTime(t *testing.T) {
+	f := newPairFixture(t, 1, []string{CategoryChat})
+	ctx := context.Background()
+	f.cleanRun(t)
+	f.createPairs(t)
+	items := f.items(t)
+
+	first, err := f.store.RecordVerdict(ctx, Verdict{ItemID: items[0].ID, Winner: WinnerA, JudgeIdent: "claude-code"})
+	if err != nil {
+		t.Fatalf("RecordVerdict: %v", err)
+	}
+	// An insert in between moves the connection's last insert rowid.
+	if _, err := f.store.RecordVerdict(ctx, Verdict{ItemID: items[1].ID, Winner: WinnerA, JudgeIdent: JudgeOperator}); err != nil {
+		t.Fatalf("RecordVerdict(operator): %v", err)
+	}
+	again, err := f.store.RecordVerdict(ctx, Verdict{ItemID: items[0].ID, Winner: WinnerB, JudgeIdent: "claude-code"})
+	if err != nil {
+		t.Fatalf("RecordVerdict(re-judge): %v", err)
+	}
+	if again.ID != first.ID {
+		t.Errorf("re-judge id = %d, want the stored row's %d", again.ID, first.ID)
+	}
+	if !again.CreatedAt.Equal(first.CreatedAt) {
+		t.Errorf("re-judge created_at = %v, want the first call's %v", again.CreatedAt, first.CreatedAt)
 	}
 }
 

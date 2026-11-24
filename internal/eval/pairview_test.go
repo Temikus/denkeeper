@@ -157,11 +157,12 @@ func TestPairDetails_OperatorVerdictIsListedButDoesNotDecide(t *testing.T) {
 	items := f.items(t)
 	base, cand := f.variants[0], f.variants[1]
 
-	// The judge works only one order; the operator marks both, disagreeing.
-	f.judgeItem(t, items[0], cand.ID, "claude-code")
+	// The operator marks both orders first (a mark on a judged item is
+	// refused); then the judge works only one order, disagreeing.
 	for _, it := range items {
 		f.judgeItem(t, it, base.ID, JudgeOperator)
 	}
+	f.judgeItem(t, items[0], cand.ID, "claude-code")
 
 	pair := onlyPair(t, f.pairDetails(t, 0))
 	if pair.Outcome != PairOutcomePending {
