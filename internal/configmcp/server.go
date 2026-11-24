@@ -21,6 +21,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/audit"
 	"github.com/Temikus/denkeeper/internal/browser"
 	"github.com/Temikus/denkeeper/internal/kv"
+	"github.com/Temikus/denkeeper/internal/opsreport"
 	"github.com/Temikus/denkeeper/internal/scheduler"
 	"github.com/Temikus/denkeeper/internal/skill"
 	"github.com/Temikus/denkeeper/internal/task"
@@ -177,6 +178,10 @@ type Deps struct {
 	// AuditStore reads the audit log for approval_audit, which only ever
 	// returns AgentName's supervisor and approval events. Nil = not registered.
 	AuditStore audit.Store
+
+	// OpsReport builds ops_report, always for AgentName and never for an
+	// agent named in the input. Nil = not registered.
+	OpsReport *opsreport.Reporter
 
 	// IsSkillPinned checks if a skill is pinned (curator-immune). Nil = not pinned.
 	IsSkillPinned func(name string) (bool, error)

@@ -116,17 +116,18 @@ cosign verify \
 - **Cost tracking** — per-session budgets with automatic cutoff
 - **Conversation memory** — SQLite-backed, persistent across restarts
 - **Scheduler** — cron expressions, named intervals, and `@daily`/`@hourly` shorthand; per-schedule agent targeting and session modes
-- **Skills** — flat markdown files with TOML frontmatter; trigger-based filtering (`command:`/`schedule:`), per-agent skill merging, and per-skill `max_tool_rounds` caps on the tool-call loop
+- **Skills** — flat markdown files with TOML frontmatter; trigger-based filtering (`command:`/`schedule:`), per-agent skill merging, per-skill `max_tool_rounds` caps on the tool-call loop, and per-skill `max_output_tokens` caps on each completion
 - **MCP tools** — spawn MCP servers via stdio (subprocess) or SSE/Streamable HTTP (remote), discover tools, and execute tool calls in an agentic loop; auto-restart on crash with configurable backoff; OAuth 2.1 authorization for remote MCP servers; within-turn memoization of identical calls to read-only tools (built-ins always eligible; external servers opt in via `idempotent`, `idempotent_tools`, or `trust_annotations`)
 - **Web tools** — built-in `web_search` (DuckDuckGo or Tavily) and `web_fetch` (HTML→Markdown conversion with configurable per-call page size, size/timeout caps, robots.txt/agents.txt respect, and optional Jina Reader fallback for JS-heavy pages)
 - **MCP security** — SSRF protection (blocks localhost, link-local, and cloud metadata endpoints), HTTP header injection prevention, redirect target validation, env var denylist for secrets, and URL/arg redaction in API responses
+- **Untrusted tool output** — results from web, browser and external MCP tools reach the model inside `<untrusted_tool_output>` tags, and the system prompt tells it to treat that text as data, never instructions
 - **Plugin system** — subprocess and Docker-sandboxed plugins with capability declarations and Ed25519 signature verification; tools capability wires plugin tools into the agent's LLM loop
 - **Runtime tool management** — add and remove MCP tools and plugins at runtime without restarting; changes are persisted to TOML config
 - **Agent KV store** — per-agent key-value storage with optional TTL, exposed as MCP tools (`kv_get`/`kv_set`/`kv_delete`/`kv_list`/`kv_set_nx`); useful for locks, counters, caches, and cross-session state
 - **Supervisor agents** — a supervised agent can designate another agent as its supervisor via `supervisor = "agent-name"` in TOML; the supervisor sits between auto-approve rules and human approval, returning APPROVE/DENY/ESCALATE for each tool call; supervisor prompt includes skill/schedule context for scheduled invocations; configurable timeout (`supervisor_timeout`, default 30s) and context message count (`supervisor_context_messages`, default 5); LLM failures emit a `supervisor_error` event before falling through to human approval
 - **Decision models (deciders)** — `[[llm.deciders]]` declares a non-generative classifier (e.g. `typesafe/jev-1.13` via OpenRouter) that scores each supervised tool call not matched by an auto-approve rule, before the supervisor; `supervisor_decider_mode` is `shadow` (audit only, default) or `enforce`, with `supervisor_decider_approve_at` / `supervisor_decider_deny_at` thresholds; a failed decider never approves; calibrate thresholds from shadow reviews in the Agents page's calibration panel, or with `denkeeper decide replay --agent NAME` over past supervisor reviews; managed from the Providers page or `/api/v1/llm/deciders` without a restart. The same deciders can grade eval pairs ahead of the judge model (`[eval] judge_decider`) and back an agent-facing `decide` tool (`[decide]`)
 - **Dry runs** — preview what a schedule or skill would actually do without letting it do anything: the real persona, skills, and read-only tools run, while every write is suppressed and nothing is persisted, sent to an adapter, or remembered; returns a full transcript with suppressed calls marked, and accepts an `as_of` clock so a preview of a dated task is reproducible
-- **Audit log** — unified audit trail with buffered emitter, SQLite storage, and 12 event categories (`tool_call`, `skill`, `channel`, `approval`, `schedule`, `llm`, `config`, `session`, `mcp`, `safety`, `supervisor`, `eval`); web UI page with timeline and table views, category/status/agent/time filters, and a source-exclusion filter that hides dry-run noise by default
+- **Audit log** — unified audit trail with buffered emitter, SQLite storage, and 14 event categories (`tool_call`, `skill`, `channel`, `approval`, `schedule`, `llm`, `config`, `session`, `mcp`, `safety`, `supervisor`, `eval`, `task`, `audit`); tamper-evident hash chain checked by `denkeeper audit verify`, with dropped events counted and recorded; web UI page with timeline and table views, category/status/agent/time filters, and a source-exclusion filter that hides dry-run noise by default
 - **Channels** — named routing endpoints (`[[channels]]`) that decouple sessions from adapters; cross-adapter session sharing, ephemeral session mode, `/session` command for runtime switching; auto-synthesized from agent `adapters` bindings when absent (backward compatible)
 - **Safety commands** — `/stop` cancels the current in-flight request, `/panic` emergency-stops all in-flight requests and pauses the scheduler, `/resume` clears panic state; available in Telegram, Discord, web UI, and REST API
 - **Session history management** — `/clear` removes all messages from a session, `/compact` summarises via LLM and replaces all messages with a single summary; available in Telegram, Discord, web UI, and REST API
@@ -228,7 +229,7 @@ Key sections:
 | `[kv]` | Agent KV store limits (`max_keys_per_agent`, `max_value_bytes`, `list_max_bytes`, `list_value_head_bytes`, `cleanup_interval`) |
 | `[script]` | `run_javascript` deterministic-compute tool (`enabled`, `timeout`, `max_output_chars`, `max_input_bytes`) |
 | `[decide]` | Agent-facing `decide` classification tool (`decider`, `enabled`) |
-| `[web]` | Built-in web tools — `[web.search]` provider/API key/result count, `[web.fetch]` timeout, size caps, `max_response_chars` page size, robots/agents.txt policy, `[web.fetch.jina]` fallback |
+| `[web]` | Built-in web tools — `[web.search]` provider/API key/result count, `[web.fetch]` timeout, size caps, `max_response_chars` page size, robots/agents.txt policy and network policy (`allow_private`, `allow_loopback`, `allowed_domains`, `blocked_domains`, all under `[web.fetch]`), `[web.fetch.jina]` fallback |
 | `[memory]` | SQLite database path |
 | `[log]` | Log level and format |
 
@@ -267,7 +268,7 @@ A Helm chart is available in [`deploy/helm/denkeeper/`](deploy/helm/denkeeper/) 
 
 ### Skills
 
-Skills are markdown files that teach the agent how to handle specific tasks. They use TOML frontmatter enclosed in `+++` delimiters:
+Skills are markdown files that teach the agent how to handle specific tasks. They use TOML frontmatter enclosed in `+++` delimiters. YAML between `---` lines is also read, and a skill keeps the form it was written in:
 
 ```markdown
 +++
@@ -285,7 +286,7 @@ When triggered, compile a briefing with:
 3. Any pending reminders
 ```
 
-Place skill files in `~/.denkeeper/skills/` (configurable via `[agent] skills_dir`). Subdirectories with a `SKILL.md` file are also supported. Skills with `triggers` are only injected when matched; skills without triggers are always included. A `schedule:<name>` trigger added at runtime must name an existing `[[schedules]]` entry; triggers a skill already carries are exempt.
+Place skill files in `~/.denkeeper/skills/` (configurable via `[agent] skills_dir`). Subdirectories with a `SKILL.md` file are also supported. Skills with `triggers` are only injected when matched; skills without triggers are always included. Each turn's prompt also lists every skill's name and triggers, plus the first line of its description for skills that are not always on, so the agent knows about skills a message did not trigger. The list is capped at 8,000 bytes: past that, descriptions and then entries that do not fit are left out and the agent is pointed to `skill_list`. Set `[skills] index = false` to turn it off. A `schedule:<name>` trigger added at runtime must name an existing `[[schedules]]` entry; triggers a skill already carries are exempt.
 
 Agent-specific skills in `<persona_dir>/skills/` override global skills of the same name.
 
@@ -351,8 +352,8 @@ curl -X POST localhost:8080/api/v1/schedules/nightly-digest/dry-run \
 
 The turn goes through the whole engine — persona, matched skills, tool loop, budget hints. What changes is the execution policy:
 
-- **Read-only tools execute for real**, so the model reasons about the actual world. "Read-only" is the same idempotency signal the engine already uses for within-turn memoization: the built-in allowlist plus whatever external servers opted into via `idempotent` / `idempotent_tools` / `trust_annotations`.
-- **Everything else is suppressed** and gets `[dry-run: write suppressed — <name> not executed; assume success]` back, so the model keeps planning against a plausible world. Unknown tools are suppressed too — the allowlist is the only thing that vouches for a call.
+- **Read-only tools execute for real**, so the model reasons about the actual world. "Read-only" is the same read-only classification the `restricted` tier uses: the built-in reads plus whatever external servers opted into via `idempotent` / `idempotent_tools` / `trust_annotations`.
+- **Everything else is suppressed** and gets `[dry-run: "<name>" not executed. If this was a write, treat it as done. If it was a read, its result is unknown: do not guess it or repeat the call, and carry on without it.]` back, so the model can carry on past a write without making up data for a read it never got. Unknown tools are suppressed too — the allowlist is the only thing that vouches for a call.
 - **Nothing is persisted.** No conversation row, no messages, no telemetry, no memory extraction, no reviewer trigger. The transcript is returned to you and lives nowhere else.
 - **Approvals are skipped.** Suppressed calls execute nothing to approve, and the calls that do run are read-only by definition.
 - **`as_of` pins the clock** for both places a date reaches the model (the scheduled-message header and the `## Current Date` prompt section), so previewing a July task in September doesn't silently drift.
@@ -620,7 +621,7 @@ Cursor (`.cursor/mcp.json`):
 
 Other MCP clients that support Streamable HTTP or SSE transports can connect to `http://<host>:8080/api/v1/mcp` with a `Bearer` token in the `Authorization` header.
 
-The API key must have scopes matching the tools you want to use (e.g. `chat`, `agents:read`, `sessions:read`, `skills:read`, `schedules:read`). Available MCP tools: `chat`, `agent_list`, `agent_info`, `agent_update`, `session_list`, `session_messages`, `session_search`, `session_clear`, `session_compact`, `skill_list`, `skill_get`, `skill_create`, `skill_update`, `skill_delete`, `skill_revert`, `schedule_list`, `schedule_create`, `schedule_update`, `schedule_delete`, `channel_list`, `approval_list`, `approval_resolve`, `tool_list`, `tool_health`, `tool_restart`, `kv_get`, `kv_set`, `kv_list`, `kv_delete`, `cost_summary`, `telemetry_summary`, `panic`, `resume`, `panic_status`.
+The API key must have scopes matching the tools you want to use (e.g. `chat`, `agents:read`, `sessions:read`, `skills:read`, `schedules:read`). Available MCP tools: `chat`, `agent_list`, `agent_info`, `agent_update`, `persona_get`, `persona_update`, `session_list`, `session_messages`, `session_search`, `session_clear`, `session_compact`, `skill_list`, `skill_get`, `skill_create`, `skill_update`, `skill_delete`, `skill_revert`, `schedule_list`, `schedule_create`, `schedule_update`, `schedule_delete`, `channel_list`, `approval_list`, `approval_resolve`, `tool_list`, `tool_health`, `tool_restart`, `kv_get`, `kv_set`, `kv_list`, `kv_delete`, `cost_summary`, `telemetry_summary`, `ops_report`, `panic`, `resume`, `panic_status`.
 
 ## Development
 

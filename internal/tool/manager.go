@@ -974,6 +974,7 @@ var builtinReadOnlyTools = map[string]bool{
 	"get_cost_summary":     true,
 	"kv_get":               true,
 	"kv_list":              true,
+	"ops_report":           true,
 	"task_get":             true,
 	"task_list":            true,
 	"persona_get":          true,
@@ -1015,6 +1016,7 @@ func IsHumanOnlyToolName(name string) bool {
 // toolClass is everything a classification decision reads about one tool,
 // snapshotted under the manager lock.
 type toolClass struct {
+	server    string // owning server's name
 	local     string // server-local name, which the allowlists are keyed by
 	inProcess bool   // registered as an in-process session, not an external server
 	optedIn   bool   // [tools.*] idempotent / idempotent_tools names it
@@ -1033,15 +1035,21 @@ func (m *Manager) classify(toolName string) (toolClass, *Manager, error) {
 	if err != nil {
 		return toolClass{}, parent, err
 	}
+	return classOf(sc, local), parent, nil
+}
+
+// classOf snapshots a resolved tool's classification. The caller holds m.mu.
+func classOf(sc *serverConn, local string) toolClass {
 	return toolClass{
-		local: local,
+		server: sc.name,
+		local:  local,
 		// In-process sessions (RegisterSession) have no transport and no
 		// command; external servers always set one of them.
 		inProcess: sc.transport == "" && sc.command == "",
 		optedIn:   sc.cfg.IsIdempotentTool(local),
 		trusted:   sc.cfg.TrustAnnotations,
 		hinted:    sc.readOnlyHinted[local],
-	}, parent, nil
+	}
 }
 
 // declaredReadOnly reports whether an external server's operator or the server
@@ -1072,6 +1080,25 @@ func (m *Manager) IsIdempotent(toolName string) bool {
 		return builtinIdempotentTools[class.local]
 	}
 	return class.declaredReadOnly()
+}
+
+// BuiltinLocalName returns toolName's server-local name when it resolves to an
+// in-process server (config MCP and friends). ok is false for an external
+// server's tool, an ambiguous name, or an unknown one. Callers use it to tell
+// our kv_set from an external server's tool of the same name.
+func (m *Manager) BuiltinLocalName(toolName string) (local string, ok bool) {
+	class, parent, err := m.classify(toolName)
+	if err != nil {
+		// Only a genuine miss goes to the parent; a collision here stays here.
+		if parent != nil && errors.Is(err, ErrToolNotFound) {
+			return parent.BuiltinLocalName(toolName)
+		}
+		return "", false
+	}
+	if !class.inProcess {
+		return "", false
+	}
+	return class.local, true
 }
 
 // IsReadOnly reports whether toolName only reads — the classification the
@@ -1135,14 +1162,34 @@ func (m *Manager) ToolDescription(toolName string) string {
 	return ""
 }
 
-// Execute runs a single tool call and returns the text result.
-// If the tool is not found locally, it delegates to the parent manager.
+// Result is one tool call's output. Text is what the model reads, built from
+// the text content blocks. Structured is the MCP structuredContent re-encoded
+// as JSON, or nil when the server sent none. It is as untrusted as Text.
+type Result struct {
+	Text       string
+	Structured json.RawMessage
+	// Provenance is the server that took the call, classified under the same
+	// lock that admitted it, so it holds even if the server is replaced or
+	// drains straight after. Set on error results too; zero when the name
+	// did not resolve.
+	Provenance Provenance
+}
+
+// Execute runs a single tool call and returns the text result. It is
+// ExecuteResult without the structured value.
+func (m *Manager) Execute(ctx context.Context, call llm.ToolCall) (string, error) {
+	res, err := m.ExecuteResult(ctx, call)
+	return res.Text, err
+}
+
+// ExecuteResult runs a single tool call and returns its text and structured
+// content. If the tool is not found locally, it delegates to the parent manager.
 //
 // The name the model called (bare when unique, "<server>__<tool>" when two
 // servers share it) is resolved to its owning server; the server-local name is
 // what goes on the wire. A bare name that two servers claim is never guessed
 // at — it returns ErrAmbiguousTool naming the alternatives.
-func (m *Manager) Execute(ctx context.Context, call llm.ToolCall) (string, error) {
+func (m *Manager) ExecuteResult(ctx context.Context, call llm.ToolCall) (res Result, err error) {
 	// Admission to the in-flight set is taken under the same read lock that
 	// resolves the server and snapshots its session: teardown phase 1 flips the
 	// conn to draining under the write lock, so an admission decided after the
@@ -1159,6 +1206,9 @@ func (m *Manager) Execute(ctx context.Context, call llm.ToolCall) (string, error
 	if resolveErr == nil {
 		serverName, session, disabled = sc.name, sc.session, sc.disabledSet[local]
 		admitted = sc.enterCall()
+		// Every return below carries the provenance of this resolution.
+		prov := classOf(sc, local).provenance()
+		defer func() { res.Provenance = prov }()
 	}
 	m.mu.RUnlock()
 
@@ -1167,19 +1217,19 @@ func (m *Manager) Execute(ctx context.Context, call llm.ToolCall) (string, error
 		// is in this manager, and the parent cannot resolve it either.
 		if errors.Is(resolveErr, ErrToolNotFound) {
 			if parent != nil {
-				return parent.Execute(ctx, call)
+				return parent.ExecuteResult(ctx, call)
 			}
-			return "", fmt.Errorf("unknown tool %q", call.Function.Name)
+			return Result{}, fmt.Errorf("unknown tool %q", call.Function.Name)
 		}
-		return "", resolveErr
+		return Result{}, resolveErr
 	}
 	if !admitted {
-		return "", fmt.Errorf("tool %q on MCP server %q: %w", call.Function.Name, serverName, ErrServerDraining)
+		return Result{}, fmt.Errorf("tool %q on MCP server %q: %w", call.Function.Name, serverName, ErrServerDraining)
 	}
 	defer sc.leaveCall()
 
 	if disabled {
-		return "", fmt.Errorf("tool %q is disabled", call.Function.Name)
+		return Result{}, fmt.Errorf("tool %q is disabled", call.Function.Name)
 	}
 
 	ctx, span := toolTracer.Start(ctx, "tool.execute", trace.WithAttributes(
@@ -1202,7 +1252,7 @@ func (m *Manager) Execute(ctx context.Context, call llm.ToolCall) (string, error
 		err := fmt.Errorf("tool %q is not connected (OAuth authorization required)", call.Function.Name)
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
-		return "", err
+		return Result{}, err
 	}
 
 	var arguments map[string]any
@@ -1213,7 +1263,7 @@ func (m *Manager) Execute(ctx context.Context, call llm.ToolCall) (string, error
 			err = fmt.Errorf("parsing tool arguments: %w", err)
 			span.RecordError(err)
 			span.SetStatus(codes.Error, err.Error())
-			return "", err
+			return Result{}, err
 		}
 	}
 
@@ -1225,12 +1275,37 @@ func (m *Manager) Execute(ctx context.Context, call llm.ToolCall) (string, error
 		err = fmt.Errorf("calling tool %q: %w", call.Function.Name, err)
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
-		return "", err
+		return Result{}, err
 	}
 
-	// Extract text from content blocks.
+	res = Result{
+		Text:       joinTextContent(result.Content),
+		Structured: m.encodeStructured(call.Function.Name, result.StructuredContent),
+	}
+	span.SetAttributes(attribute.Int("tool.result.size_bytes", len(res.Text)))
+	if res.Structured != nil {
+		span.SetAttributes(attribute.Int("tool.result.structured_size_bytes", len(res.Structured)))
+	}
+
+	if result.IsError {
+		// App-level rejection: the tool is healthy but returned an error result
+		// (typically bad/unusable args). Surface as a typed RejectionError so
+		// telemetry can distinguish this from transport/exec failures above.
+		err = &RejectionError{Tool: call.Function.Name, Text: res.Text}
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return res, err
+	}
+
+	span.SetStatus(codes.Ok, "")
+	return res, nil
+}
+
+// joinTextContent joins a result's text blocks with newlines, skipping every
+// other content type.
+func joinTextContent(content []mcp.Content) string {
 	var text string
-	for _, c := range result.Content {
+	for _, c := range content {
 		if tc, ok := c.(*mcp.TextContent); ok {
 			if text != "" {
 				text += "\n"
@@ -1238,21 +1313,26 @@ func (m *Manager) Execute(ctx context.Context, call llm.ToolCall) (string, error
 			text += tc.Text
 		}
 	}
+	return text
+}
 
-	span.SetAttributes(attribute.Int("tool.result.size_bytes", len(text)))
-
-	if result.IsError {
-		// App-level rejection: the tool is healthy but returned an error result
-		// (typically bad/unusable args). Surface as a typed RejectionError so
-		// telemetry can distinguish this from transport/exec failures above.
-		err = &RejectionError{Tool: call.Function.Name, Text: text}
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		return text, err
+// encodeStructured re-encodes the SDK's decoded structuredContent. The SDK
+// hands it over as Go values, so integers above 2^53 have already passed
+// through float64 and key order is lost. Nil means none was sent; a marshal
+// failure is logged and also gives nil, since it must not fail the call.
+func (m *Manager) encodeStructured(toolName string, v any) json.RawMessage {
+	if v == nil {
+		return nil
 	}
-
-	span.SetStatus(codes.Ok, "")
-	return text, nil
+	b, err := json.Marshal(v)
+	if err != nil {
+		m.logger.Warn("encoding tool structured content", "tool", toolName, "error", err)
+		return nil
+	}
+	if string(b) == "null" {
+		return nil
+	}
+	return b
 }
 
 // CleanupOAuthToken removes the OAuth token for a tool, if any.

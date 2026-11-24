@@ -3,7 +3,7 @@ title: "REST API Reference"
 description: "HTTP API endpoints for external integrations."
 slug: "rest-api"
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-10-16T00:00:00+00:00
+lastmod: 2026-11-23T00:00:00+00:00
 draft: false
 weight: 30
 toc: true
@@ -358,7 +358,7 @@ List the agent's shadow-mode [decision model](/docs/concepts/deciders/) reviews 
 
 Query parameters: `decider` (default: the agent's `supervisor_decider`) and `since` (RFC3339, default: 30 days ago). The response carries `reviews`, `failed` (decider reviews that errored) and `truncated` (only the newest reviews fit). Each review has:
 
-- `scores` for the `aligned`, `scoped`, `no_injection`, `no_secrets` and `no_leak` checks (high means safe), plus `lowest`, `min_score`, and `min_deny_score` (the lowest check that can deny, leaving out `no_leak`, which only escalates). Reviews recorded before the safety question was split (they carry a `safe_args` answer) are left out. `min_score` decides an approval and `min_deny_score` a denial. Both are `null` when an answer was missing, and such a call always escalates.
+- `scores` for the `aligned`, `scoped`, `no_injection`, `no_secrets`, `no_leak` and `no_self_grant` checks (high means safe; `no_self_grant` is absent on reviews recorded before it was added), plus `lowest`, `min_score`, and `min_deny_score` (the lowest check that can deny, leaving out `no_leak` and `no_self_grant`, which only escalate). Reviews from two earlier question sets are left out: the bundled safety question (they carry a `safe_args` answer) and the later yes-is-safe `aligned` and `scoped` questions (recognised by their `aligned` answer). `min_score` decides an approval and `min_deny_score` a denial. Both are `null` when an answer was missing, and such a call always escalates. A review recorded before `self_grant` was added is not missing an answer: it is scored on the checks it has.
 - `supervisor`: `APPROVE`, `DENY`, `ESCALATE`, or `""` when there is no supervisor verdict for the call.
 - `decider_cost` and `supervisor_cost`. `supervisor_cost` is `null` for reviews recorded before the supervisor's cost was audited.
 
@@ -723,6 +723,8 @@ Create a new skill. The skill file is written to the agent's skills directory an
 }
 ```
 
+Optional fields: `max_tool_rounds`, `max_output_tokens` and `requires_tools`. `max_output_tokens` caps output tokens per completion for turns this skill drives; it lowers a cap set on the agent or in `[llm]`, is sent as is when neither sets one, and 0 means no skill cap.
+
 ### `PUT /api/v1/skills/{agent}/{name}`
 
 **Scope:** `skills:write`
@@ -738,6 +740,8 @@ Update an existing skill. Fields are merged with existing values — only provid
   "body": "# Updated content"
 }
 ```
+
+An omitted `max_tool_rounds` or `max_output_tokens` keeps the skill's current cap; `0` removes it.
 
 ### `POST /api/v1/skills/{agent}/{name}/dry-run`
 

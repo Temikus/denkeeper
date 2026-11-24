@@ -147,6 +147,18 @@ func TestSummary_WrapupCountUsesStopReasonSlugs(t *testing.T) {
 	}
 }
 
+func TestSummary_OutputLimitCountsAsWrapup(t *testing.T) {
+	f := newSummaryFixture(t, 1)
+	inc := f.variants[0]
+
+	f.add(t, Sample{VariantID: inc.ID, TaskID: f.tasks[0].ID, StopReason: "output_limit"})
+
+	sum := f.summarize(t, 0.8)
+	if got := variantByName(t, sum, "incumbent").WrapupCount; got != 1 {
+		t.Errorf("wrapup_count = %d, want 1 for an output_limit sample", got)
+	}
+}
+
 func TestSummary_FailedSamplesExcludedFromMeans(t *testing.T) {
 	f := newSummaryFixture(t, 1)
 	inc := f.variants[0]

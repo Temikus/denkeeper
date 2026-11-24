@@ -37,6 +37,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/llm/pricing"
 	"github.com/Temikus/denkeeper/internal/mcpserver"
 	"github.com/Temikus/denkeeper/internal/onboarding/chatapp"
+	"github.com/Temikus/denkeeper/internal/opsreport"
 	dkotel "github.com/Temikus/denkeeper/internal/otel"
 	"github.com/Temikus/denkeeper/internal/persona"
 	"github.com/Temikus/denkeeper/internal/plugin"
@@ -89,10 +90,10 @@ func main() {
 		},
 	}
 
-	rootCmd.AddCommand(serveCmd, versionCmd, newKeysCmd(), newPluginCmd(), newSessionsCmd(), newPasswdCmd(), newDecideCmd())
+	rootCmd.AddCommand(serveCmd, versionCmd, newKeysCmd(), newPluginCmd(), newSessionsCmd(), newPasswdCmd(), newDecideCmd(), newKVCmd(), newAuditCmd())
 
 	if err := rootCmd.Execute(); err != nil {
-		os.Exit(1)
+		os.Exit(exitCode(err))
 	}
 }
 
@@ -289,6 +290,15 @@ func auditReader(st *audit.SQLiteStore) audit.Store {
 		return nil
 	}
 	return st
+}
+
+// opsScheduleSource boxes the scheduler for opsreport.New, which needs a nil
+// interface rather than a nil pointer to leave schedules out.
+func opsScheduleSource(s *scheduler.Scheduler) opsreport.ScheduleSource {
+	if s == nil {
+		return nil
+	}
+	return s
 }
 
 // closeStores closes all persistence stores in reverse order.
@@ -929,6 +939,7 @@ func connectConfigMCP(ctx context.Context, agentName, skillsDir string, e *agent
 		ActiveChannelsForChannel: abc.dispatcher.ActiveChannelsForChannel,
 		Auditor:                  abc.auditor,
 		AuditStore:               abc.auditStore,
+		OpsReport:                opsreport.New(abc.memory, abc.kvStore, opsScheduleSource(abc.sched), abc.auditStore),
 		IsSkillPinned:            buildIsSkillPinned(agentName, abc.memory),
 		BumpSkillView:            buildSkillBump(abc.memory, abc.logger, "view"),
 		BumpSkillPatch:           buildSkillBump(abc.memory, abc.logger, "patch"),
@@ -1166,6 +1177,42 @@ func connectDecideMCP(ctx context.Context, agentName string, cfg *config.Config,
 	return nil
 }
 
+// warnWebFetchOptIns logs once at startup when [web.fetch] opens private or
+// loopback ranges. The setting is global, so it is not logged per agent.
+func warnWebFetchOptIns(w config.WebConfig, logger *slog.Logger) {
+	if !w.WebEnabled() || (!w.Fetch.AllowPrivate && !w.Fetch.AllowLoopback) {
+		return
+	}
+	logger.Warn("web_fetch network policy opened for every agent",
+		"allow_private", w.Fetch.AllowPrivate, "allow_loopback", w.Fetch.AllowLoopback)
+}
+
+// warnWebFetchOptInsOnReload warns, in either direction, when a reload
+// changes the effective opt-ins. Agents built after a reload (reloadNewAgents,
+// the API agent factory) read the reloaded [web.fetch]; running agents keep
+// theirs, so closing by reload leaves them open until restart.
+func warnWebFetchOptInsOnReload(prev *config.Config, next config.WebConfig, logger *slog.Logger) {
+	var was [2]bool
+	if prev != nil {
+		was = webFetchOptIns(prev.Web)
+	}
+	now := webFetchOptIns(next)
+	if was == now {
+		return
+	}
+	logger.Warn("[web.fetch] network policy changed by reload; agents created from now on use it, running agents keep the old policy until restart",
+		"allow_private", now[0], "allow_loopback", now[1],
+		"was_allow_private", was[0], "was_allow_loopback", was[1])
+}
+
+// webFetchOptIns returns the effective opt-ins: none when web tools are off.
+func webFetchOptIns(w config.WebConfig) [2]bool {
+	if !w.WebEnabled() {
+		return [2]bool{}
+	}
+	return [2]bool{w.Fetch.AllowPrivate, w.Fetch.AllowLoopback}
+}
+
 // buildWebFetcher constructs a Fetcher (with optional Jina fallback chain) from config.
 func buildWebFetcher(fc config.WebFetchConfig, logger *slog.Logger) webfetch.Fetcher {
 	timeout, err := time.ParseDuration(fc.Timeout)
@@ -1180,6 +1227,10 @@ func buildWebFetcher(fc config.WebFetchConfig, logger *slog.Logger) webfetch.Fet
 		RespectRobotsTxt: fc.RespectRobotsTxt,
 		RespectAgentsTxt: fc.RespectAgentsTxt,
 		Logger:           logger,
+		AllowPrivate:     fc.AllowPrivate,
+		AllowLoopback:    fc.AllowLoopback,
+		AllowedDomains:   fc.AllowedDomains,
+		BlockedDomains:   fc.BlockedDomains,
 	})
 
 	if !fc.Jina.Enabled {
@@ -1381,6 +1432,31 @@ func buildAllAgents(ctx context.Context, agents []config.AgentInstanceConfig, ab
 	return engines, bindings, nil
 }
 
+// kvTargetAdapter gives the engine its write-target view of the KV store. It
+// is the only caller of kv.Store.SetWriter: no REST or MCP path may set the
+// writer, or an agent could forge "last written by <trusted skill>".
+type kvTargetAdapter struct{ store kv.Store }
+
+func (a kvTargetAdapter) KVTarget(ctx context.Context, agentName, key string) (bool, string, time.Time, error) {
+	e, ok, err := a.store.GetEntry(ctx, agentName, key)
+	if err != nil {
+		return false, "", time.Time{}, fmt.Errorf("reading kv target %q: %w", key, err)
+	}
+	return ok, e.WrittenBy, e.UpdatedAt, nil
+}
+
+func (a kvTargetAdapter) StampKVWriter(ctx context.Context, agentName, key, value, skill string) error {
+	return a.store.SetWriter(ctx, agentName, key, value, skill)
+}
+
+// kvTargetsFor returns nil when KV is off, so the engine gets no KV targets.
+func kvTargetsFor(store kv.Store) agent.KVTargetStore {
+	if store == nil {
+		return nil
+	}
+	return kvTargetAdapter{store: store}
+}
+
 func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc agentBuildCtx) (*agent.Engine, []agent.Binding, error) {
 	// Per-agent persona
 	p, pErr := persona.Load(ac.PersonaDir)
@@ -1456,6 +1532,7 @@ func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc ag
 
 	applySupervisorKnobs(e, ac)
 	e.SetLocation(agentLocation(abc.cfg, ac))
+	e.SetSkillIndex(ac.EffectiveSkillIndex(abc.cfg.Skills.IndexEnabled()))
 	e.SetReplyGuard(replyGuardFrom(abc.cfg))
 	// Nil-check before boxing: a typed-nil *eval.Store in the TraceSink
 	// interface reads as non-nil, which would turn every capture into a nil
@@ -1464,6 +1541,15 @@ func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc ag
 		e.SetTraceSink(abc.evalStore)
 	}
 	e.SetTraceCapture(abc.cfg.Eval.Capture, abc.cfg.Eval.TraceBytesCap())
+	if t := kvTargetsFor(abc.kvStore); t != nil {
+		e.SetKVTargets(t)
+	}
+	// Same check skill_create's handler makes, so a review never shows a
+	// create the handler will refuse as a fresh one.
+	skillsDir := sr.agentSkillsDir
+	e.SetSkillFileCheck(func(name string) (bool, error) {
+		return configmcp.SkillFileExists(skillsDir, name)
+	})
 
 	if err := connectConfigMCP(ctx, ac.Name, sr.agentSkillsDir, e, agentRouter, agentToolMgr, abc); err != nil {
 		return nil, nil, err
@@ -1682,6 +1768,8 @@ func buildReviewerEngine(ctx context.Context, ac config.AgentInstanceConfig, par
 		revLogger,
 	)
 	revEngine.SetLocation(agentLocation(abc.cfg, ac))
+	// The reviewer holds a build-time skill snapshot and no scheduler, so its index would be stale.
+	revEngine.SetSkillIndex(false)
 
 	revCMCP := configmcp.New(reviewerConfigDeps(ac.Name, parent, revEngine.PermissionTier, abc.memory, revLogger))
 	session, err := revCMCP.Connect(ctx)
@@ -2113,6 +2201,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 	cfgHolder := config.NewHolder(cfg)
 
 	logger := initLogger(cfg)
+	warnWebFetchOptIns(cfg.Web, logger)
 
 	otelShutdown, err := dkotel.Setup(dkotel.Config{
 		Enabled:        cfg.OTel.Enabled,
@@ -2359,7 +2448,9 @@ func buildReloadFunc(path string, cfgHolder *config.Holder, dispatcher *agent.Di
 		if err != nil {
 			return fmt.Errorf("reloading config: %w", err)
 		}
+		prev := cfgHolder.Get()
 		cfgHolder.Store(cfg)
+		warnWebFetchOptInsOnReload(prev, cfg.Web, logger)
 
 		if rt.providers != nil {
 			syncProviders(*rt.providers, cfg)
@@ -2393,6 +2484,7 @@ func buildReloadFunc(path string, cfgHolder *config.Holder, dispatcher *agent.Di
 			reconcileSupervisor(e, ac, dispatcher, logger)
 			applySupervisorKnobs(e, ac)
 			e.SetLocation(agentLocation(cfg, ac))
+			e.SetSkillIndex(ac.EffectiveSkillIndex(cfg.Skills.IndexEnabled()))
 			e.SetReplyGuard(replyGuardFrom(cfg))
 			e.SetTraceCapture(cfg.Eval.Capture, cfg.Eval.TraceBytesCap())
 			warnUnadvertisedAutoApprove(ac.Name, ac.AutoApproveTools, e.ToolNames(), logger)

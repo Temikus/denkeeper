@@ -96,7 +96,7 @@ Some body.`)
 
 	_, err := ParseFile("bad.md", content)
 	if err == nil {
-		t.Fatal("expected error for missing opening +++, got nil")
+		t.Fatal("expected error for missing opening delimiter, got nil")
 	}
 }
 
@@ -187,6 +187,57 @@ Body.`)
 	}
 	if !strings.Contains(err.Error(), "max_tool_rounds") {
 		t.Errorf("error = %q, want it to name the max_tool_rounds field", err.Error())
+	}
+}
+
+func TestParseFile_MaxOutputTokens(t *testing.T) {
+	content := []byte(`+++
+name = "digest"
+triggers = ["command:digest"]
+max_output_tokens = 2048
++++
+
+Body.`)
+
+	s, err := ParseFile("digest.md", content)
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	if s.MaxOutputTokens != 2048 {
+		t.Errorf("MaxOutputTokens = %d, want 2048", s.MaxOutputTokens)
+	}
+}
+
+func TestParseFile_MaxOutputTokensAbsent_Zero(t *testing.T) {
+	content := []byte(`+++
+name = "uncapped"
++++
+
+Body.`)
+
+	s, err := ParseFile("uncapped.md", content)
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	if s.MaxOutputTokens != 0 {
+		t.Errorf("MaxOutputTokens = %d, want 0 (unset)", s.MaxOutputTokens)
+	}
+}
+
+func TestParseFile_MaxOutputTokensNegative_Error(t *testing.T) {
+	content := []byte(`+++
+name = "bad-cap"
+max_output_tokens = -1
++++
+
+Body.`)
+
+	_, err := ParseFile("badcap.md", content)
+	if err == nil {
+		t.Fatal("expected error for negative max_output_tokens, got nil")
+	}
+	if !strings.Contains(err.Error(), "max_output_tokens") {
+		t.Errorf("error = %q, want it to name the max_output_tokens field", err.Error())
 	}
 }
 
@@ -405,6 +456,32 @@ Research things.`), 0o644); err != nil {
 	}
 	if sk.SubFileNames[1] != "templates/report.txt" {
 		t.Errorf("SubFileNames[1] = %q, want templates/report.txt", sk.SubFileNames[1])
+	}
+}
+
+func TestLoadDir_WarnsWhenFlatAndFolderShareAName(t *testing.T) {
+	dir := t.TempDir()
+	content := []byte("+++\nname = \"kelos\"\n+++\n\nbody")
+	if err := os.MkdirAll(filepath.Join(dir, "kelos"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"kelos.md", filepath.Join("kelos", "SKILL.md")} {
+		if err := os.WriteFile(filepath.Join(dir, p), content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var logs strings.Builder
+	skills, err := LoadDir(dir, slog.New(slog.NewTextHandler(&logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(skills) != 2 {
+		t.Fatalf("loaded %d skills, want both files", len(skills))
+	}
+	out := logs.String()
+	if !strings.Contains(out, "two files define the same skill name") ||
+		!strings.Contains(out, filepath.Join(dir, "kelos.md")) || !strings.Contains(out, filepath.Join(dir, "kelos", "SKILL.md")) {
+		t.Errorf("log = %q, want a warning naming both files", out)
 	}
 }
 

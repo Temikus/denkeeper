@@ -3,7 +3,7 @@ title: "Configuration Reference"
 description: "Complete reference for denkeeper.toml options."
 slug: "config"
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-09-18T00:00:00+00:00
+lastmod: 2026-11-23T00:00:00+00:00
 draft: false
 weight: 10
 toc: true
@@ -191,6 +191,7 @@ Defaults for agents that do not set their own directories.
 | `max_output_tokens` | int | `0` | Override `llm.max_output_tokens` for this agent. `0` = inherit. The post-turn reviewer keeps the global value |
 | `session_tier` | string | — | Override default permission tier |
 | `timezone` | string | — | IANA name, e.g. `"Australia/Sydney"`. Precedence: agent > `api.timezone` > UTC. Does **not** affect cron evaluation, which stays on `api.timezone` and is restart-only |
+| `skill_index` | bool | — | Overrides `[skills] index` for this agent; unset inherits it. Applied on `POST /server/reload` |
 | `cost_limit_soft` | float | — | Per-agent soft cost limit in USD (overrides global) |
 | `cost_limit_hard` | float | — | Per-agent hard cost limit in USD (overrides global) |
 | `max_context_messages` | int | `50` | Most recent messages sent to the LLM. Older history is dropped from the request, not deleted |
@@ -209,10 +210,10 @@ Defaults for agents that do not set their own directories.
 | `supervisor_body_excerpt_len` | int | `500` | Max characters of skill body included in the review prompt |
 | `supervisor_tool_desc_len` | int | `1000` | Max characters of tool description included in the review prompt |
 | `supervisor_max_args_bytes` | int | `16384` | Max bytes of tool-call arguments sent for review. Larger calls skip the supervisor and go straight to human approval (audited with `cause: "too_large"`); arguments are never truncated. `0` = default |
-| `supervisor_decider` | string | — | `[[llm.deciders]]` entry that scores each tool call before the supervisor: six yes/no questions, combined into five checks where high means safe (see [Decision Models](/docs/concepts/deciders/#the-checks)). Supervised tier only; works with or without `supervisor` |
+| `supervisor_decider` | string | — | `[[llm.deciders]]` entry that scores each tool call before the supervisor: seven yes/no questions, combined into six checks where high means safe (see [Decision Models](/docs/concepts/deciders/#the-checks)). Supervised tier only; works with or without `supervisor` |
 | `supervisor_decider_mode` | string | `"shadow"` | `"shadow"`: the decider runs and writes a `supervisor` audit event (`source = "decider:<name>"`) with the verdict it would have given, but never changes the outcome. `"enforce"`: the verdict approves or denies the call, and an uncertain one goes on to the supervisor or a human |
 | `supervisor_decider_approve_at` | float | `0.95` | The decider approves when every check is at or above this score |
-| `supervisor_decider_deny_at` | float | `0.05` | The decider denies when any check except `no_leak` (which only escalates) is at or below this score. Must satisfy `0 < deny_at < approve_at < 1` |
+| `supervisor_decider_deny_at` | float | `0.05` | The decider denies when any check except `no_leak` and `no_self_grant` (which only escalate) is at or below this score. Must satisfy `0 < deny_at < approve_at < 1` |
 
 Decider spend is billed to the reviewed agent, per conversation. A decider failure (timeout, cost limit, input too large) is audited and never approves anything. See [Decision Models](/docs/concepts/deciders/) for how to move from shadow to enforce.
 
@@ -282,7 +283,7 @@ Users switch channels at runtime with `/session <name>`; the selection is persis
 
 ## `[web]`
 
-Built-in `web_search` and `web_fetch` tools. Restart-only — `[web]` settings are not hot-reloaded.
+Built-in `web_search` and `web_fetch` tools. Running agents keep their `[web]` settings until restart; agents created after a reload use the new values.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
@@ -306,6 +307,22 @@ Built-in `web_search` and `web_fetch` tools. Restart-only — `[web]` settings a
 | `user_agent` | string | `"Denkeeper/1.0 (+https://denkeeper.io)"` | HTTP User-Agent header |
 | `respect_robots_txt` | bool | `false` | Check robots.txt before fetching |
 | `respect_agents_txt` | bool | `false` | Check agents.txt before fetching |
+| `allow_private` | bool | `false` | Allow private ranges: RFC1918, CGNAT `100.64.0.0/10`, ULA `fc00::/7`, local-use NAT64 `64:ff9b:1::/48`. Every agent can then fetch any host on your LAN, such as router and NAS admin pages; `allowed_domains` can't narrow this without also blocking the public web |
+| `allow_loopback` | bool | `false` | Allow `127.0.0.0/8`, `::1` and `localhost`, where Denkeeper's own API listens |
+| `allowed_domains` | list | `[]` | When non-empty, only matching hosts are fetched. Entries are `example.com` (that exact host only) or `*.example.com` (the domain and its subdomains) |
+| `blocked_domains` | list | `[]` | Matching hosts are always refused; wins over `allowed_domains` |
+
+### Network policy
+
+`web_fetch` refuses non-public addresses. The check runs on the IP each connection actually reaches, so it covers redirects, robots.txt and agents.txt lookups, and hostnames that resolve to a blocked address. A URL refused by the address check or the domain lists is never passed to the Jina fallback. Neither is a URL the site's robots.txt or agents.txt disallows, when `respect_robots_txt` or `respect_agents_txt` is on. That check covers only the first URL: a redirect to a disallowed path is followed, and if the robots.txt or agents.txt lookup itself fails, the fetch goes ahead and can fall back to Jina.
+
+- Never allowed, under any setting: link-local `169.254.0.0/16` and `fe80::/10`, cloud metadata (including `metadata.google.internal`, `fd00:ec2::254`, `100.100.100.200` and Azure's `168.63.129.16`), unspecified, multicast and broadcast addresses, and a direct request to the configured proxy's own address.
+- Loopback and private ranges: opened only by `allow_loopback` and `allow_private` respectively.
+- Numeric hosts other than dotted-quad IPv4, such as `2852039166`, `127.1` or `0x7f.0.0.1`, are refused under any setting.
+- IPv6 forms that carry an IPv4 address (IPv4-mapped, IPv4-compatible, NAT64 `64:ff9b::/96`, 6to4) are judged by that IPv4 address. The local-use NAT64 prefix `64:ff9b:1::/48` has a site-defined layout (RFC 8215), so it counts as private: if your DNS64 uses it, fetching IPv4-only sites needs `allow_private` (refusals then show a `64:ff9b:1:` address with the `allow_private` hint). A never-allowed IPv4 at any RFC 6052 position stays refused, so a local-use layout other than /96 may refuse some public addresses. NAT64 with a network-specific prefix is not decoded; on such networks, egress filtering must block private targets.
+- With `HTTP_PROXY` / `HTTPS_PROXY` set, Denkeeper connects to the proxy, not the target, so the proxy itself must enforce egress for proxied requests. Hosts matching `NO_PROXY` are connected to directly and go through the address check instead. The URL checks and domain lists apply either way.
+
+The domain lists match host names only; IP literals are rejected at load. They never open an address class: a listed host that resolves to a private address is still refused unless `allow_private` is on. With `[web.fetch.jina]` enabled, Jina follows redirects and runs page scripts on its own servers, so the domain lists apply only to the URL Denkeeper sends it.
 
 ## `[web.fetch.jina]`
 
@@ -321,7 +338,7 @@ Bounds for the in-process `run_javascript` tool, which runs short ES5.1 snippets
 |---|---|---|---|
 | `enabled` | bool | `true` | Enable `run_javascript` |
 | `timeout` | string | `"2s"` | Per-call wall-clock limit |
-| `max_output_chars` | int | `16000` | Result length cap (truncates) |
+| `max_output_chars` | int | `16000` | Length cap in bytes for the result and for error text. Longer text is cut and marked as truncated |
 | `max_input_bytes` | int | `262144` | Accepted input payload cap, 256 KiB (rejects) |
 | `max_concurrent` | int | `4` | Simultaneous VM executions across **all** agents. Negative = unlimited |
 | `max_concurrent_per_agent` | int | `0` | Additional per-agent cap so one agent cannot monopolize the global pool. 0 = off |
@@ -356,6 +373,7 @@ While it is off, the task endpoints answer `503` and the tools aren't offered. C
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `max_bytes` | int | `1048576` | Cap on a single persisted skill file, frontmatter + body (1 MiB). Negative = unlimited |
+| `index` | bool | `true` | List every skill's name and triggers in each agent's system prompt, plus the first description line for skills that are not always on (see [Skill index](/docs/concepts/skills/#skill-index)). The list is capped at 8,000 bytes: past that, descriptions and then entries that do not fit are left out. An agent's `skill_index` overrides it. Applied on `POST /server/reload` |
 
 Skill content is written verbatim, so without a bound an authorized caller could exhaust disk. The cap is enforced on every write surface (REST, config MCP, external MCP).
 
@@ -415,7 +433,7 @@ cached_input = 0.3
 | `enabled` | bool | `true` | Enable audit logging |
 | `retention_days` | int | `30` | How long audit events are kept. 0 = unlimited |
 | `cleanup_interval` | string | `"1h"` | How often retention is enforced |
-| `buffer_size` | int | `1000` | Capacity of the in-memory event buffer. Emission never blocks an agent turn: events past a full buffer are dropped with a warning log |
+| `buffer_size` | int | `1000` | Capacity of the in-memory event buffer. Emission never blocks an agent turn: events past a full buffer are dropped with a warning log, counted, and recorded in one `audit`/`dropped_events` event once the buffer drains |
 
 Events are queryable via `GET /api/v1/audit` and the dashboard's Audit Log page.
 
@@ -578,7 +596,7 @@ Each signal takes `"withhold"`, `"warn"` (audit but deliver anyway), or `"off"`.
 | `list_max_bytes` | int | `16384` | Total value bytes a single `kv_list` response may carry |
 | `list_value_head_bytes` | int | `1024` | Per-value cap inside a `kv_list` response |
 | `cleanup_interval` | string | `"1h"` | Background cleanup interval for expired keys |
-| `default_ttl` | table | none | Expiry applied by `kv_set` when the call passes no `ttl`, keyed by namespace prefix (must end in `:`). Longest matching prefix wins; an explicit `ttl` always wins. Example: `default_ttl = { "log:" = "720h", "cache:" = "168h" }` |
+| `default_ttl` | table | none | Expiry applied by `kv_set` when the call passes no `ttl`, keyed by namespace prefix (must end in `:`). Longest matching prefix wins; an explicit `ttl` always wins. It applies to new writes only; [`denkeeper kv backfill-ttl`](/docs/reference/cli/#denkeeper-kv-backfill-ttl) gives existing keys the same expiry. Example: `default_ttl = { "log:" = "720h", "cache:" = "168h" }` |
 
 Per-agent key-value storage with optional TTL. Exposed as Config MCP tools (`kv_get`, `kv_set`, `kv_delete`, `kv_list`, `kv_set_nx`). Useful for locks, counters, caches, and cross-session coordination.
 

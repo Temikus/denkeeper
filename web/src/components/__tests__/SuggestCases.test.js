@@ -179,6 +179,14 @@ describe('SuggestCases — accept', () => {
     expect(addedTasks[0].body.pinned_history).toBeUndefined()
   })
 
+  test('a candidate without notes posts no notes key', async () => {
+    await renderPanel()
+
+    await fireEvent.click(screen.getByTestId('accept-chan:ops:101'))
+    await waitFor(() => expect(addedTasks).toHaveLength(1))
+    expect('notes' in addedTasks[0].body).toBe(false)
+  })
+
   test('creates the chosen set on the fly before adding', async () => {
     await renderPanel({ sets: [], defaultSet: '' })
 
@@ -387,6 +395,63 @@ describe('SuggestCases — session context', () => {
 
     await fireEvent.click(screen.getByTestId('context-toggle-chan:cron:104'))
     expect(context).not.toHaveClass('open')
+  })
+
+  test('accepting a candidate with notes saves them with the case', async () => {
+    const notes = 'Good: does the job of the skill-forge skill.'
+    server.use(http.get('/api/v1/eval/suggest', () => HttpResponse.json({
+      candidates: [{ ...SCHEDULED.candidates[0], notes }],
+    })))
+    await renderPanel()
+
+    await fireEvent.click(screen.getByTestId('accept-chan:cron:104'))
+    await waitFor(() => expect(addedTasks).toHaveLength(1))
+    expect(addedTasks[0].body.notes).toBe(notes)
+  })
+
+  test('a collapsed card says it carries judge notes, so a batch accept is not blind', async () => {
+    server.use(http.get('/api/v1/eval/suggest', () => HttpResponse.json({
+      candidates: [{ ...SCHEDULED.candidates[0], notes: 'Good: does the job of the skill-forge skill.' }],
+    })))
+    await renderPanel()
+
+    expect(screen.getByTestId('context-chan:cron:104')).not.toHaveClass('open')
+    expect(screen.getByTestId('meta-chan:cron:104')).toHaveTextContent('+ judge notes')
+  })
+
+  test('a card without notes has no judge-notes marker', async () => {
+    await renderPanel()
+    expect(screen.getByTestId('meta-chan:cron:104')).not.toHaveTextContent('judge notes')
+  })
+
+  test('the expanded context shows the judge notes, even when they are all there is', async () => {
+    const notes = 'Good: does the job of the skill-forge skill.'
+    server.use(http.get('/api/v1/eval/suggest', () => HttpResponse.json({
+      candidates: [{
+        ...SCHEDULED.candidates[0],
+        trigger: '', preceding: [], reply_preview: '', notes,
+      }],
+    })))
+    await renderPanel()
+
+    await fireEvent.click(screen.getByTestId('context-toggle-chan:cron:104'))
+    const context = screen.getByTestId('context-chan:cron:104')
+    expect(context).toHaveClass('open')
+    expect(context).toHaveTextContent('judge notes')
+    expect(context).toHaveTextContent(notes)
+    expect(context).toHaveTextContent('Notes are saved with the case for the judge; edit them on the saved case.')
+  })
+
+  test('pinned turns and notes share one hint line', async () => {
+    server.use(http.get('/api/v1/eval/suggest', () => HttpResponse.json({
+      candidates: [{ ...SCHEDULED.candidates[0], notes: 'Good: does the job of the skill-forge skill.' }],
+    })))
+    await renderPanel()
+
+    const hints = screen.getByTestId('context-chan:cron:104').querySelectorAll('.hint')
+    expect(hints).toHaveLength(1)
+    expect(hints[0]).toHaveTextContent('The pinned turns replay as history when this case runs.')
+    expect(hints[0]).toHaveTextContent('Notes are saved with the case for the judge; edit them on the saved case.')
   })
 
   test('a turn with nothing behind it has no disclosure', async () => {

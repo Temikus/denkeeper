@@ -9,6 +9,7 @@ import (
 
 	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/configmcp"
+	"github.com/Temikus/denkeeper/internal/skill"
 	"github.com/Temikus/denkeeper/internal/skilleffect"
 )
 
@@ -40,7 +41,7 @@ func (s *Server) skillWriter(agentName string, e *agent.Engine) *skilleffect.Bin
 
 // handleGetSkill godoc
 // @Summary Get a skill by name
-// @Description Returns a single skill's full definition including name, description, version, triggers, body, and owning agent. max_tool_rounds and requires_tools are present only when the skill declares them.
+// @Description Returns a single skill's full definition including name, description, version, triggers, body, and owning agent. max_tool_rounds, max_output_tokens and requires_tools are present only when the skill declares them.
 // @Tags skills
 // @Produce json
 // @Security BearerAuth
@@ -81,6 +82,9 @@ func (s *Server) handleGetSkill(w http.ResponseWriter, r *http.Request) {
 	if sk.MaxToolRounds > 0 {
 		resp["max_tool_rounds"] = sk.MaxToolRounds
 	}
+	if sk.MaxOutputTokens > 0 {
+		resp["max_output_tokens"] = sk.MaxOutputTokens
+	}
 	if len(sk.Requires.Tools) > 0 {
 		resp["requires_tools"] = sk.Requires.Tools
 	}
@@ -96,10 +100,18 @@ type skillCreateInput struct {
 	// MaxToolRounds optionally caps tool-call ROUNDS (not calls) for turns this
 	// skill drives. 0 = no cap; it only lowers the agent's budget.
 	MaxToolRounds int `json:"max_tool_rounds"`
+	// MaxOutputTokens optionally caps output tokens per completion for turns
+	// this skill drives. 0 = no skill cap. It lowers a cap set on the agent or
+	// in [llm], and is sent as is when neither sets one.
+	MaxOutputTokens int `json:"max_output_tokens"`
 	// RequiresTools declares the tool names this skill depends on (frontmatter
 	// [requires] tools).
 	RequiresTools []string `json:"requires_tools"`
 }
+
+// errNegativeSkillOutputCap is checked before the write path, which would
+// also refuse a negative cap but answer 500.
+const errNegativeSkillOutputCap = "max_output_tokens must be >= 0 (0 = no skill cap)"
 
 // skillWriteResponse is the create/update result. Warnings are non-fatal
 // findings from configmcp.LintSkillWrite.
@@ -156,6 +168,10 @@ func (s *Server) handleCreateSkill(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "body is required"})
 		return
 	}
+	if input.MaxOutputTokens < 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": errNegativeSkillOutputCap})
+		return
+	}
 	if err := configmcp.ValidateSkillName(input.Name); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -176,7 +192,7 @@ func (s *Server) handleCreateSkill(w http.ResponseWriter, r *http.Request) {
 		version = "1.0.0"
 	}
 
-	payload := configmcp.BuildSkillPayload(input.Name, input.Description, version, input.Triggers, input.Body, input.MaxToolRounds, input.RequiresTools)
+	payload := configmcp.BuildSkillPayload(input.Name, input.Description, version, input.Triggers, input.Body, input.MaxToolRounds, input.MaxOutputTokens, input.RequiresTools)
 	warnings, err := configmcp.LintSkillWrite(s.scheduleLookup(), nil, payload)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -205,6 +221,10 @@ type skillUpdateInput struct {
 	// MaxToolRounds sets the tool-call ROUND cap; 0 removes it. Omitted keeps
 	// whatever the skill already carries.
 	MaxToolRounds *int `json:"max_tool_rounds"`
+	// MaxOutputTokens sets the per-completion output-token cap; 0 removes it.
+	// Omitted keeps whatever the skill already carries. It lowers a cap set on
+	// the agent or in [llm], and is sent as is when neither sets one.
+	MaxOutputTokens *int `json:"max_output_tokens"`
 	// RequiresTools replaces the declared tool set; [] clears it. Omitted keeps
 	// whatever the skill already carries.
 	RequiresTools []string `json:"requires_tools"`
@@ -224,6 +244,7 @@ type skillUpdateInput struct {
 // @Failure 400 {object} map[string]string "Invalid input"
 // @Failure 404 {object} map[string]string "Agent or skill not found"
 // @Failure 409 {object} map[string]string "New name conflicts with existing skill"
+// @Failure 422 {object} map[string]string "The skill's file cannot take this edit (unknown frontmatter keys would change, or a directory skill's folder is not named after it or is being renamed); edit it by hand"
 // @Failure 500 {object} map[string]string "Update failed"
 // @Failure 503 {object} map[string]string "Skill management unavailable"
 // @Router /skills/{agent}/{name} [put]
@@ -256,6 +277,10 @@ func (s *Server) handleUpdateSkill(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
 		return
 	}
+	if input.MaxOutputTokens != nil && *input.MaxOutputTokens < 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": errNegativeSkillOutputCap})
+		return
+	}
 
 	// Determine effective name (rename or keep).
 	newName := skillName
@@ -270,17 +295,16 @@ func (s *Server) handleUpdateSkill(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	payload := configmcp.MergeSkillFields(newName, existing, input.Description, input.Version, input.Triggers, input.Body, input.MaxToolRounds, input.RequiresTools)
-	warnings, err := configmcp.LintSkillWrite(s.scheduleLookup(), &existing, payload)
+	payload, warnings, status, err := s.buildSkillUpdate(newName, existing, input)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeJSON(w, status, map[string]string{"error": err.Error()})
 		return
 	}
 
 	writer := s.skillWriter(agentName, e)
 	if isRename {
 		if err := writer.Rename(r.Context(), skillName, payload); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("renaming skill: %v", err)})
+			writeJSON(w, skillRenderStatus(err), map[string]string{"error": fmt.Sprintf("renaming skill: %v", err)})
 			return
 		}
 		s.logger.Info("skill renamed via API", "agent", agentName, "old", skillName, "new", newName)
@@ -293,6 +317,34 @@ func (s *Server) handleUpdateSkill(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, skillWriteResponse{Name: newName, Agent: agentName, Status: "updated", Warnings: warnings})
+}
+
+// buildSkillUpdate renders and lints an edit. The unknown-key refusal is a
+// 422 (the request is fine, this file cannot take it); any other render
+// failure is a 500; a lint refusal is a 400.
+func (s *Server) buildSkillUpdate(newName string, existing skill.Skill, input skillUpdateInput) (string, []string, int, error) {
+	payload, err := configmcp.MergeSkillFields(newName, existing, input.Description, input.Version, input.Triggers, input.Body, input.MaxToolRounds, input.MaxOutputTokens, input.RequiresTools)
+	if err != nil {
+		return "", nil, skillRenderStatus(err), fmt.Errorf("building skill: %w", err)
+	}
+	warnings, err := configmcp.LintSkillWrite(s.scheduleLookup(), &existing, payload)
+	if err != nil {
+		return "", nil, http.StatusBadRequest, err
+	}
+	return payload, warnings, http.StatusOK, nil
+}
+
+// skillRenderStatus is 422 when the edit cannot be written to this skill's
+// file and the person must edit it by hand, 409 when a rename's new name is
+// already taken on disk, else 500.
+func skillRenderStatus(err error) int {
+	switch {
+	case errors.Is(err, skill.ErrUnknownKeysChanged), errors.Is(err, configmcp.ErrSkillNotEditable):
+		return http.StatusUnprocessableEntity
+	case errors.Is(err, configmcp.ErrSkillExists):
+		return http.StatusConflict
+	}
+	return http.StatusInternalServerError
 }
 
 // scheduleLookup keeps a nil *Scheduler from becoming a non-nil interface.

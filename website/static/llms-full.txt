@@ -151,6 +151,7 @@ Multi-agent definitions. If absent, a single "default" agent is synthesized.
     llm_model = ""                   # override default model
     max_output_tokens = 0            # override llm.max_output_tokens (0 = inherit)
     session_tier = ""              # override default permission tier
+    # skill_index = false            # override [skills] index for this agent (unset = inherit)
     browser_url_allowlist = []       # allowed domains for browser automation
     cost_limit_soft = 0.0            # soft cost limit override
     cost_limit_hard = 0.0            # hard cost limit override
@@ -339,6 +340,10 @@ Global MCP settings.
     user_agent = ""                  # HTTP User-Agent header
     respect_robots_txt = false       # check robots.txt
     respect_agents_txt = false       # check agents.txt
+    allow_private = false            # open RFC1918, CGNAT, ULA (metadata/link-local never open)
+    allow_loopback = false           # open 127.0.0.0/8, ::1, localhost
+    allowed_domains = []             # non-empty: only these hosts ("example.com", "*.example.com")
+    blocked_domains = []             # always refused; wins over allowed_domains
 
     [web.fetch.jina]
     enabled = false                  # enable Jina Reader fallback for JS-heavy pages
@@ -364,6 +369,7 @@ Global MCP settings.
 ### [skills]
 
     max_bytes = 1048576              # cap on a single persisted skill file (frontmatter + body); 1 MiB default, negative = unlimited
+    index = true                     # list skill names and triggers (+ first description line unless always on); descriptions, then entries that do not fit, dropped past 8,000 bytes
 
 ### [browser]
 

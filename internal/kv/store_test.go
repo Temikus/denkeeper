@@ -2,8 +2,12 @@ package kv
 
 import (
 	"context"
+	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
+
+	"github.com/jmoiron/sqlx"
 )
 
 func mustStore(t *testing.T, opts ...Option) *SQLiteStore {
@@ -332,5 +336,450 @@ func TestGetEntry_ReturnsMetadata(t *testing.T) {
 	}
 	if e.ExpiresAt == nil {
 		t.Error("ExpiresAt = nil, want the TTL expiry")
+	}
+}
+
+var backfillDefaults = map[string]time.Duration{
+	"log:":          720 * time.Hour,
+	"log:research:": 168 * time.Hour,
+	"cache:":        time.Hour,
+}
+
+func mustSet(t *testing.T, s *SQLiteStore, agent, key string, ttl time.Duration) {
+	t.Helper()
+	if err := s.Set(context.Background(), agent, key, "v-"+key, ttl); err != nil {
+		t.Fatalf("Set %s: %v", key, err)
+	}
+}
+
+// backdate stamps a key's timestamps directly, since Set always writes now.
+func backdate(t *testing.T, s *SQLiteStore, agent, key string, at time.Time) {
+	t.Helper()
+	stamp := at.UTC().Format(timeLayout)
+	if _, err := s.db.Exec(`UPDATE kv SET created_at = ?, updated_at = ? WHERE agent_name = ? AND key = ?`,
+		stamp, stamp, agent, key); err != nil {
+		t.Fatalf("backdate %s: %v", key, err)
+	}
+}
+
+// rawExpiry reads expires_at as stored text, bypassing the expiry filter, so
+// the layout the text comparison against datetime('now') relies on is checked.
+func rawExpiry(t *testing.T, s *SQLiteStore, agent, key string) (string, bool) {
+	t.Helper()
+	var exp *string
+	if err := s.db.QueryRow(`SELECT CAST(expires_at AS TEXT) FROM kv WHERE agent_name = ? AND key = ?`,
+		agent, key).Scan(&exp); err != nil {
+		t.Fatalf("read expires_at %s: %v", key, err)
+	}
+	if exp == nil {
+		return "", false
+	}
+	return *exp, true
+}
+
+func mustBackfill(t *testing.T, s *SQLiteStore, dryRun bool) []BackfillCount {
+	t.Helper()
+	counts, err := s.BackfillTTL(context.Background(), backfillDefaults, dryRun)
+	if err != nil {
+		t.Fatalf("BackfillTTL(dryRun=%v): %v", dryRun, err)
+	}
+	return counts
+}
+
+// The running server writes on its own connection. If it commits between the
+// backfill's SELECT and UPDATE, a deferred transaction fails the UPDATE with
+// SQLITE_BUSY_SNAPSHOT. Holding the write lock from the start makes that
+// writer wait instead, so the backfill succeeds while serve is up.
+func TestBackfillTTL_WriterBetweenSelectAndUpdateWaits(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "kv.db")
+	s, err := NewSQLiteStore(path)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	mustSet(t, s, "agent1", "log:a", 0)
+
+	// A short busy_timeout, so a writer kept out by the lock fails fast.
+	other, err := sqlx.Open("sqlite", path+"?_pragma=busy_timeout(100)")
+	if err != nil {
+		t.Fatalf("opening second connection: %v", err)
+	}
+	t.Cleanup(func() { _ = other.Close() })
+	insert := `INSERT INTO kv (agent_name, key, value) VALUES ('agent2', ?, 'v')`
+
+	var otherErr error
+	backfillBeforeWrite = func() { _, otherErr = other.Exec(insert, "pref:during") }
+	t.Cleanup(func() { backfillBeforeWrite = nil })
+
+	if counts := mustBackfill(t, s, false); len(counts) != 1 || counts[0].Keys != 1 {
+		t.Errorf("counts = %+v, want log:a backfilled", counts)
+	}
+	if otherErr == nil {
+		t.Error("another connection committed inside the backfill, so the write lock was not held")
+	}
+	if _, err := other.Exec(insert, "pref:after"); err != nil {
+		t.Errorf("write after the backfill committed: %v, want it to succeed", err)
+	}
+}
+
+func TestBackfillTTL_SetsUpdatedAtPlusTTL(t *testing.T) {
+	s := mustStore(t)
+	mustSet(t, s, "agent1", "log:heartbeat:a", 0)
+	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	backdate(t, s, "agent1", "log:heartbeat:a", at)
+
+	counts := mustBackfill(t, s, false)
+
+	want := []BackfillCount{{Agent: "agent1", Namespace: "log:", TTL: 720 * time.Hour, Keys: 1}}
+	if !reflect.DeepEqual(counts, want) {
+		t.Errorf("counts = %+v, want %+v", counts, want)
+	}
+	got, ok := rawExpiry(t, s, "agent1", "log:heartbeat:a")
+	if wantExp := at.Add(720 * time.Hour).Format(timeLayout); !ok || got != wantExp {
+		t.Errorf("expires_at = %q (set=%v), want %q", got, ok, wantExp)
+	}
+}
+
+func TestBackfillTTL_LongestPrefixWins(t *testing.T) {
+	s := mustStore(t)
+	mustSet(t, s, "agent1", "log:research:x", 0)
+	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	backdate(t, s, "agent1", "log:research:x", at)
+
+	counts := mustBackfill(t, s, false)
+
+	if len(counts) != 1 || counts[0].Namespace != "log:research:" || counts[0].TTL != 168*time.Hour {
+		t.Errorf("counts = %+v, want one log:research: row at 168h", counts)
+	}
+	if got, _ := rawExpiry(t, s, "agent1", "log:research:x"); got != at.Add(168*time.Hour).Format(timeLayout) {
+		t.Errorf("expires_at = %q, want the log:research: TTL", got)
+	}
+}
+
+func TestBackfillTTL_UnconfiguredNamespacesUntouched(t *testing.T) {
+	s := mustStore(t)
+	mustSet(t, s, "agent1", "pref:theme", 0)
+	mustSet(t, s, "agent1", "state:cursor", 0)
+
+	if counts := mustBackfill(t, s, false); len(counts) != 0 {
+		t.Errorf("counts = %+v, want none", counts)
+	}
+	for _, key := range []string{"pref:theme", "state:cursor"} {
+		if got, ok := rawExpiry(t, s, "agent1", key); ok {
+			t.Errorf("%s expires_at = %q, want NULL", key, got)
+		}
+	}
+}
+
+func TestBackfillTTL_ExistingExpiryKept(t *testing.T) {
+	s := mustStore(t)
+	mustSet(t, s, "agent1", "log:x", 5*time.Hour)
+	before, _ := rawExpiry(t, s, "agent1", "log:x")
+
+	if counts := mustBackfill(t, s, false); len(counts) != 0 {
+		t.Errorf("counts = %+v, want none", counts)
+	}
+	if after, _ := rawExpiry(t, s, "agent1", "log:x"); after != before {
+		t.Errorf("expires_at changed from %q to %q", before, after)
+	}
+}
+
+func TestBackfillTTL_ValueAndTimestampsUnchanged(t *testing.T) {
+	s := mustStore(t)
+	ctx := context.Background()
+	mustSet(t, s, "agent1", "cache:page", 0)
+	backdate(t, s, "agent1", "cache:page", time.Now().UTC().Add(-10*time.Minute).Truncate(time.Second))
+	before, _, err := s.GetEntry(ctx, "agent1", "cache:page")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mustBackfill(t, s, false)
+
+	after, ok, err := s.GetEntry(ctx, "agent1", "cache:page")
+	if err != nil || !ok {
+		t.Fatalf("GetEntry after: ok=%v err=%v", ok, err)
+	}
+	if after.Value != before.Value || !after.CreatedAt.Equal(before.CreatedAt) || !after.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Errorf("entry changed: before %+v, after %+v", before, after)
+	}
+	if after.ExpiresAt == nil {
+		t.Error("ExpiresAt = nil, want the backfilled expiry")
+	}
+}
+
+func TestBackfillTTL_PastExpiryHiddenThenCleaned(t *testing.T) {
+	s := mustStore(t)
+	ctx := context.Background()
+	mustSet(t, s, "agent1", "log:old", 0)
+	backdate(t, s, "agent1", "log:old", time.Now().UTC().Add(-800*time.Hour))
+
+	counts := mustBackfill(t, s, false)
+
+	if len(counts) != 1 || counts[0].Keys != 1 || counts[0].AlreadyExpired != 1 {
+		t.Errorf("counts = %+v, want 1 key, 1 already expired", counts)
+	}
+	if _, ok, err := s.Get(ctx, "agent1", "log:old"); err != nil || ok {
+		t.Errorf("Get after backfill: ok=%v err=%v, want hidden", ok, err)
+	}
+	if err := s.Cleanup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM kv WHERE key = 'log:old'`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("rows after Cleanup = %d (err %v), want 0", n, err)
+	}
+}
+
+// SQL LIKE would match both: it ignores ASCII case and treats _ as a wildcard.
+func TestBackfillTTL_NoCaseOrWildcardMatch(t *testing.T) {
+	s := mustStore(t)
+	defaults := map[string]time.Duration{"log:": time.Hour, "a_b:": time.Hour}
+	mustSet(t, s, "agent1", "LOG:x", 0)
+	mustSet(t, s, "agent1", "axb:1", 0)
+
+	counts, err := s.BackfillTTL(context.Background(), defaults, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(counts) != 0 {
+		t.Errorf("counts = %+v, want none", counts)
+	}
+	for _, key := range []string{"LOG:x", "axb:1"} {
+		if got, ok := rawExpiry(t, s, "agent1", key); ok {
+			t.Errorf("%s expires_at = %q, want NULL", key, got)
+		}
+	}
+}
+
+func TestBackfillTTL_DryRunCountsWithoutWriting(t *testing.T) {
+	s := mustStore(t)
+	mustSet(t, s, "agent1", "log:a", 0)
+	mustSet(t, s, "agent1", "cache:b", 0)
+
+	dry := mustBackfill(t, s, true)
+	for _, key := range []string{"log:a", "cache:b"} {
+		if got, ok := rawExpiry(t, s, "agent1", key); ok {
+			t.Errorf("dry run wrote %s expires_at = %q", key, got)
+		}
+	}
+	if real := mustBackfill(t, s, false); !reflect.DeepEqual(dry, real) {
+		t.Errorf("dry run counts %+v differ from the real run's %+v", dry, real)
+	}
+}
+
+func TestBackfillTTL_SecondRunChangesNothing(t *testing.T) {
+	s := mustStore(t)
+	mustSet(t, s, "agent1", "log:a", 0)
+
+	if first := mustBackfill(t, s, false); len(first) != 1 {
+		t.Fatalf("first run counts = %+v, want one row", first)
+	}
+	if second := mustBackfill(t, s, false); len(second) != 0 {
+		t.Errorf("second run counts = %+v, want none", second)
+	}
+}
+
+func TestBackfillTTL_AgentsCountedSeparately(t *testing.T) {
+	s := mustStore(t)
+	mustSet(t, s, "zeta", "log:a", 0)
+	mustSet(t, s, "alpha", "log:a", 0)
+	mustSet(t, s, "alpha", "log:b", 0)
+
+	counts := mustBackfill(t, s, false)
+
+	want := []BackfillCount{
+		{Agent: "alpha", Namespace: "log:", TTL: 720 * time.Hour, Keys: 2},
+		{Agent: "zeta", Namespace: "log:", TTL: 720 * time.Hour, Keys: 1},
+	}
+	if !reflect.DeepEqual(counts, want) {
+		t.Errorf("counts = %+v, want %+v", counts, want)
+	}
+}
+
+func mustGetEntry(t *testing.T, s *SQLiteStore, agent, key string) Entry {
+	t.Helper()
+	e, ok, err := s.GetEntry(context.Background(), agent, key)
+	if err != nil || !ok {
+		t.Fatalf("GetEntry(%q): ok=%v err=%v", key, ok, err)
+	}
+	return e
+}
+
+func TestWrittenBy_EmptyAfterSet(t *testing.T) {
+	s := mustStore(t)
+	if err := s.Set(context.Background(), "agent1", "k", "v", 0); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if e := mustGetEntry(t, s, "agent1", "k"); e.WrittenBy != "" {
+		t.Errorf("WrittenBy = %q, want empty (not recorded)", e.WrittenBy)
+	}
+}
+
+func TestSetWriter_RecordsSkill(t *testing.T) {
+	s := mustStore(t)
+	ctx := context.Background()
+	if err := s.Set(ctx, "agent1", "k", "v", 0); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := s.SetWriter(ctx, "agent1", "k", "v", "daily-digest"); err != nil {
+		t.Fatalf("SetWriter: %v", err)
+	}
+	if e := mustGetEntry(t, s, "agent1", "k"); e.WrittenBy != "daily-digest" {
+		t.Errorf("WrittenBy = %q, want daily-digest", e.WrittenBy)
+	}
+}
+
+func TestSetWriter_ClearedBySet(t *testing.T) {
+	s := mustStore(t)
+	ctx := context.Background()
+	if err := s.Set(ctx, "agent1", "k", "v1", 0); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := s.SetWriter(ctx, "agent1", "k", "v1", "daily-digest"); err != nil {
+		t.Fatalf("SetWriter: %v", err)
+	}
+	if err := s.Set(ctx, "agent1", "k", "v2", 0); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	e := mustGetEntry(t, s, "agent1", "k")
+	if e.WrittenBy != "" {
+		t.Errorf("WrittenBy after a later Set = %q, want empty", e.WrittenBy)
+	}
+	if e.Value != "v2" {
+		t.Errorf("Value = %q, want v2", e.Value)
+	}
+}
+
+func TestSetWriter_ClearedBySetNXOnExpiredKey(t *testing.T) {
+	s := mustStore(t)
+	ctx := context.Background()
+	if err := s.Set(ctx, "agent1", "k", "v1", 0); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := s.SetWriter(ctx, "agent1", "k", "v1", "daily-digest"); err != nil {
+		t.Fatalf("SetWriter: %v", err)
+	}
+	// Expire the row so SetNX reuses the slot.
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE kv SET expires_at = datetime('now', '-1 hour') WHERE agent_name = 'agent1' AND key = 'k'`); err != nil {
+		t.Fatalf("expire row: %v", err)
+	}
+	ok, err := s.SetNX(ctx, "agent1", "k", "v2", 0)
+	if err != nil || !ok {
+		t.Fatalf("SetNX: ok=%v err=%v", ok, err)
+	}
+	if e := mustGetEntry(t, s, "agent1", "k"); e.WrittenBy != "" {
+		t.Errorf("WrittenBy after SetNX = %q, want empty", e.WrittenBy)
+	}
+}
+
+// A Set that lands between a write and its stamp must not be attributed to
+// the earlier writer's skill.
+func TestSetWriter_SkipsWhenValueChangedSinceTheWrite(t *testing.T) {
+	s := mustStore(t)
+	ctx := context.Background()
+	if err := s.Set(ctx, "agent1", "k", "from-skill", 0); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := s.Set(ctx, "agent1", "k", "from-operator", 0); err != nil {
+		t.Fatalf("intervening Set: %v", err)
+	}
+	if err := s.SetWriter(ctx, "agent1", "k", "from-skill", "daily-digest"); err != nil {
+		t.Fatalf("SetWriter: %v", err)
+	}
+	if e := mustGetEntry(t, s, "agent1", "k"); e.WrittenBy != "" || e.Value != "from-operator" {
+		t.Errorf("entry = %+v, want the operator's value with no writer", e)
+	}
+}
+
+func TestSetWriter_MissingKeyIsNoop(t *testing.T) {
+	s := mustStore(t)
+	ctx := context.Background()
+	if err := s.SetWriter(ctx, "agent1", "missing", "x", "daily-digest"); err != nil {
+		t.Fatalf("SetWriter on a missing key: %v", err)
+	}
+	if _, ok, err := s.GetEntry(ctx, "agent1", "missing"); err != nil || ok {
+		t.Errorf("GetEntry after SetWriter: ok=%v err=%v, want no row", ok, err)
+	}
+}
+
+func TestSetWriter_OtherAgentUntouched(t *testing.T) {
+	s := mustStore(t)
+	ctx := context.Background()
+	for _, agent := range []string{"agent1", "agent2"} {
+		if err := s.Set(ctx, agent, "k", "v", 0); err != nil {
+			t.Fatalf("Set(%s): %v", agent, err)
+		}
+	}
+	if err := s.SetWriter(ctx, "agent1", "k", "v", "daily-digest"); err != nil {
+		t.Fatalf("SetWriter: %v", err)
+	}
+	if e := mustGetEntry(t, s, "agent2", "k"); e.WrittenBy != "" {
+		t.Errorf("agent2 WrittenBy = %q, want empty", e.WrittenBy)
+	}
+}
+
+func TestNewSQLiteStore_MigratesOldSchema(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "kv.db")
+	old, err := sqlx.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open old db: %v", err)
+	}
+	// The kv table as it was before written_by existed.
+	if _, err := old.Exec(`
+CREATE TABLE kv (
+    agent_name TEXT    NOT NULL,
+    key        TEXT    NOT NULL,
+    value      TEXT    NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    expires_at DATETIME,
+    PRIMARY KEY (agent_name, key)
+);
+INSERT INTO kv (agent_name, key, value) VALUES ('agent1', 'legacy', 'kept');`); err != nil {
+		t.Fatalf("create old schema: %v", err)
+	}
+	_ = old.Close()
+
+	s, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore on old schema: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	e := mustGetEntry(t, s, "agent1", "legacy")
+	if e.Value != "kept" || e.WrittenBy != "" {
+		t.Errorf("legacy entry = %+v, want value kept and empty WrittenBy", e)
+	}
+	if err := s.SetWriter(context.Background(), "agent1", "legacy", "kept", "daily-digest"); err != nil {
+		t.Fatalf("SetWriter after migration: %v", err)
+	}
+	if e := mustGetEntry(t, s, "agent1", "legacy"); e.WrittenBy != "daily-digest" {
+		t.Errorf("WrittenBy = %q, want daily-digest", e.WrittenBy)
+	}
+}
+
+func TestNewSQLiteStore_OpenTwice(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "kv.db")
+	first, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("first open: %v", err)
+	}
+	if err := first.Set(context.Background(), "agent1", "k", "v", 0); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := first.SetWriter(context.Background(), "agent1", "k", "v", "daily-digest"); err != nil {
+		t.Fatalf("SetWriter: %v", err)
+	}
+	_ = first.Close()
+
+	second, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("second open: %v", err)
+	}
+	t.Cleanup(func() { _ = second.Close() })
+	if e := mustGetEntry(t, second, "agent1", "k"); e.Value != "v" || e.WrittenBy != "daily-digest" {
+		t.Errorf("entry after reopen = %+v, want value v written by daily-digest", e)
 	}
 }

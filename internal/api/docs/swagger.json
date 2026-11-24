@@ -481,7 +481,7 @@
                         }
                     },
                     "400": {
-                        "description": "Unknown section",
+                        "description": "Unknown section, or the agent has no persona",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -576,7 +576,7 @@
                         }
                     },
                     "400": {
-                        "description": "Unknown section or invalid JSON",
+                        "description": "Unknown section, no persona, or invalid JSON",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -2657,7 +2657,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Generates eval test cases top-down from the agent's own written intent — its permission tier, auto-approve policy, persona sections and skill frontmatter — rather than from usage history. Covers what a history-sampled set structurally cannot: denial compliance, permission-tier boundaries, and budget hints are behaviours a well-behaved incumbent never produced, so no past turn demonstrates them. Every probe carries free-text notes describing what a good answer looks like, surfaced to the judge as context and never parsed as assertions. Generation is deterministic for a given agent, so passing set= suppresses probes that set already carries. Nothing is written — accepting a probe is a separate call to the task create endpoint. Requires agents:read alongside eval:read, since probes quote the agent's configuration back; the skill and approval-policy families are omitted for callers without skills:read and tools:read respectively.",
+                "description": "Generates eval test cases top-down from the agent's own written intent — its permission tier, auto-approve policy, persona sections and skill frontmatter — rather than from usage history. Covers what a history-sampled set structurally cannot: denial compliance, permission-tier boundaries, and budget hints are behaviours a well-behaved incumbent never produced, so no past turn demonstrates them. Every probe carries free-text notes describing what a good answer looks like, surfaced to the judge as context and never parsed as assertions. Generation is deterministic for a given agent, so passing set= suppresses probes that set already carries. Nothing is written — accepting a probe is a separate call to the task create endpoint. Requires agents:read alongside eval:read, since probes quote the agent's configuration back; the skill and approval-policy families are omitted for callers without skills:read and tools:read respectively. With tools:read the denial-compliance probes name one of the agent's write tools; without it they use canned text that names no tool.",
                 "produces": [
                     "application/json"
                 ],
@@ -3294,7 +3294,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Mines past turns for ones worth saving as test cases: any rejected or failed tool call, three or more tool rounds, a reply cost in the pool's top decile, or a command-triggered skill. Candidates are stratified across the categories rather than ranked overall, since a set drawn purely by interestingness would be all failures and represent nothing the agent normally does. Turns already saved as a task are skipped, and a turn carrying no signal is never offered. Nothing is written — accepting a candidate is a separate call to the task create endpoint.",
+                "description": "Mines past turns for ones worth saving as test cases: any rejected or failed tool call, three or more tool rounds, a reply cost in the pool's top decile, or a command-triggered skill. Candidates are stratified across the categories rather than ranked overall, since a set drawn purely by interestingness would be all failures and represent nothing the agent normally does. Turns already saved as a task are skipped, and a turn carrying no signal is never offered. Candidates from a scheduled skill run carry suggested judge notes (`notes`) that name the skill. The notes quote the skill's description only when the caller has skills:read. Nothing is written — accepting a candidate is a separate call to the task create endpoint.",
                 "produces": [
                     "application/json"
                 ],
@@ -7297,7 +7297,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Returns a single skill's full definition including name, description, version, triggers, body, and owning agent. max_tool_rounds and requires_tools are present only when the skill declares them.",
+                "description": "Returns a single skill's full definition including name, description, version, triggers, body, and owning agent. max_tool_rounds, max_output_tokens and requires_tools are present only when the skill declares them.",
                 "produces": [
                     "application/json"
                 ],
@@ -7409,6 +7409,15 @@
                     },
                     "409": {
                         "description": "New name conflicts with existing skill",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "The skill's file cannot take this edit (unknown frontmatter keys would change, or a directory skill's folder is not named after it or is being renamed); edit it by hand",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -9197,15 +9206,15 @@
                     "type": "number"
                 },
                 "lowest": {
-                    "description": "check with the lowest score; \"\" when an answer is missing",
+                    "description": "check with the lowest score; \"\" when an answer is missing, except a review missing only self_grant (it predates that question and is scored on the checks it has)",
                     "type": "string"
                 },
                 "min_deny_score": {
-                    "description": "lowest check that can deny (no_leak only escalates); nil when an answer is missing",
+                    "description": "lowest check that can deny (no_leak and no_self_grant only escalate); nil when an answer is missing, except a review missing only self_grant",
                     "type": "number"
                 },
                 "min_score": {
-                    "description": "nil: an answer is missing, so the call always escalates",
+                    "description": "nil: an answer is missing, so the call always escalates; set for a review missing only self_grant, scored on the checks it has",
                     "type": "number"
                 },
                 "model": {
@@ -9675,6 +9684,10 @@
                 },
                 "message_id": {
                     "type": "integer"
+                },
+                "notes": {
+                    "description": "Notes is suggested judge context, saved with the task when the\ncandidate is accepted. Set only for a turn a schedule fired for a skill.",
+                    "type": "string"
                 },
                 "preceding": {
                     "type": "array",
@@ -10539,7 +10552,7 @@
                     "type": "integer"
                 },
                 "wrapup_count": {
-                    "description": "WrapupCount is samples whose loop was cut short by repeated identical\ncalls or by exhausting the round budget — the \"flaily\" signal.",
+                    "description": "WrapupCount is samples whose loop was cut short by repeated identical\ncalls, by exhausting the round budget, or by an output-token cut-off\n(output_limit) — the \"flaily\" signal.",
                     "type": "integer"
                 }
             }
@@ -11422,7 +11435,7 @@
                     "type": "string"
                 },
                 "stop_reason": {
-                    "description": "StopReason is why the tool loop ended — \"repeated_calls\", \"max_rounds\"\nor \"stop_requested\". Omitted when the model finished on its own, so its\npresence alone means the turn was cut short and the response is a\nwrap-up rather than a completed answer.",
+                    "description": "StopReason is why the tool loop ended — \"repeated_calls\", \"max_rounds\",\n\"stop_requested\", \"cancelled\" or \"output_limit\" (the model hit its\noutput-token limit). Omitted when the model finished on its own, so its\npresence alone means the turn was cut short and the response is a\nwrap-up rather than a completed answer.",
                     "type": "string"
                 },
                 "suppressed_count": {
@@ -12298,6 +12311,10 @@
                 "description": {
                     "type": "string"
                 },
+                "max_output_tokens": {
+                    "description": "MaxOutputTokens optionally caps output tokens per completion for turns\nthis skill drives. 0 = no skill cap. It lowers a cap set on the agent or\nin [llm], and is sent as is when neither sets one.",
+                    "type": "integer"
+                },
                 "max_tool_rounds": {
                     "description": "MaxToolRounds optionally caps tool-call ROUNDS (not calls) for turns this\nskill drives. 0 = no cap; it only lowers the agent's budget.",
                     "type": "integer"
@@ -12331,6 +12348,10 @@
                 },
                 "description": {
                     "type": "string"
+                },
+                "max_output_tokens": {
+                    "description": "MaxOutputTokens sets the per-completion output-token cap; 0 removes it.\nOmitted keeps whatever the skill already carries. It lowers a cap set on\nthe agent or in [llm], and is sent as is when neither sets one.",
+                    "type": "integer"
                 },
                 "max_tool_rounds": {
                     "description": "MaxToolRounds sets the tool-call ROUND cap; 0 removes it. Omitted keeps\nwhatever the skill already carries.",

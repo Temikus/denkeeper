@@ -9,7 +9,15 @@ import "context"
 const (
 	stopRepeatedCalls = "repeated_calls"
 	stopMaxRounds     = "max_rounds"
+	stopOutputLimit   = "output_limit"
 )
+
+// isWrapupStop reports whether a sample's stop reason ended its tool loop
+// early on the model's account. stop_requested and cancelled are operator
+// stops and do not count.
+func isWrapupStop(slug string) bool {
+	return slug == stopRepeatedCalls || slug == stopMaxRounds || slug == stopOutputLimit
+}
 
 // VariantMetrics is one variant's objective scorecard, computed over its
 // status-ok samples.
@@ -30,7 +38,8 @@ type VariantMetrics struct {
 
 	MeanRounds float64 `json:"mean_rounds"`
 	// WrapupCount is samples whose loop was cut short by repeated identical
-	// calls or by exhausting the round budget — the "flaily" signal.
+	// calls, by exhausting the round budget, or by an output-token cut-off
+	// (output_limit) — the "flaily" signal.
 	WrapupCount     int     `json:"wrapup_count"`
 	MeanCostPerTask float64 `json:"mean_cost_per_task"`
 	MeanLatencyMs   float64 `json:"mean_latency_ms"`
@@ -193,6 +202,7 @@ func (s *Store) loadSummary(ctx context.Context, runID int64) (verdictInput, *Ru
 	if in.tasks, err = s.RunTasks(ctx, run); err != nil {
 		return in, nil, nil, err
 	}
+	retimeTasks(in.tasks, run.AsOf)
 	if in.samples, err = s.ListSamples(ctx, runID); err != nil {
 		return in, nil, nil, err
 	}
@@ -256,7 +266,7 @@ func variantMetrics(variants []Variant, samples []Sample) []VariantMetrics {
 		acc.latency += smp.LatencyMs
 		acc.cost += smp.Cost
 		acc.taskIDs[smp.TaskID] = struct{}{}
-		if smp.StopReason == stopRepeatedCalls || smp.StopReason == stopMaxRounds {
+		if isWrapupStop(smp.StopReason) {
 			acc.wrapups++
 		}
 		acc.tools += smp.OutcomeOK + smp.OutcomeRejected + smp.OutcomeFailed + smp.OutcomeDenied

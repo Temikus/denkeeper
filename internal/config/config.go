@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -18,6 +19,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 
 	"github.com/Temikus/denkeeper/internal/kv"
+	"github.com/Temikus/denkeeper/internal/netguard"
 	"github.com/Temikus/denkeeper/internal/scope"
 )
 
@@ -356,13 +358,24 @@ func (c *DecideConfig) DecideEnabled() bool {
 	return c.Enabled == nil || *c.Enabled
 }
 
-// SkillsConfig controls skill management (create/update via API, MCP, config MCP).
+// SkillsConfig controls skill management (create/update via API, MCP, config
+// MCP) and the skill index in each agent's system prompt.
 type SkillsConfig struct {
 	// MaxBytes caps the size of a single persisted skill file (frontmatter +
 	// body). Skill content is written verbatim, so without a bound an authorized
 	// caller could exhaust disk. Default: 1048576 (1 MiB). Set negative for no
 	// limit.
 	MaxBytes int `toml:"max_bytes"`
+
+	// Index lists every skill (name, triggers, and the first description line
+	// unless always on) in each agent's system prompt, capped at 8,000 bytes.
+	// nil means on. [[agents]] skill_index overrides it per agent.
+	Index *bool `toml:"index"`
+}
+
+// IndexEnabled reports whether the skill index is on instance-wide.
+func (c SkillsConfig) IndexEnabled() bool {
+	return c.Index == nil || *c.Index
 }
 
 // WebConfig controls built-in web search and URL fetching tools.
@@ -413,6 +426,15 @@ type WebFetchConfig struct {
 	RespectRobotsTxt bool `toml:"respect_robots_txt"`
 	// RespectAgentsTxt checks agents.txt before fetching. Default: false.
 	RespectAgentsTxt bool `toml:"respect_agents_txt"`
+	// AllowPrivate opens RFC1918, CGNAT and ULA ranges. Default: false.
+	AllowPrivate bool `toml:"allow_private"`
+	// AllowLoopback opens 127.0.0.0/8, ::1 and localhost. Default: false.
+	AllowLoopback bool `toml:"allow_loopback"`
+	// AllowedDomains, when non-empty, limits fetches to matching hosts
+	// ("example.com" or "*.example.com"). Default: empty.
+	AllowedDomains []string `toml:"allowed_domains"`
+	// BlockedDomains refuses matching hosts; wins over AllowedDomains.
+	BlockedDomains []string `toml:"blocked_domains"`
 	// Jina configures optional Jina Reader integration for JS-heavy pages.
 	Jina JinaFetchConfig `toml:"jina"`
 }
@@ -763,6 +785,9 @@ type AgentInstanceConfig struct {
 	// e.g. "Australia/Sydney". Precedence: agent > api.timezone > UTC.
 	// Does not affect cron evaluation (that remains api.timezone, restart-only).
 	Timezone string `toml:"timezone"`
+
+	// SkillIndex overrides [skills] index for this agent. nil inherits it.
+	SkillIndex *bool `toml:"skill_index"`
 
 	// BrowserURLAllowlist overrides the global browser URL allowlist for this agent.
 	// If set, only these domains are reachable. Supports wildcards: "*.example.com".
@@ -3052,7 +3077,59 @@ func validateWeb(w *WebConfig) error {
 	if w.Fetch.MaxResponseChars < 1 || w.Fetch.MaxResponseChars > 100000 {
 		return fmt.Errorf("config: web.fetch.max_response_chars must be between 1 and 100000, got %d", w.Fetch.MaxResponseChars)
 	}
+	if err := validateFetchDomains("allowed_domains", w.Fetch.AllowedDomains); err != nil {
+		return err
+	}
+	return validateFetchDomains("blocked_domains", w.Fetch.BlockedDomains)
+}
+
+const fetchDomainHint = `use a bare host such as "example.com" or "*.example.com"`
+
+// validateFetchDomains rejects entries that could never match a host, so a
+// blocked_domains typo cannot fail open silently.
+func validateFetchDomains(key string, entries []string) error {
+	for _, e := range entries {
+		if problem := fetchDomainProblem(e); problem != "" {
+			return fmt.Errorf("config: web.fetch.%s: invalid entry %q: %s; %s", key, e, problem, fetchDomainHint)
+		}
+	}
 	return nil
+}
+
+// fetchDomainProblem returns why e is not a valid pattern, or "". The part
+// after "*." and before one trailing dot (the matcher trims one too) must map
+// through IDNA the way net/http does, then be plain DNS labels. IP checks run
+// on the mapped form, which is what net/http dials.
+func fetchDomainProblem(e string) string {
+	if strings.HasPrefix(e, ".") {
+		return fmt.Sprintf("a leading dot matches nothing; for a domain and its subdomains use %q", "*"+e)
+	}
+	host, err := netguard.HostToASCII(strings.TrimSuffix(strings.TrimPrefix(e, "*."), "."))
+	if err != nil {
+		return err.Error()
+	}
+	if _, err := netip.ParseAddr(strings.Trim(host, "[]")); err == nil || netguard.EndsInNumber(host) {
+		return "IP literals aren't supported (the lists match host names; allow_private and allow_loopback control address ranges)"
+	}
+	for _, label := range strings.Split(host, ".") {
+		if !validDNSLabel(label) {
+			return "not a host name (letters, digits and inner hyphens, separated by single dots)"
+		}
+	}
+	return ""
+}
+
+func validDNSLabel(l string) bool {
+	if l == "" || len(l) > 63 || l[0] == '-' || l[len(l)-1] == '-' {
+		return false
+	}
+	for i := 0; i < len(l); i++ {
+		c := l[i]
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
+			return false
+		}
+	}
+	return true
 }
 
 func validateSandbox(s *SandboxConfig) error {
@@ -3187,6 +3264,14 @@ func validateAgentBindings(a AgentInstanceConfig, wildcards map[string]string) e
 		}
 	}
 	return nil
+}
+
+// EffectiveSkillIndex is the agent's skill_index when set, else global.
+func (a AgentInstanceConfig) EffectiveSkillIndex(global bool) bool {
+	if a.SkillIndex != nil {
+		return *a.SkillIndex
+	}
+	return global
 }
 
 // EffectiveMaxOutputTokens is the agent's own max_output_tokens, else the

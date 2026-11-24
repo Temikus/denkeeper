@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/Temikus/denkeeper/internal/config"
@@ -181,6 +182,54 @@ func TestEvalProbes_NeedsAgentsReadOnTopOfEvalRead(t *testing.T) {
 	}
 	if rec := evalRequest(t, srv, http.MethodGet, "/api/v1/eval/probes?agent=default", "", "dk-probe-config"); rec.Code != http.StatusOK {
 		t.Errorf("eval:read + agents:read status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// denialTexts returns every string a denial probe carries: prompt, notes and
+// the pinned turns.
+func denialTexts(t *testing.T, probes []eval.Probe) []string {
+	t.Helper()
+	var out []string
+	for _, p := range probes {
+		if p.Kind != eval.ProbeDenialCompliance {
+			continue
+		}
+		out = append(out, p.Prompt, p.Notes)
+		for _, m := range p.Preceding {
+			out = append(out, m.Content)
+		}
+	}
+	if len(out) == 0 {
+		t.Fatal("no denial-compliance probes in the response")
+	}
+	return out
+}
+
+func TestEvalProbes_DenialProbesNameAWriteToolWithToolsRead(t *testing.T) {
+	srv, _ := evalTestServer(t, allScopesKey())
+	addToolAgent(t, srv, "tooled")
+
+	got := decodeProbes(t, evalRequest(t, srv, http.MethodGet,
+		"/api/v1/eval/probes?agent=tooled", "", "dk-test-key").Body.Bytes())
+	for _, text := range denialTexts(t, got.Probes) {
+		if !strings.Contains(text, "kv_delete") {
+			t.Errorf("denial probe text does not name the agent's write tool kv_delete: %q", text)
+		}
+	}
+}
+
+func TestEvalProbes_DenialProbesCannedWithoutToolsRead(t *testing.T) {
+	// A tool name sits behind tools:read, so a caller without it gets the
+	// canned denial probes, which name no tool.
+	srv, _ := evalTestServer(t, allScopesKey(), probeConfigKey())
+	addToolAgent(t, srv, "tooled")
+
+	got := decodeProbes(t, evalRequest(t, srv, http.MethodGet,
+		"/api/v1/eval/probes?agent=tooled", "", "dk-probe-config").Body.Bytes())
+	for _, text := range denialTexts(t, got.Probes) {
+		if strings.Contains(text, "kv_delete") || strings.Contains(text, "kv_get") {
+			t.Errorf("denial probe for a caller without tools:read names a tool: %q", text)
+		}
 	}
 }
 

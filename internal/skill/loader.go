@@ -1,5 +1,6 @@
 // Package skill loads and parses flat-file skill definitions.
-// Skills are markdown files with TOML frontmatter enclosed in +++ delimiters.
+// Skills are markdown files with frontmatter: TOML between +++ lines, or YAML
+// between --- lines. A skill is written back in the dialect it was read in.
 // They are text-only — no code is executed. Their content is injected into
 // the agent's system prompt so the LLM knows what skills are available.
 package skill
@@ -11,13 +12,12 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-
-	"github.com/pelletier/go-toml/v2"
+	"unicode"
 )
 
 // SkillRequires lists optional capabilities a skill depends on.
 type SkillRequires struct {
-	Tools []string `toml:"tools"`
+	Tools []string `toml:"tools" yaml:"tools"`
 }
 
 // Skill represents a loaded skill file.
@@ -40,6 +40,12 @@ type Skill struct {
 	// is never widened by a skill, which the agent itself can author.
 	MaxToolRounds int
 
+	// MaxOutputTokens optionally caps output tokens per completion for turns
+	// this skill drives, under the same name and unit as the agent-level
+	// max_output_tokens knob. 0 means unset. The value lowers a cap set on the
+	// agent or in [llm], and is sent as is when neither sets one.
+	MaxOutputTokens int
+
 	// SubFileNames lists relative paths to sub-files within a subdirectory-form
 	// skill (e.g. "references/oauth.md", "templates/greeting.txt"). Sorted.
 	// Empty for flat-file skills.
@@ -48,46 +54,62 @@ type Skill struct {
 	// Dir is the skill directory path. Non-empty only for subdirectory-form
 	// skills (containing SKILL.md). Empty for flat-file skills.
 	Dir string
+
+	// Dialect is the frontmatter dialect the skill was parsed from; empty
+	// means TOML. Frontmatter is the raw block between the delimiters, kept
+	// so an edit can write it back unchanged. Both stay off JSON output.
+	Dialect     Dialect `json:"-"`
+	Frontmatter string  `json:"-"`
 }
 
-// frontmatter is the TOML-decoded structure of the +++ block.
+// frontmatter is the decoded structure of the known frontmatter keys.
 type frontmatter struct {
-	Name          string        `toml:"name"`
-	Description   string        `toml:"description"`
-	Version       string        `toml:"version"`
-	Triggers      []string      `toml:"triggers"`
-	Requires      SkillRequires `toml:"requires"`
-	MaxToolRounds int           `toml:"max_tool_rounds"`
+	Name            string        `toml:"name" yaml:"name"`
+	Description     string        `toml:"description" yaml:"description"`
+	Version         string        `toml:"version" yaml:"version"`
+	Triggers        []string      `toml:"triggers" yaml:"triggers"`
+	Requires        SkillRequires `toml:"requires" yaml:"requires"`
+	MaxToolRounds   int           `toml:"max_tool_rounds" yaml:"max_tool_rounds"`
+	MaxOutputTokens int           `toml:"max_output_tokens" yaml:"max_output_tokens"`
 }
 
 // ParseFile parses the content of a single skill file.
 // path is used only for the Source field and error messages.
 // Returns an error if the frontmatter delimiters are malformed,
-// the TOML is invalid, or the name field is missing.
+// the frontmatter is invalid, or the name field is missing.
 func ParseFile(path string, content []byte) (*Skill, error) {
-	text := strings.TrimSpace(string(content))
+	raw := string(content)
+	text := strings.TrimSpace(raw)
 
-	if !strings.HasPrefix(text, "+++") {
-		return nil, fmt.Errorf("skill %q: missing opening +++ delimiter", path)
+	sp, err := splitFrontmatter(path, text)
+	if err != nil {
+		return nil, err
 	}
-
-	// Strip the opening +++
-	rest := text[3:]
-
-	// Find the closing +++
-	idx := strings.Index(rest, "+++")
-	if idx == -1 {
-		return nil, fmt.Errorf("skill %q: missing closing +++ delimiter", path)
-	}
-
-	tomlSection := strings.TrimSpace(rest[:idx])
-	body := strings.TrimSpace(rest[idx+3:])
 
 	var fm frontmatter
-	if err := toml.Unmarshal([]byte(tomlSection), &fm); err != nil {
-		return nil, fmt.Errorf("skill %q: parsing frontmatter: %w", path, err)
+	if sp.dialect == DialectYAML {
+		// File line of the block's first line: whitespace TrimSpace removed
+		// from the front, the opening delimiter, and blank lines after it.
+		leading := raw[:len(raw)-len(strings.TrimLeftFunc(raw, unicode.IsSpace))]
+		lineBase := 1 + strings.Count(leading, "\n") + strings.Count(text[:sp.blockStart], "\n")
+		err = decodeYAML(path, sp.block, lineBase, &fm)
+	} else {
+		err = decodeTOML(path, sp.block, &fm)
+	}
+	if err != nil {
+		return nil, err
 	}
 
+	s, err := buildSkill(path, fm, sp.body)
+	if err != nil {
+		return nil, err
+	}
+	s.Dialect, s.Frontmatter = sp.dialect, sp.block
+	return s, nil
+}
+
+// buildSkill applies the checks both dialects share.
+func buildSkill(path string, fm frontmatter, body string) (*Skill, error) {
 	if strings.TrimSpace(fm.Name) == "" {
 		return nil, fmt.Errorf("skill %q: frontmatter missing required field: name", path)
 	}
@@ -100,17 +122,21 @@ func ParseFile(path string, content []byte) (*Skill, error) {
 	if fm.MaxToolRounds < 0 {
 		return nil, fmt.Errorf("skill %q: max_tool_rounds must be >= 0 (0 = unset)", path)
 	}
+	if fm.MaxOutputTokens < 0 {
+		return nil, fmt.Errorf("skill %q: max_output_tokens must be >= 0 (0 = unset)", path)
+	}
 
 	return &Skill{
-		Name:           strings.TrimSpace(fm.Name),
-		Description:    strings.TrimSpace(fm.Description),
-		Version:        strings.TrimSpace(fm.Version),
-		Triggers:       fm.Triggers,
-		ParsedTriggers: parsed,
-		Requires:       fm.Requires,
-		MaxToolRounds:  fm.MaxToolRounds,
-		Body:           body,
-		Source:         path,
+		Name:            strings.TrimSpace(fm.Name),
+		Description:     strings.TrimSpace(fm.Description),
+		Version:         strings.TrimSpace(fm.Version),
+		Triggers:        fm.Triggers,
+		ParsedTriggers:  parsed,
+		Requires:        fm.Requires,
+		MaxToolRounds:   fm.MaxToolRounds,
+		MaxOutputTokens: fm.MaxOutputTokens,
+		Body:            body,
+		Source:          path,
 	}, nil
 }
 
@@ -132,6 +158,9 @@ func LoadDir(dir string, logger *slog.Logger) ([]Skill, error) {
 	}
 
 	var skills []Skill
+	// Two files with one name (say kelos.md beside kelos/SKILL.md) both load,
+	// and writes go to the flat one, so the operator is told.
+	pathOf := map[string]string{}
 
 	for _, entry := range entries {
 		var path string
@@ -166,6 +195,11 @@ func LoadDir(dir string, logger *slog.Logger) ([]Skill, error) {
 		if skillDir != "" {
 			s.Dir = skillDir
 			s.SubFileNames = ScanSubFiles(skillDir)
+		}
+		if prev, dup := pathOf[s.Name]; dup {
+			logger.Warn("skill: two files define the same skill name", "name", s.Name, "first", prev, "second", path)
+		} else {
+			pathOf[s.Name] = path
 		}
 
 		skills = append(skills, *s)

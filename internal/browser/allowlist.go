@@ -3,9 +3,11 @@
 package browser
 
 import (
-	"net"
+	"fmt"
 	"net/url"
 	"strings"
+
+	"github.com/Temikus/denkeeper/internal/netguard"
 )
 
 // Allowlist enforces domain restrictions on browser navigation.
@@ -17,19 +19,43 @@ type Allowlist struct {
 // NewAllowlist creates an Allowlist from a list of domain patterns.
 // Supports exact matches ("github.com") and wildcard subdomains ("*.example.com").
 // An empty list means unrestricted (all non-blocked domains are allowed).
-func NewAllowlist(domains []string) *Allowlist {
+// Patterns are IDNA-mapped like hosts in Allowed. An unmappable pattern is an
+// error, not dropped: dropping every entry would leave the list unrestricted.
+func NewAllowlist(domains []string) (*Allowlist, error) {
 	if len(domains) == 0 {
-		return &Allowlist{}
+		return &Allowlist{}, nil
 	}
-	// Normalize: lowercase, trim whitespace.
 	normalized := make([]string, 0, len(domains))
 	for _, d := range domains {
-		d = strings.TrimSpace(strings.ToLower(d))
-		if d != "" {
-			normalized = append(normalized, d)
+		d = strings.TrimSpace(d)
+		if d == "" {
+			continue
 		}
+		p, err := normalizePattern(d)
+		if err != nil {
+			return nil, fmt.Errorf("allowlist: %w", err)
+		}
+		normalized = append(normalized, p)
 	}
-	return &Allowlist{domains: normalized}
+	return &Allowlist{domains: normalized}, nil
+}
+
+// normalizePattern maps the host part of a pattern, after any "*." prefix.
+// An empty label is refused: "*." would match every host with a trailing dot,
+// and IDNA maps some characters, such as U+00AD, to nothing.
+func normalizePattern(p string) (string, error) {
+	prefix, rest := "", p
+	if strings.HasPrefix(rest, "*.") {
+		prefix, rest = "*.", rest[2:]
+	}
+	h, err := netguard.HostToASCII(rest)
+	if err != nil {
+		return "", err
+	}
+	if h == "" || strings.HasPrefix(h, ".") || strings.HasSuffix(h, ".") || strings.Contains(h, "..") {
+		return "", fmt.Errorf("pattern %q has an empty label", p)
+	}
+	return prefix + h, nil
 }
 
 // IsEmpty returns true if the allowlist has no domain restrictions.
@@ -38,14 +64,23 @@ func (a *Allowlist) IsEmpty() bool {
 }
 
 // Allowed checks whether a URL is permitted by the allowlist.
-// Returns false if the URL's host matches a blocked range (link-local,
-// metadata endpoints) regardless of the allowlist.
+// Returns false, regardless of the allowlist, if the URL's host is blocked by
+// isBlockedHost: localhost, cloud metadata, or a literal loopback, private,
+// link-local, unspecified, multicast or broadcast address.
 // If the allowlist is empty, all non-blocked URLs are allowed.
 func (a *Allowlist) Allowed(rawURL string) (bool, error) {
 	host, err := extractHost(rawURL)
 	if err != nil {
 		return false, err
 	}
+	// Map and lowercase as a browser would, so both checks see the host it loads.
+	host, err = netguard.HostToASCII(host)
+	if err != nil {
+		return false, fmt.Errorf("allowlist: %w", err)
+	}
+	// A browser loads "github.com." as github.com. Trim only one dot, so
+	// "github.com.." still matches nothing.
+	host = strings.TrimSuffix(host, ".")
 
 	// Always block dangerous ranges regardless of allowlist.
 	if isBlockedHost(host) {
@@ -57,7 +92,6 @@ func (a *Allowlist) Allowed(rawURL string) (bool, error) {
 		return true, nil
 	}
 
-	host = strings.ToLower(host)
 	for _, pattern := range a.domains {
 		if matchDomain(host, pattern) {
 			return true, nil
@@ -98,37 +132,17 @@ func matchDomain(host, pattern string) bool {
 	return host == pattern
 }
 
-// isBlockedHost returns true for hosts that should always be blocked:
-// link-local addresses, cloud metadata endpoints, and localhost.
+// isBlockedHost reports whether host is refused by the netguard default
+// policy: localhost names, cloud metadata names and IPs, and literal
+// loopback, private (RFC1918, CGNAT, ULA), link-local, unspecified, multicast
+// and broadcast addresses, including IPv6 forms that carry one. The host is
+// IDNA-mapped first; an unmappable host, a host with an empty label and a
+// non-canonical IPv4 literal are refused. Hostnames that resolve to such
+// addresses are not caught here.
 func isBlockedHost(host string) bool {
-	// Block localhost.
-	if host == "localhost" {
+	h, err := netguard.HostToASCII(host)
+	if err != nil {
 		return true
 	}
-
-	ip := net.ParseIP(host)
-	if ip == nil {
-		// Not an IP — check known metadata hostnames.
-		return host == "metadata.google.internal" ||
-			host == "metadata.google.com"
-	}
-
-	// IPv4 link-local: 169.254.0.0/16 (includes AWS/GCP/Azure metadata at 169.254.169.254).
-	if ip4 := ip.To4(); ip4 != nil {
-		if ip4[0] == 169 && ip4[1] == 254 {
-			return true
-		}
-		// Loopback: 127.0.0.0/8.
-		if ip4[0] == 127 {
-			return true
-		}
-		return false
-	}
-
-	// IPv6 loopback (::1) and link-local (fe80::/10).
-	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
-		return true
-	}
-
-	return false
+	return netguard.HasEmptyLabel(h) || netguard.Policy{}.CheckHost(h) != nil || netguard.EndsInNumber(h)
 }

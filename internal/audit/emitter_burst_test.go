@@ -2,6 +2,7 @@ package audit
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -14,7 +15,9 @@ import (
 // exercised; the rest of the Store interface is inert.
 type gateStore struct {
 	release  chan struct{}
-	inserted atomic.Int64
+	inserted atomic.Int64 // ordinary events, not loss records
+	mu       sync.Mutex
+	records  []lossDetail // dropped_events records the emitter wrote
 }
 
 func newGateStore() *gateStore {
@@ -23,8 +26,29 @@ func newGateStore() *gateStore {
 
 func (s *gateStore) InsertBatch(_ context.Context, events []Event) error {
 	<-s.release
-	s.inserted.Add(int64(len(events)))
+	for _, ev := range events {
+		if ev.Action != ActionDroppedEvents {
+			s.inserted.Add(1)
+			continue
+		}
+		var d lossDetail
+		_ = json.Unmarshal([]byte(ev.Detail), &d)
+		s.mu.Lock()
+		s.records = append(s.records, d)
+		s.mu.Unlock()
+	}
 	return nil
+}
+
+// recordedDrops sums the dropped counts of every loss record.
+func (s *gateStore) recordedDrops() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, r := range s.records {
+		n += int(r.Dropped)
+	}
+	return n
 }
 
 func (s *gateStore) Insert(_ context.Context, _ Event) error { return nil }
@@ -110,6 +134,9 @@ func TestBufferedEmitter_OverflowDropsInsteadOfBlocking(t *testing.T) {
 	if delivered < 1000 || delivered > 1020 {
 		t.Fatalf("delivered=%d, want bufSize..bufSize+batch (1000..1020)", delivered)
 	}
+	if got := store.recordedDrops(); got != dropped {
+		t.Fatalf("loss records count %d drops, Warn logs %d", got, dropped)
+	}
 	t.Logf("burst=%d buffer=1000 store wedged: delivered=%d dropped=%d, emit loop took %v", burst, delivered, dropped, elapsed)
 }
 
@@ -161,6 +188,9 @@ func TestBufferedEmitter_ConcurrentProducerOverflowAccounting(t *testing.T) {
 	}
 	if delivered < 1000 || delivered > 1020 {
 		t.Fatalf("delivered=%d, want bufSize..bufSize+batch (1000..1020)", delivered)
+	}
+	if got := store.recordedDrops(); got != dropped {
+		t.Fatalf("loss records count %d drops, Warn logs %d", got, dropped)
 	}
 	t.Logf("2x%d producers, buffer=1000, store wedged: delivered=%d dropped=%d, emit took %v", perProducer, delivered, dropped, elapsed)
 }

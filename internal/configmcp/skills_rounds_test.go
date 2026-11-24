@@ -11,7 +11,7 @@ import (
 // BuildSkillPayload is the single frontmatter writer behind every CRUD surface,
 // so a cap it drops is a cap silently erased from disk on the next update.
 func TestBuildSkillPayload_MaxToolRoundsRoundTrips(t *testing.T) {
-	payload := configmcp.BuildSkillPayload("capped", "desc", "1.0.0", []string{"command:capped"}, "body", 12, nil)
+	payload := configmcp.BuildSkillPayload("capped", "desc", "1.0.0", []string{"command:capped"}, "body", 12, 0, nil)
 
 	s, err := skill.ParseFile("(test)", []byte(payload))
 	if err != nil {
@@ -25,7 +25,7 @@ func TestBuildSkillPayload_MaxToolRoundsRoundTrips(t *testing.T) {
 // An unset cap must not appear in the frontmatter at all, so uncapped skills
 // keep round-tripping exactly as they did before the field existed.
 func TestBuildSkillPayload_ZeroOmitsKey(t *testing.T) {
-	payload := configmcp.BuildSkillPayload("plain", "desc", "1.0.0", nil, "body", 0, nil)
+	payload := configmcp.BuildSkillPayload("plain", "desc", "1.0.0", nil, "body", 0, 0, nil)
 
 	if strings.Contains(payload, "max_tool_rounds") {
 		t.Errorf("payload mentions max_tool_rounds when unset:\n%s", payload)
@@ -45,7 +45,7 @@ func TestMergeSkillFields_PreservesExistingCap(t *testing.T) {
 	}
 	newBody := "new body"
 
-	payload := configmcp.MergeSkillFields("capped", existing, nil, nil, nil, &newBody, nil, nil)
+	payload := mustMerge(t, "capped", existing, nil, nil, nil, &newBody, nil, nil, nil)
 
 	s, err := skill.ParseFile("(test)", []byte(payload))
 	if err != nil {
@@ -63,7 +63,7 @@ func TestMergeSkillFields_ExplicitZeroClearsCap(t *testing.T) {
 	existing := skill.Skill{Name: "capped", Version: "1.0.0", MaxToolRounds: 12, Body: "body"}
 	clear := 0
 
-	payload := configmcp.MergeSkillFields("capped", existing, nil, nil, nil, nil, &clear, nil)
+	payload := mustMerge(t, "capped", existing, nil, nil, nil, nil, &clear, nil, nil)
 
 	s, err := skill.ParseFile("(test)", []byte(payload))
 	if err != nil {

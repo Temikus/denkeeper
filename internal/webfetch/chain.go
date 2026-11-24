@@ -2,8 +2,11 @@ package webfetch
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
+
+	"github.com/Temikus/denkeeper/internal/netguard"
 )
 
 // ChainFetcher tries the primary fetcher first. If the result content looks
@@ -31,7 +34,9 @@ func (c *ChainFetcher) Name() string { return "chain" }
 func (c *ChainFetcher) Fetch(ctx context.Context, url string) (*FetchResult, error) {
 	result, err := c.primary.Fetch(ctx, url)
 	if err != nil {
-		if c.fallback == nil {
+		// Neither a URL the network policy blocks nor one the site's robots.txt
+		// or agents.txt disallows may reach a third-party fallback such as Jina.
+		if c.fallback == nil || errors.Is(err, netguard.ErrBlocked) || errors.Is(err, ErrDisallowed) {
 			return nil, err
 		}
 		c.logger.Debug("primary fetch failed, trying fallback",

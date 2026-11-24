@@ -118,7 +118,9 @@ func TestBuildSystemPrompt_NoGuidanceIsByteIdentical(t *testing.T) {
 	withTools := newSatisfactionEngine(t, mgr, nil, nil).buildSystemPrompt(nil, msg, nil).prompt
 	withoutTools := newSatisfactionEngine(t, nil, nil, nil).buildSystemPrompt(nil, msg, nil).prompt
 
-	if withTools != withoutTools {
+	// An external server adds the untrusted-output note on purpose; guidance
+	// must add nothing beyond it.
+	if strings.Replace(withTools, untrustedOutputNote, "", 1) != withoutTools {
 		t.Errorf("prompt changed with no guidance declared:\n--- with tools ---\n%s\n--- without ---\n%s", withTools, withoutTools)
 	}
 	if strings.Contains(withTools, "Tool Server Notes") {

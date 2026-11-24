@@ -141,9 +141,11 @@ func TestGetPersona_NoPersona(t *testing.T) {
 	rec := httptest.NewRecorder()
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
-	// PersonaSection returns ok=false when persona is nil → 400.
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want %d; body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `agent \"default\" has no persona configured`) {
+		t.Errorf("body = %s, want the no-persona error", rec.Body.String())
 	}
 }
 
@@ -240,9 +242,11 @@ func TestUpdatePersona_NoPersona(t *testing.T) {
 	rec := httptest.NewRecorder()
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
-	// PersonaSection returns ok=false when persona is nil → 400.
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want %d; body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `agent \"default\" has no persona configured`) {
+		t.Errorf("body = %s, want the no-persona error", rec.Body.String())
 	}
 }
 

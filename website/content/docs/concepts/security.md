@@ -17,12 +17,13 @@ Every capability in Denkeeper is opt-in. The agent starts with zero permissions 
 | Threat | Mitigation |
 |---|---|
 | Prompt injection via incoming messages | Tiered permissions limit what the agent can do; supervised mode requires approval for sensitive actions |
+| Prompt injection via tool output (web pages, external MCP servers) | Results from web, browser and external tools are wrapped in `<untrusted_tool_output>` tags, and the system prompt says text inside them is data, not instructions; see [Untrusted tool output](/docs/concepts/tools/#untrusted-tool-output). Framing only: tiers and approval still bound what an injected instruction can do |
 | Unauthorized access to the bot | Telegram: `allowed_users` allowlist. Discord: `allowed_users` allowlist. API: scoped bearer tokens |
 | Tool abuse | Permission tiers control tool access; restricted mode limits to read-only tools |
 | Cost runaway | Per-session budget caps, global cost tracking, automatic fallback to cheaper models |
 | Plugin escape | Subprocess isolation and sandboxed execution via Docker (`--cap-drop ALL`, `--read-only`, `--network none`) or Kubernetes (ephemeral Pods with init-container network isolation, Pod Security Admission, optional gVisor/Kata); Ed25519 signature verification |
 | Config file secrets | File permissions (`0o600`), environment variable expansion for secrets |
-| SSRF via remote MCP tool servers or the browser tool | Connect-time IP blocking of link-local, loopback, and cloud-metadata addresses, plus an optional hostname allowlist |
+| SSRF via remote MCP tool servers, the browser tool, or `web_fetch` | Connect-time IP blocking of link-local, loopback, and cloud-metadata addresses, plus an optional hostname allowlist. `web_fetch` also blocks private ranges (RFC1918, CGNAT, ULA) by default, with domain allow/block lists; see [Network policy](/docs/reference/config/#network-policy) |
 | Secret leakage into stdio MCP subprocesses | Children do not inherit the parent environment — they get a fixed non-secret allowlist; any `DENKEEPER_*` or otherwise denylisted name is blocked even if explicitly passed through |
 | Skill file writes escaping the skills directory | Skill writes are confined to the agent's skills directory at the OS level (Go's `os.Root`), backstopping name validation against `..` traversal and symlink escapes |
 

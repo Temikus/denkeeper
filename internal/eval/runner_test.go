@@ -48,6 +48,7 @@ type mockEngine struct {
 	inFlight int
 	maxSeen  int
 	policies []agent.ExecPolicy
+	texts    []string
 }
 
 func newMockEngine() *mockEngine {
@@ -68,6 +69,7 @@ func (m *mockEngine) DryRun(ctx context.Context, msg adapter.IncomingMessage, po
 		m.maxSeen = m.inFlight
 	}
 	m.policies = append(m.policies, policy)
+	m.texts = append(m.texts, msg.Text)
 	block, delay, cost, respond := m.block, m.delay, m.costPerSample, m.respond
 	m.mu.Unlock()
 
@@ -125,6 +127,14 @@ func (m *mockEngine) seenPolicies() []agent.ExecPolicy {
 	defer m.mu.Unlock()
 	out := make([]agent.ExecPolicy, len(m.policies))
 	copy(out, m.policies)
+	return out
+}
+
+func (m *mockEngine) seenTexts() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]string, len(m.texts))
+	copy(out, m.texts)
 	return out
 }
 

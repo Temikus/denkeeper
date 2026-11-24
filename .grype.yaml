@@ -1,5 +1,13 @@
-# Grype configuration for container image scanning.
-#
+# Grype configuration for the release image scan and the Security
+# workflow's filesystem scan (also `just scan grype`).
+
+# Go modules are scanned from the built binary, which lists only linked
+# modules. go.sum also lists modules needed just by dependencies' tests, which
+# never ship. Patterns must start with "./", "*/" or "**/".
+exclude:
+  - "./go.mod"
+  - "./go.sum"
+
 # Vulnerabilities are temporarily ignored when a fix is tracked in
 # the Grype DB but the Alpine package maintainers have not yet
 # released the patched version.  Remove entries once `apk upgrade`

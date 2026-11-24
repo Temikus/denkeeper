@@ -190,6 +190,7 @@ func writeJSONError(w http.ResponseWriter, status int, msg string) {
 
 func (s *Server) registerTools() {
 	s.registerAgentTools()
+	s.registerPersonaTools()
 	s.registerSessionTools()
 	s.registerChannelTools()
 	s.registerTelemetryTools()
@@ -201,6 +202,7 @@ func (s *Server) registerTools() {
 	s.registerApprovalTools()
 	s.registerToolMgmtTools()
 	s.registerAuditTools()
+	s.registerOpsTools()
 	s.registerDeciderTools()
 	s.registerEvalTools()
 	s.registerTaskTools()
