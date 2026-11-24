@@ -1797,7 +1797,9 @@ func (s *Server) handleResolveApproval(approved bool) http.HandlerFunc {
 				if toolName != "" && resolved.Kind == approval.ActionKindToolCall {
 					switch autoScope {
 					case "session":
-						s.deps.Approvals.AddSessionRule(r.Context(), resolved.AgentName, toolName, resolved.ConversationID, "api")
+						if aaErr := s.deps.Approvals.AddSessionRule(r.Context(), resolved.AgentName, toolName, resolved.ConversationID, "api"); aaErr != nil {
+							s.logger.Warn("session auto-approve rule not created via approval", "tool", toolName, "error", aaErr)
+						}
 					case "permanent":
 						if _, aaErr := s.deps.Approvals.AddPermanentRule(r.Context(), resolved.AgentName, toolName, "api"); aaErr != nil {
 							s.logger.Error("creating auto-approve rule via approval", "error", aaErr)
@@ -1888,10 +1890,17 @@ func (s *Server) handleCreateAutoApprove(w http.ResponseWriter, r *http.Request)
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "conversation_id required for session scope"})
 			return
 		}
-		s.deps.Approvals.AddSessionRule(r.Context(), body.Agent, body.Tool, body.ConversationID, "api")
+		if err := s.deps.Approvals.AddSessionRule(r.Context(), body.Agent, body.Tool, body.ConversationID, "api"); errors.Is(err, approval.ErrHighRisk) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": body.Tool + " is high-risk and cannot be auto-approved"})
+			return
+		}
 		writeJSON(w, http.StatusCreated, map[string]string{"status": "created", "scope": "session"})
 	case "permanent", "":
 		rule, err := s.deps.Approvals.AddPermanentRule(r.Context(), body.Agent, body.Tool, "api")
+		if errors.Is(err, approval.ErrHighRisk) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": body.Tool + " is high-risk and cannot be auto-approved"})
+			return
+		}
 		if err != nil {
 			s.logger.Error("creating auto-approve rule", "error", err)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})

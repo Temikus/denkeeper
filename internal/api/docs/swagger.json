@@ -9425,6 +9425,14 @@
                     "description": "ResolvedBy records who resolved the approval: \"telegram\", \"api\", \"ws\", \"expired\", or \"auto_approve\".",
                     "type": "string"
                 },
+                "risk": {
+                    "description": "Risk is set when the guarded tool call is high-risk (toolrisk.Classify on\nthe summary's tool name and the payload). Derived by the Manager on every\nrow it returns; never stored.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_toolrisk.Risk"
+                        }
+                    ]
+                },
                 "status": {
                     "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_approval.Status"
                 },
@@ -10814,6 +10822,35 @@
                     "items": {
                         "type": "string"
                     }
+                }
+            }
+        },
+        "github_com_Temikus_denkeeper_internal_toolrisk.FlaggedArg": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "value": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_Temikus_denkeeper_internal_toolrisk.Risk": {
+            "type": "object",
+            "properties": {
+                "flagged": {
+                    "description": "in table order",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_toolrisk.FlaggedArg"
+                    }
+                },
+                "level": {
+                    "type": "string"
+                },
+                "warning": {
+                    "type": "string"
                 }
             }
         },

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/Temikus/denkeeper/internal/toolrisk"
 )
 
 // Status represents the lifecycle state of an approval request.
@@ -102,6 +104,11 @@ type Request struct {
 
 	// ResolvedBy records who resolved the approval: "telegram", "api", "ws", "expired", or "auto_approve".
 	ResolvedBy string `db:"resolved_by" json:"resolved_by,omitempty"`
+
+	// Risk is set when the guarded tool call is high-risk (toolrisk.Classify on
+	// the summary's tool name and the payload). Derived by the Manager on every
+	// row it returns; never stored.
+	Risk *toolrisk.Risk `db:"-" json:"risk,omitempty"`
 }
 
 // Store defines the persistence interface for approval requests.

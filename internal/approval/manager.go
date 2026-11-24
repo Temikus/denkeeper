@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Temikus/denkeeper/internal/audit"
+	"github.com/Temikus/denkeeper/internal/toolrisk"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -141,7 +142,7 @@ func (m *Manager) submit(
 
 	m.registry.Register(id, action)
 	m.logger.Info("approval submitted", "id", id, "kind", kind, "agent", agentName)
-	return &req, nil
+	return withRisk(&req), nil
 }
 
 // ErrActionFailed wraps the error of an approved action. The request is
@@ -318,6 +319,16 @@ func (m *Manager) ResolveByCallback(ctx context.Context, callbackData string, re
 
 	approved := action != CallbackDeny
 
+	// A session/always press on a high-risk call is refused before anything
+	// resolves, so the request stays pending for a plain Approve or Deny.
+	if scope, wantsRule := callbackRuleScope(action); wantsRule {
+		if pending, lookupErr := m.store.GetByCallbackData(ctx, prefix); lookupErr == nil && pending.Status == StatusPending {
+			if err := m.refuseStandingRule(ctx, pending, scope, resolvedBy); err != nil {
+				return withRisk(pending), err
+			}
+		}
+	}
+
 	// Look up the pending row by prefix.
 	req, err := m.store.ResolveByCallbackPrefix(ctx, prefix, statusFor(approved), resolvedBy)
 	if err != nil {
@@ -336,7 +347,7 @@ func (m *Manager) ResolveByCallback(ctx context.Context, callbackData string, re
 		m.createAutoApproveFromCallback(ctx, action, req, resolvedBy)
 	}
 	m.notifyWaiterWithErr(req.ID, req.Status, actionErr)
-	return req, wrapActionErr(actionErr)
+	return withRisk(req), wrapActionErr(actionErr)
 }
 
 // createAutoApproveFromCallback creates an auto-approve rule when the callback
@@ -353,12 +364,25 @@ func (m *Manager) createAutoApproveFromCallback(ctx context.Context, action Call
 
 	switch action {
 	case CallbackApproveSession:
-		m.AddSessionRule(ctx, req.AgentName, toolName, req.ConversationID, resolvedBy)
+		if err := m.AddSessionRule(ctx, req.AgentName, toolName, req.ConversationID, resolvedBy); err != nil {
+			m.logger.Warn("session auto-approve rule not created", "tool", toolName, "error", err)
+		}
 	case CallbackApproveAlways:
 		if _, err := m.AddPermanentRule(ctx, req.AgentName, toolName, resolvedBy); err != nil {
 			m.logger.Error("failed to create permanent auto-approve rule", "error", err)
 		}
 	}
+}
+
+// callbackRuleScope maps a session/always press to the rule scope it asks for.
+func callbackRuleScope(action CallbackAction) (AutoApproveScope, bool) {
+	switch action {
+	case CallbackApproveSession:
+		return ScopeSession, true
+	case CallbackApproveAlways:
+		return ScopePermanent, true
+	}
+	return "", false
 }
 
 // ExtractToolName parses the tool name from an approval summary.
@@ -484,14 +508,19 @@ func (m *Manager) WaitForResolution(ctx context.Context, id string) Status {
 	}
 }
 
-// Get returns a single approval by ID.
+// Get returns a single approval by ID, with its Risk filled.
 func (m *Manager) Get(ctx context.Context, id string) (*Request, error) {
-	return m.store.Get(ctx, id)
+	req, err := m.store.Get(ctx, id)
+	return withRisk(req), err
 }
 
-// List returns approvals filtered by status ("" = all).
+// List returns approvals filtered by status ("" = all), with Risk filled.
 func (m *Manager) List(ctx context.Context, status Status) ([]Request, error) {
-	return m.store.List(ctx, status)
+	reqs, err := m.store.List(ctx, status)
+	for i := range reqs {
+		withRisk(&reqs[i])
+	}
+	return reqs, err
 }
 
 // ExpirePending expires all pending approvals. Call at startup.
@@ -529,7 +558,8 @@ func (m *Manager) StartExpiryWorker(ctx context.Context, interval time.Duration)
 // of status. Used to provide informative feedback when a user clicks an
 // already-resolved or expired Telegram button.
 func (m *Manager) GetByCallbackData(ctx context.Context, callbackData string) (*Request, error) {
-	return m.store.GetByCallbackData(ctx, callbackData)
+	req, err := m.store.GetByCallbackData(ctx, callbackData)
+	return withRisk(req), err
 }
 
 // --- Auto-approve rule management ---
@@ -539,15 +569,45 @@ func sessionRuleKey(agentName, conversationID, toolName string) string {
 	return agentName + "\x00" + conversationID + "\x00" + toolName
 }
 
+// ErrHighRisk refuses a standing approval for a high-risk call
+// (toolrisk.Classify): it is approved once or denied, never by a rule.
+var ErrHighRisk = errors.New("approval: a high-risk call cannot be auto-approved")
+
+// requestRisk classifies the call a tool_call or install_tool request guards,
+// from its stored summary and raw-argument payload. Other kinds are nil.
+func requestRisk(req *Request) *toolrisk.Risk {
+	if req.Kind != ActionKindToolCall && req.Kind != ActionKindInstallTool {
+		return nil
+	}
+	name := ExtractToolName(req.Summary)
+	if name == "" {
+		return nil
+	}
+	return toolrisk.Classify(name, []byte(req.Payload))
+}
+
+// withRisk fills Request.Risk, which is derived and never stored.
+func withRisk(req *Request) *Request {
+	if req != nil {
+		req.Risk = requestRisk(req)
+	}
+	return req
+}
+
 // ShouldAutoApprove checks whether the given tool call should be auto-approved.
-// Returns (true, scope) on match, (false, "") on no match.
+// Returns (true, scope) on match, (false, "") on no match. A high-risk call
+// (toolrisk.Classify on args) is never auto-approved, by any scope.
 //
 // All three scopes answer the same yes/no question, so the order cannot change
 // an approve/deny outcome — it decides scope attribution and cost. Config is
 // checked first so a TOML-blessed tool always reports scope=config in events
 // and audit (stable across sessions, never mis-attributed to a 15-minute
 // session rule) and so the hottest recurring calls skip the SQLite lookup.
-func (m *Manager) ShouldAutoApprove(ctx context.Context, agentName, toolName, conversationID string) (bool, AutoApproveScope) {
+func (m *Manager) ShouldAutoApprove(ctx context.Context, agentName, toolName string, args []byte, conversationID string) (bool, AutoApproveScope) {
+	if toolrisk.Classify(toolName, args) != nil {
+		return false, ""
+	}
+
 	// 1. Config rules (TOML-declared, process-wide, replaced only by config load).
 	if m.matchConfigRule(agentName, toolName) {
 		return true, ScopeConfig
@@ -660,7 +720,12 @@ func (m *Manager) ConfigRuleTools(agentName string) []string {
 // AddSessionRule creates a time-limited auto-approve rule for the current conversation.
 // The rule expires after SessionRuleTTL (15 minutes).
 // After storing the rule it auto-resolves any pending approvals for the same agent+tool.
-func (m *Manager) AddSessionRule(ctx context.Context, agentName, toolName, conversationID, createdBy string) {
+// It returns ErrHighRisk, and stores nothing, for a tool every call to which is high-risk.
+func (m *Manager) AddSessionRule(ctx context.Context, agentName, toolName, conversationID, createdBy string) error {
+	if toolrisk.AlwaysHigh(toolName) {
+		m.auditRuleRefused(ctx, agentName, toolName, ScopeSession, conversationID, createdBy)
+		return ErrHighRisk
+	}
 	key := sessionRuleKey(agentName, conversationID, toolName)
 	expiresAt := time.Now().Add(SessionRuleTTL)
 	m.sessionRules.Store(key, expiresAt)
@@ -669,10 +734,16 @@ func (m *Manager) AddSessionRule(ctx context.Context, agentName, toolName, conve
 		"by", createdBy, "expires_at", expiresAt.Format(time.RFC3339))
 	m.auditRuleCreated(ctx, agentName, toolName, ScopeSession, conversationID, createdBy)
 	m.autoResolvePending(ctx, agentName, toolName)
+	return nil
 }
 
 // AddPermanentRule creates a persistent auto-approve rule for the given agent+tool.
+// It returns ErrHighRisk, and stores nothing, for a tool every call to which is high-risk.
 func (m *Manager) AddPermanentRule(ctx context.Context, agentName, toolName, createdBy string) (*AutoApproveRule, error) {
+	if toolrisk.AlwaysHigh(toolName) {
+		m.auditRuleRefused(ctx, agentName, toolName, ScopePermanent, "", createdBy)
+		return nil, ErrHighRisk
+	}
 	if m.autoStore == nil {
 		return nil, fmt.Errorf("adding permanent auto-approve rule: store does not support auto-approve")
 	}
@@ -710,9 +781,51 @@ func (m *Manager) auditRuleCreated(ctx context.Context, agentName, toolName stri
 	})
 }
 
+// auditRuleRefused records a standing rule refused for a high-risk call.
+func (m *Manager) auditRuleRefused(ctx context.Context, agentName, toolName string, scope AutoApproveScope, conversationID, createdBy string) {
+	m.logger.Info("auto-approve rule refused: high-risk tool",
+		"agent", agentName, "tool", toolName, "scope", scope, "by", createdBy)
+	if m.Auditor == nil {
+		return
+	}
+	detail, _ := json.Marshal(map[string]string{"tool": toolName, "scope": string(scope), "reason": "high_risk"})
+	m.Auditor.Emit(ctx, audit.Event{
+		Category:       audit.CategoryApproval,
+		Action:         "create_rule",
+		Agent:          agentName,
+		Summary:        toolName,
+		Detail:         string(detail),
+		Status:         audit.StatusDenied,
+		Source:         createdBy,
+		ConversationID: conversationID,
+	})
+}
+
+// CheckStandingRule reports whether a rule of scope may be created from the
+// pending request id. Call it before resolving: on ErrHighRisk the request is
+// left pending and the refusal is audited. A missing request is ErrNotFound.
+// Only tool_call requests can become rules; any other kind passes, since no
+// rule is created for it.
+func (m *Manager) CheckStandingRule(ctx context.Context, id string, scope AutoApproveScope, createdBy string) error {
+	req, err := m.store.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	return m.refuseStandingRule(ctx, req, scope, createdBy)
+}
+
+func (m *Manager) refuseStandingRule(ctx context.Context, req *Request, scope AutoApproveScope, createdBy string) error {
+	if req.Kind != ActionKindToolCall || requestRisk(req) == nil {
+		return nil
+	}
+	m.auditRuleRefused(ctx, req.AgentName, ExtractToolName(req.Summary), scope, req.ConversationID, createdBy)
+	return ErrHighRisk
+}
+
 // autoResolvePending approves all pending approvals for the given agent+tool.
 // Called after an auto-approve rule is created so that already-queued approvals
-// for the same tool are resolved instead of going stale.
+// for the same tool are resolved instead of going stale. A high-risk request
+// is skipped: a rule made from a harmless call must not approve it.
 func (m *Manager) autoResolvePending(ctx context.Context, agentName, toolName string) {
 	pending, err := m.store.List(ctx, StatusPending)
 	if err != nil {
@@ -727,6 +840,9 @@ func (m *Manager) autoResolvePending(ctx context.Context, agentName, toolName st
 			continue
 		}
 		if ExtractToolName(req.Summary) != toolName {
+			continue
+		}
+		if requestRisk(&req) != nil {
 			continue
 		}
 		if _, resolveErr := m.Resolve(ctx, req.ID, true, "auto_approve"); resolveErr != nil {
@@ -800,6 +916,11 @@ func (m *Manager) ListAutoApproveRules(ctx context.Context, agentName string) ([
 	// tool — never emit unsorted.
 	rules = append(rules, m.listConfigRules(agentName)...)
 
+	// A rule for an always-high tool (stored before #586, or in TOML) stays
+	// but never applies; say so.
+	for i := range rules {
+		rules[i].Inert = toolrisk.AlwaysHigh(rules[i].ToolName)
+	}
 	return rules, nil
 }
 

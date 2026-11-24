@@ -15,7 +15,7 @@ func TestShouldAutoApprove_ConfigRule(t *testing.T) {
 
 	m.SetConfigRules(ctx, map[string][]string{"default": {"run_javascript"}})
 
-	ok, scope := m.ShouldAutoApprove(ctx, "default", "run_javascript", "conv1")
+	ok, scope := m.ShouldAutoApprove(ctx, "default", "run_javascript", nil, "conv1")
 	if !ok {
 		t.Fatal("expected auto-approve to match config rule")
 	}
@@ -24,12 +24,12 @@ func TestShouldAutoApprove_ConfigRule(t *testing.T) {
 	}
 
 	// A tool that is not listed does not match.
-	if ok, scope := m.ShouldAutoApprove(ctx, "default", "send_email", "conv1"); ok {
+	if ok, scope := m.ShouldAutoApprove(ctx, "default", "send_email", nil, "conv1"); ok {
 		t.Errorf("unlisted tool matched with scope %q", scope)
 	}
 
 	// Rules are agent-scoped: another agent does not inherit them.
-	if ok, scope := m.ShouldAutoApprove(ctx, "other", "run_javascript", "conv1"); ok {
+	if ok, scope := m.ShouldAutoApprove(ctx, "other", "run_javascript", nil, "conv1"); ok {
 		t.Errorf("unlisted agent matched with scope %q", scope)
 	}
 }
@@ -41,7 +41,7 @@ func TestShouldAutoApprove_ConfigRuleIgnoresConversation(t *testing.T) {
 	m.SetConfigRules(ctx, map[string][]string{"default": {"web_search"}})
 
 	// Config rules are agent-scoped, so any conversation matches.
-	if ok, _ := m.ShouldAutoApprove(ctx, "default", "web_search", "some-other-conv"); !ok {
+	if ok, _ := m.ShouldAutoApprove(ctx, "default", "web_search", nil, "some-other-conv"); !ok {
 		t.Error("config rule should match regardless of conversation")
 	}
 }
@@ -51,13 +51,13 @@ func TestShouldAutoApprove_Precedence_ConfigBeatsSessionAndPermanent(t *testing.
 	ctx := context.Background()
 
 	m.SetConfigRules(ctx, map[string][]string{"default": {"web_search"}})
-	m.AddSessionRule(ctx, "default", "web_search", "conv1", "test")
+	mustOK(t, m.AddSessionRule(ctx, "default", "web_search", "conv1", "test"))
 	if _, err := m.AddPermanentRule(ctx, "default", "web_search", "test"); err != nil {
 		t.Fatal(err)
 	}
 
 	// All three scopes answer yes; attribution must be the stable one.
-	ok, scope := m.ShouldAutoApprove(ctx, "default", "web_search", "conv1")
+	ok, scope := m.ShouldAutoApprove(ctx, "default", "web_search", nil, "conv1")
 	if !ok {
 		t.Fatal("expected match")
 	}
@@ -74,7 +74,7 @@ func TestShouldAutoApprove_ConfigNotWeakenedAtRuntime(t *testing.T) {
 	ctx := context.Background()
 
 	m.SetConfigRules(ctx, map[string][]string{"default": {"web_search"}})
-	m.AddSessionRule(ctx, "default", "web_search", "conv1", "test")
+	mustOK(t, m.AddSessionRule(ctx, "default", "web_search", "conv1", "test"))
 	permanent, err := m.AddPermanentRule(ctx, "default", "web_search", "test")
 	if err != nil {
 		t.Fatal(err)
@@ -86,7 +86,7 @@ func TestShouldAutoApprove_ConfigNotWeakenedAtRuntime(t *testing.T) {
 	}
 	m.ClearSessionRules("conv1")
 
-	ok, scope := m.ShouldAutoApprove(ctx, "default", "web_search", "conv1")
+	ok, scope := m.ShouldAutoApprove(ctx, "default", "web_search", nil, "conv1")
 	if !ok {
 		t.Fatal("config rule must survive removal of session and permanent rules")
 	}
@@ -103,16 +103,16 @@ func TestSetConfigRules_ReplaceRemovesStale(t *testing.T) {
 	// Reload narrows the list.
 	m.SetConfigRules(ctx, map[string][]string{"default": {"tool_a"}})
 
-	if ok, _ := m.ShouldAutoApprove(ctx, "default", "tool_a", "conv1"); !ok {
+	if ok, _ := m.ShouldAutoApprove(ctx, "default", "tool_a", nil, "conv1"); !ok {
 		t.Error("tool_a should still match after the narrowing reload")
 	}
-	if ok, _ := m.ShouldAutoApprove(ctx, "default", "tool_b", "conv1"); ok {
+	if ok, _ := m.ShouldAutoApprove(ctx, "default", "tool_b", nil, "conv1"); ok {
 		t.Error("tool_b should no longer match after the narrowing reload")
 	}
 
 	// An empty map drops everything.
 	m.SetConfigRules(ctx, nil)
-	if ok, _ := m.ShouldAutoApprove(ctx, "default", "tool_a", "conv1"); ok {
+	if ok, _ := m.ShouldAutoApprove(ctx, "default", "tool_a", nil, "conv1"); ok {
 		t.Error("no config rules should match after an empty reload")
 	}
 }

@@ -2,6 +2,7 @@ package approval
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -34,6 +35,10 @@ func (h *Handler) Resolve(ctx context.Context, data string) (string, error) {
 	}
 
 	resolved, err := h.manager.ResolveByCallback(ctx, data, "telegram")
+	if errors.Is(err, ErrHighRisk) {
+		// Refused before resolving: the request is still pending.
+		return "⚠️ This is a high-risk call and cannot be auto-approved. Use Approve or Deny.", nil
+	}
 	if err != nil {
 		switch err {
 		case ErrNotFound:

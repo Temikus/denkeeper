@@ -642,7 +642,9 @@ func (c *WSConn) addAutoApproveRule(ctx context.Context, action string, resolved
 	}
 	switch action {
 	case "auto_session":
-		c.server.deps.Approvals.AddSessionRule(ctx, resolved.AgentName, toolName, resolved.ConversationID, "ws")
+		if err := c.server.deps.Approvals.AddSessionRule(ctx, resolved.AgentName, toolName, resolved.ConversationID, "ws"); err != nil {
+			c.hub.logger.Warn("ws: session auto-approve rule not created", "tool", toolName, "error", err)
+		}
 	case "auto_always":
 		if _, err := c.server.deps.Approvals.AddPermanentRule(ctx, resolved.AgentName, toolName, "ws"); err != nil {
 			c.hub.logger.Error("ws: creating auto-approve rule", "error", err)

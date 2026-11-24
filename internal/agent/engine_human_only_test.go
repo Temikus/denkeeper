@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -134,16 +135,19 @@ func TestHumanOnlyTool_DeniedCallDoesNotRun(t *testing.T) {
 	}
 }
 
-// Rules of every scope are ignored: tool_add is never auto-approved.
+// No rule can be made for tool_add (#586), and the TOML one that can still be
+// written is ignored: tool_add is never auto-approved.
 func TestHumanOnlyTool_IgnoresAutoApproveRules(t *testing.T) {
 	e, mgr, runs := newHumanOnlyEngine(t, "supervised")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	mgr.SetConfigRules(ctx, map[string][]string{"default": {"tool_add"}})
-	if _, err := mgr.AddPermanentRule(ctx, "default", "tool_add", "test"); err != nil {
-		t.Fatalf("AddPermanentRule: %v", err)
+	if _, err := mgr.AddPermanentRule(ctx, "default", "tool_add", "test"); !errors.Is(err, approval.ErrHighRisk) {
+		t.Fatalf("AddPermanentRule err = %v, want ErrHighRisk", err)
 	}
-	mgr.AddSessionRule(ctx, "default", "tool_add", "conv:1", "test")
+	if err := mgr.AddSessionRule(ctx, "default", "tool_add", "conv:1", "test"); !errors.Is(err, approval.ErrHighRisk) {
+		t.Fatalf("AddSessionRule err = %v, want ErrHighRisk", err)
+	}
 	onEvent, seen := answerApprovals(t, mgr, false)
 
 	_, record, _ := e.executeToolCall(ctx, toolAddCall, 1, "conv:1", true, turnRun{grant: grantAll}, onEvent)

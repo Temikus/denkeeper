@@ -1945,7 +1945,7 @@ func TestHandleApproveApproval_WithAutoApprove_CreatesRule(t *testing.T) {
 	}
 
 	// Permanent auto-approve rule should now exist.
-	ok, scope := deps.Approvals.ShouldAutoApprove(context.Background(), "default", "web_search", "any-conv")
+	ok, scope := deps.Approvals.ShouldAutoApprove(context.Background(), "default", "web_search", nil, "any-conv")
 	if !ok {
 		t.Error("expected permanent auto-approve rule to be created")
 	}
