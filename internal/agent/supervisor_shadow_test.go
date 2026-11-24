@@ -101,6 +101,22 @@ func TestPairShadowReviews_DuplicateCallsPairInOrder(t *testing.T) {
 	}
 }
 
+// Events with the same timestamp are taken in id order, as CountUnsafeApprovals
+// takes them, whatever order the store returned them in; otherwise the badge
+// and the panel could pair a tie differently.
+func TestPairShadowReviews_SameTimestampOrderedByID(t *testing.T) {
+	review := shadowEvent(t, 0, "c1", "kv_set", `{}`, allScores(0.99))
+	review.ID = 1
+	verdict := supervisorEvent(t, 0, "c1", "kv_set", `{}`, "DENY", nil)
+	verdict.ID = 2
+
+	// Newest first, as List returns them: the verdict comes before the review.
+	reviews, _ := PairShadowReviews([]audit.Event{verdict, review}, "jev")
+	if len(reviews) != 1 || reviews[0].Supervisor != "DENY" {
+		t.Fatalf("reviews = %+v, want the review paired with the DENY", reviews)
+	}
+}
+
 func TestPairShadowReviews_DifferentArgumentsDoNotPair(t *testing.T) {
 	events := []audit.Event{
 		shadowEvent(t, 0, "c1", "web_fetch", `{"url":"a"}`, allScores(0.9)),

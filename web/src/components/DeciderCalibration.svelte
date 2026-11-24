@@ -5,7 +5,7 @@
   import { attention, refreshAttention } from '../attention.js'
   import {
     DECIDER_APPROVE_DEFAULT, DECIDER_DENY_DEFAULT, CHECK_LABELS, floorScore,
-    summarize, histogram, disagreements, suggestion, isFresh, reviewedUpTo,
+    summarize, histogram, disagreements, suggestion, isFresh, isLater, reviewedUpTo,
   } from '../deciderCalibration.js'
 
   // approveAt/denyAt are the Permission panel's threshold inputs: '' means the
@@ -60,8 +60,13 @@
       rows = res.reviews || []
       failed = res.failed || 0
       truncated = !!res.truncated
-      markUpTo = res.reviewed_up_to || null
-      markBy = res.reviewed_by || ''
+      // A reload read before this panel's own mark landed carries the older
+      // mark; like the server, never move it back for the same agent and decider.
+      const serverMark = res.reviewed_up_to || null
+      if (!(loadedFor === panelKey() && markUpTo && (!serverMark || isLater(markUpTo, serverMark)))) {
+        markUpTo = serverMark
+        markBy = res.reviewed_by || ''
+      }
       markError = ''
       serverNow = Date.parse(res.until)
       loadedFor = panelKey()

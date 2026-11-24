@@ -73,8 +73,16 @@ type supervisorDetail struct {
 // failed counts decider reviews that errored. Enforce-mode reviews are left
 // out: the supervisor sees only the escalated calls there.
 func PairShadowReviews(events []audit.Event, decider string) (reviews []ShadowReview, failed int) {
+	// By time, ties in id order: the same order CountUnsafeApprovals uses, so
+	// the badge and the panel pair a same-timestamp review and verdict alike
+	// whatever order the store returned them in.
 	sorted := slices.Clone(events)
-	slices.SortStableFunc(sorted, func(a, b audit.Event) int { return a.Timestamp.Compare(b.Timestamp) })
+	slices.SortStableFunc(sorted, func(a, b audit.Event) int {
+		if c := a.Timestamp.Compare(b.Timestamp); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.ID, b.ID)
+	})
 
 	deciderSource := "decider:" + decider
 	pending := newPairQueue[pairKey, int]() // indexes into reviews awaiting a supervisor verdict
@@ -226,7 +234,9 @@ func (r ShadowReview) UnsafeApproval(approveAt, denyAt float64) bool {
 // Unlike the reviews list it reads the whole window, so a busy agent is never
 // undercounted, and it stays linear: one ScanEvents pass, keeping a few fields
 // per event rather than the event and its Detail. It pairs through the same
-// pairQueue as PairShadowReviews, so the badge and the panel cannot disagree.
+// pairQueue and order as PairShadowReviews, so the badge and the panel pair
+// the events they both scan identically; past the panel's scan cap the badge
+// sees reviews the panel does not.
 func CountUnsafeApprovals(ctx context.Context, store audit.Store, agentName, decider string, after time.Time, approveAt, denyAt float64) (int, error) {
 	now := time.Now().UTC()
 	if floor := now.Add(-DefaultShadowReviewWindow); after.Before(floor) {

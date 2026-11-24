@@ -1,4 +1,5 @@
 import { describe, test, expect, beforeEach } from 'vitest'
+import { tick } from 'svelte'
 import { render, screen, fireEvent, waitFor } from '@testing-library/svelte'
 import { http, HttpResponse } from 'msw'
 import { server } from '../../test/server.js'
@@ -335,6 +336,35 @@ describe('DeciderCalibration review mark', () => {
 
     attention.set({ pendingApprovals: 0, unhealthyTools: [], deciderReviews: { pamela: 2 } })
     await waitFor(() => expect(loads).toBe(2))
+  })
+
+  // A reload whose response was read before the mark landed still carries the
+  // old mark; like the server, the panel never moves its mark back.
+  test('a stale reload after a mark keeps the newer mark', async () => {
+    attention.set({ pendingApprovals: 0, unhealthyTools: [], deciderReviews: { pamela: 1 } })
+    let loads = 0
+    server.use(http.get('/api/v1/agents/:name/decider-reviews', () => {
+      loads++
+      return HttpResponse.json({ agent: 'pamela', decider: 'jev', supervisor: 'argus', reviews: [old(), fresh()],
+        failed: 0, truncated: false, until: new Date().toISOString(), reviewed_up_to: MARK, reviewed_by: 'temik' })
+    }))
+    serveMark(body => HttpResponse.json({ agent: 'pamela', decider: 'jev', reviewed_up_to: body.up_to, reviewed_by: 'temik' }))
+    server.use(http.get('/api/v1/decider-reviews/unreviewed', () => HttpResponse.json({ pamela: 0 })))
+    render(DeciderCalibration, { props })
+
+    await fireEvent.click(await waitFor(() => screen.getByRole('button', { name: 'Mark all reviewed' })))
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Nothing new to review'))
+
+    // A new verdict moves the badge; the reload's response predates the mark.
+    attention.set({ pendingApprovals: 0, unhealthyTools: [], deciderReviews: { pamela: 2 } })
+    await waitFor(() => expect(loads).toBe(2))
+    await tick()
+    // The just-marked row stays under the divider instead of showing as new.
+    // (The head's count follows the badge, which this test moved to 2.)
+    const rows = tableRows()
+    expect(rows[0]).toHaveAttribute('data-testid', 'calibration-mark')
+    expect(rows[1]).toHaveClass('reviewed')
+    expect(rows[1]).toHaveTextContent('kv_set')
   })
 
   // The badge drop a mark causes is already on screen; reloading for it would

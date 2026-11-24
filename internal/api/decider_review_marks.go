@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -13,6 +14,13 @@ import (
 // deciderCountTTL is how long a per-agent unreviewed count is reused. The nav
 // badge polls every 15 s; a mark clears the agent's entry at once.
 const deciderCountTTL = 60 * time.Second
+
+// deciderCountScanTimeout bounds one shared count scan. No caller's context
+// can cancel it (the first caller hanging up must not fail the others), so
+// without a bound an abandoned scan could run on. A minute is many times a
+// healthy 30-day scan and four badge polls (15 s): only a stuck store hits it,
+// and the error it returns is never cached, so the next poll counts again.
+const deciderCountScanTimeout = time.Minute
 
 // deciderCountEntry is one memoized count, valid for its decider and thresholds.
 type deciderCountEntry struct {
@@ -74,6 +82,10 @@ type deciderCountKey struct {
 	approveAt, denyAt float64
 }
 
+// errDeciderCountFailed is what callers sharing a count get when the scan
+// panicked instead of returning.
+var errDeciderCountFailed = errors.New("counting unreviewed decider reviews failed")
+
 // deciderCountRun is one count scan in flight. done closes when n and err are set.
 type deciderCountRun struct {
 	done    chan struct{}
@@ -111,9 +123,32 @@ func (s *Server) unreviewedCount(ctx context.Context, name, decider string, cfg 
 	gen := s.deciderCountGen[name]
 	s.deciderCountMu.Unlock()
 
+	// If the scan panics, release the run on the way out so waiters get an
+	// error and the next count starts afresh; otherwise every later count for
+	// this key would join the dead run and wait forever. The panic still
+	// propagates after this.
+	counted := false
+	defer func() {
+		if counted {
+			return
+		}
+		s.deciderCountMu.Lock()
+		run.err = errDeciderCountFailed
+		delete(s.deciderCountRuns, key)
+		close(run.done)
+		s.deciderCountMu.Unlock()
+	}()
+
 	// Shared by every waiter, so the first caller hanging up must not cancel
-	// it for the rest; the scan is bounded by its window.
-	run.n, run.err = s.countUnreviewed(context.WithoutCancel(ctx), name, decider, cfg)
+	// it for the rest; it has its own bound instead.
+	timeout := s.deciderCountTimeout
+	if timeout <= 0 {
+		timeout = deciderCountScanTimeout
+	}
+	scanCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	defer cancel()
+	run.n, run.err = s.countUnreviewed(scanCtx, name, decider, cfg)
+	counted = true
 
 	s.deciderCountMu.Lock()
 	defer s.deciderCountMu.Unlock()

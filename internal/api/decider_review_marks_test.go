@@ -222,6 +222,64 @@ func TestUnreviewedCount_ConcurrentCountsScanOnce(t *testing.T) {
 	}
 }
 
+// A count that panics must still release its run: otherwise every later count
+// for that agent joins the dead run and waits forever.
+func TestUnreviewedCount_PanickingCountDoesNotStrandLaterCounts(t *testing.T) {
+	deps, store := unsafeReviewDeps(t, time.Now().Add(-time.Hour))
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+	cfg := agent.DeciderStageConfig{Mode: "shadow", ApproveAt: 0.95, DenyAt: 0.05}
+
+	store.onList = func() { panic("store blew up") }
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("the count did not panic")
+			}
+		}()
+		_, _ = srv.unreviewedCount(context.Background(), "default", "jev", cfg)
+	}()
+
+	done := make(chan int, 1)
+	go func() {
+		n, err := srv.unreviewedCount(context.Background(), "default", "jev", cfg)
+		if err != nil {
+			t.Errorf("next count: %v", err)
+		}
+		done <- n
+	}()
+	select {
+	case n := <-done:
+		if n != 1 {
+			t.Errorf("next count = %d, want 1", n)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the next count hung on the panicked run")
+	}
+}
+
+// The shared scan has its own bound, since no caller's context can cancel it:
+// a scan past the bound ends with an error, and that error is not cached.
+func TestUnreviewedCount_ScanPastItsBoundFailsAndIsNotCached(t *testing.T) {
+	deps, store := unsafeReviewDeps(t, time.Now().Add(-time.Hour))
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+	srv.deciderCountTimeout = 20 * time.Millisecond
+	cfg := agent.DeciderStageConfig{Mode: "shadow", ApproveAt: 0.95, DenyAt: 0.05}
+
+	store.onList = func() { time.Sleep(100 * time.Millisecond) } // outlasts the bound
+	if _, err := srv.unreviewedCount(context.Background(), "default", "jev", cfg); err == nil {
+		t.Fatal("a scan past its bound returned no error")
+	}
+
+	srv.deciderCountTimeout = 0 // back to the default
+	n, err := srv.unreviewedCount(context.Background(), "default", "jev", cfg)
+	if err != nil || n != 1 {
+		t.Fatalf("next count = %d, %v; want 1, nil", n, err)
+	}
+	if reads := store.lists.Load(); reads != 2 {
+		t.Errorf("store read %d times, want 2: the timed-out result must not be cached", reads)
+	}
+}
+
 func TestUnreviewedCount_RequiresAuditRead(t *testing.T) {
 	deps, _ := unsafeReviewDeps(t, time.Now().Add(-time.Hour))
 	key := config.APIKeyConfig{Name: "chat-only", Key: "dk-test-key", Scopes: []string{"chat"}}

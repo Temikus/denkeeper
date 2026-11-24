@@ -20,6 +20,9 @@ const subMilli = t => ((/\.(\d+)/.exec(t) || [])[1] || '').padEnd(9, '0').slice(
 // Orders two RFC3339 times to the nanosecond: negative when a is earlier.
 const compareTime = (a, b) => (new Date(a) - new Date(b)) || subMilli(a).localeCompare(subMilli(b))
 
+// Whether time a is later than b, to the nanosecond.
+export const isLater = (a, b) => compareTime(a, b) > 0
+
 // The server pairs a supervisor review up to 15 minutes after the shadow one.
 const PAIR_WINDOW_MS = 15 * 60 * 1000
 
