@@ -2,13 +2,13 @@
 title: "Skills"
 description: "Markdown-based instruction files that teach the agent how to behave."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-11-23T00:00:00+00:00
+lastmod: 2026-11-24T00:00:00+00:00
 draft: false
 weight: 20
 toc: true
 ---
 
-Skills are the simplest extension point. They are markdown files with TOML frontmatter that provide instructions to the agent. No code execution — skills teach the agent *how to behave* and *what steps to follow*.
+Skills are the simplest extension point. They are markdown files with TOML or YAML frontmatter that provide instructions to the agent. No code execution — skills teach the agent *how to behave* and *what steps to follow*.
 
 ## File format
 
@@ -30,6 +30,42 @@ tools = ["web-search", "calendar"]
 3. List any pending tasks or reminders
 4. Format as a concise morning briefing
 ```
+
+### YAML frontmatter
+
+Skills from other tools, such as skills.sh, often put YAML between `---` lines. Denkeeper reads that too:
+
+```markdown
+---
+name: release-notes
+description: >-
+  Draft release notes from merged pull requests,
+  grouped by area.
+license: Apache-2.0
+metadata:
+  author: example
+---
+
+## Instructions
+
+1. List the pull requests merged since the last tag
+2. Group them by area and summarize each in one line
+```
+
+- Both forms use the same keys: `name`, `description`, `version`, `triggers`, `requires.tools`, `max_tool_rounds` and `max_output_tokens`. Denkeeper ignores other keys, such as `license` and `metadata` above, but keeps them when the skill is edited.
+- A skill keeps the form it was written in. New skills are written as TOML.
+- Anchors, aliases, merge keys, explicit tags (such as `!!binary`) and duplicate keys are refused. So is a TOML multi-line string with a line that is exactly `+++`, since the frontmatter ends at the first such line. A refused file is skipped, and the server log has a warning that names the file and the reason, with the line where there is one.
+- Every top-level `.md` file in a skills directory, and every `SKILL.md` one folder down, loads as a skill when it starts with `---` or `+++` and has a `name` key. Check a downloaded skill's triggers before copying it in: one with no triggers is ambient, so its body goes into every prompt while the tools it lists under `requires.tools` are available.
+- A skill with no `triggers` is ambient in either form, so its body goes into every prompt, except while a tool it lists under `requires.tools` is unavailable. Most skills.sh skills have no triggers: add a `command:` trigger to use one only on demand.
+
+### What an edit keeps
+
+An edit that changes no frontmatter field, such as a body edit, writes the frontmatter back byte for byte, except that blank lines just inside the delimiters are dropped. An edit that changes a field rewrites the block:
+
+- **YAML** keeps keys, their order and comments, and the quoting of every value it does not change; a changed value is written fresh in YAML's default style. It does not keep exact formatting. Blank lines and indentation can change, and a folded `description` can be rewrapped onto one line. A newly set field goes at the end.
+- **TOML** keeps every key and value, but not comments or key order.
+
+If a rewrite would change a key Denkeeper does not read, the edit is refused and the file is left as it was. Edit that file by hand.
 
 ## Triggers
 
@@ -90,6 +126,6 @@ In `supervised` or `autonomous` tiers, the agent can create new skills via the C
 
 Every runtime skill change — from the agent's own Config MCP tools, the REST API, or the external MCP server — is recorded in an undo journal *before* it is applied. Each entry holds the file's raw prior bytes, so a revert restores exactly what was there rather than a re-rendered approximation: a frontmatter field this build does not recognise still survives the round trip.
 
-The `skill_revert` tool on the [MCP server](/docs/guides/mcp-server/) applies the inverse — deleting a created skill, restoring an updated or deleted one, renaming a renamed one back. Each journal entry can be spent only once, and the claim is persisted, so a revert cannot be applied twice even across a restart.
+The `skill_revert` tool on the [MCP server](/docs/guides/mcp-server/) applies the inverse — deleting a created skill, restoring an updated or deleted one, renaming a renamed one back. Each journal entry can be spent only once, and the claim is persisted, so a revert cannot be applied twice even across a restart. Deleting a skill kept in a folder removes its `SKILL.md` and leaves the folder and its other files, so a revert can restore it; until then a new skill can't be created under that name.
 
 Reverting restores the skill file. It does not undo what the skill did while it was live: messages already sent, tool calls already made and KV keys already written stay as they are.

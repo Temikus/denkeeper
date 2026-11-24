@@ -268,7 +268,7 @@ A Helm chart is available in [`deploy/helm/denkeeper/`](deploy/helm/denkeeper/) 
 
 ### Skills
 
-Skills are markdown files that teach the agent how to handle specific tasks. They use TOML frontmatter enclosed in `+++` delimiters:
+Skills are markdown files that teach the agent how to handle specific tasks. They use TOML frontmatter enclosed in `+++` delimiters. YAML between `---` lines is also read, and a skill keeps the form it was written in:
 
 ```markdown
 +++
