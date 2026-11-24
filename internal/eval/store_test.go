@@ -3,10 +3,51 @@ package eval
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jmoiron/sqlx"
 )
+
+// A verdict written before updated_at existed reads back with its created_at
+// there, so the newest-verdict pick and every scan of the row keep working.
+func TestStore_MigrationBackfillsVerdictUpdatedAt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	old, err := sqlx.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("opening old db: %v", err)
+	}
+	judgedAt := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)
+	if _, err := old.Exec(`CREATE TABLE eval_verdicts (
+	    id INTEGER PRIMARY KEY AUTOINCREMENT, item_id INTEGER NOT NULL, winner TEXT NOT NULL,
+	    dimensions TEXT NOT NULL DEFAULT '{}', notes TEXT NOT NULL DEFAULT '',
+	    judge_ident TEXT NOT NULL DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)`); err != nil {
+		t.Fatalf("creating old table: %v", err)
+	}
+	if _, err := old.Exec(`INSERT INTO eval_verdicts (item_id, winner, judge_ident, created_at) VALUES (1, 'a', 'judge', ?)`,
+		judgedAt); err != nil {
+		t.Fatalf("inserting old verdict: %v", err)
+	}
+	_ = old.Close()
+
+	s, err := NewSQLiteStore(path)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore on the old db: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	var got struct {
+		CreatedAt time.Time `db:"created_at"`
+		UpdatedAt time.Time `db:"updated_at"`
+	}
+	if err := s.db.Get(&got, `SELECT created_at, updated_at FROM eval_verdicts WHERE id = 1`); err != nil {
+		t.Fatalf("reading migrated verdict: %v", err)
+	}
+	if !got.UpdatedAt.Equal(judgedAt) || !got.CreatedAt.Equal(judgedAt) {
+		t.Errorf("migrated verdict = created %v updated %v, want both %v", got.CreatedAt, got.UpdatedAt, judgedAt)
+	}
+}
 
 func newTestStore(t *testing.T) *Store {
 	t.Helper()

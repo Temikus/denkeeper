@@ -338,6 +338,7 @@ func (s *Store) RecordVerdict(ctx context.Context, v Verdict) (*Verdict, error) 
 		v.Dimensions = "{}"
 	}
 	v.CreatedAt = time.Now().UTC()
+	v.UpdatedAt = v.CreatedAt
 
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
@@ -351,17 +352,19 @@ func (s *Store) RecordVerdict(ctx context.Context, v Verdict) (*Verdict, error) 
 
 	// created_at stays the first call's time on a re-judge: countAgreement
 	// drops marks made after it, and a moving timestamp would let them back in.
+	// updated_at moves, so verdictsByItem still picks the latest call.
 	// RETURNING, not LastInsertId, because the update path inserts nothing.
 	if err := tx.QueryRowxContext(ctx,
 		`INSERT INTO eval_verdicts
-		   (item_id, winner, dimensions, notes, judge_ident, rubric_version, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		   (item_id, winner, dimensions, notes, judge_ident, rubric_version, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (item_id, judge_ident) DO UPDATE SET
 		     winner = excluded.winner, dimensions = excluded.dimensions,
-		     notes = excluded.notes, rubric_version = excluded.rubric_version
-		 RETURNING id, created_at`,
-		v.ItemID, v.Winner, v.Dimensions, v.Notes, v.JudgeIdent, v.RubricVersion, v.CreatedAt,
-	).Scan(&v.ID, &v.CreatedAt); err != nil {
+		     notes = excluded.notes, rubric_version = excluded.rubric_version,
+		     updated_at = excluded.updated_at
+		 RETURNING id, created_at, updated_at`,
+		v.ItemID, v.Winner, v.Dimensions, v.Notes, v.JudgeIdent, v.RubricVersion, v.CreatedAt, v.UpdatedAt,
+	).Scan(&v.ID, &v.CreatedAt, &v.UpdatedAt); err != nil {
 		return nil, fmt.Errorf("recording verdict for item %d: %w", v.ItemID, err)
 	}
 	if v.JudgeIdent != JudgeOperator {
@@ -381,7 +384,7 @@ func (s *Store) ListVerdicts(ctx context.Context, runID int64) ([]Verdict, error
 	out := []Verdict{}
 	if err := s.db.SelectContext(ctx, &out,
 		`SELECT v.id, v.item_id, v.winner, v.dimensions, v.notes, v.judge_ident,
-		        v.rubric_version, v.created_at
+		        v.rubric_version, v.created_at, v.updated_at
 		 FROM eval_verdicts v
 		 JOIN eval_judgment_items i ON i.id = v.item_id
 		 JOIN eval_pairs p ON p.id = i.pair_id

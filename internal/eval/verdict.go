@@ -376,8 +376,7 @@ func pairRubrics(items []JudgmentItem, judge map[int64]Verdict) (rubrics, idents
 }
 
 // verdictsByItem splits stored verdicts into the judge's and the operator's,
-// keeping the newest of each per item. created_at is a row's first call, so a
-// re-judge does not make a row newer.
+// keeping the newest of each per item by its latest call (UpdatedAt).
 func verdictsByItem(verdicts []Verdict) (judge, operator map[int64]Verdict) {
 	judge = make(map[int64]Verdict, len(verdicts))
 	operator = make(map[int64]Verdict, len(verdicts))
@@ -387,7 +386,7 @@ func verdictsByItem(verdicts []Verdict) (judge, operator map[int64]Verdict) {
 			target = operator
 		}
 		prev, ok := target[v.ItemID]
-		if !ok || v.CreatedAt.After(prev.CreatedAt) {
+		if !ok || v.UpdatedAt.After(prev.UpdatedAt) {
 			target[v.ItemID] = v
 		}
 	}

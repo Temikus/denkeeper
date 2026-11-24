@@ -49,6 +49,7 @@ type PairVerdict struct {
 	Notes             string            `json:"notes,omitempty"`
 	RubricVersion     string            `json:"rubric_version,omitempty"`
 	CreatedAt         time.Time         `json:"created_at"`
+	UpdatedAt         time.Time         `json:"updated_at"`
 }
 
 // PairItem is one presentation order of a pair with the verdicts against it.
@@ -230,6 +231,7 @@ func pairVerdicts(a Assignment, it JudgmentItem, rows []Verdict, names map[int64
 			Notes:         v.Notes,
 			RubricVersion: v.RubricVersion,
 			CreatedAt:     v.CreatedAt,
+			UpdatedAt:     v.UpdatedAt,
 		}
 		if id := VariantFor(a, it.PresentationOrder, v.Winner); id != 0 {
 			pv.WinnerVariant = names[id]

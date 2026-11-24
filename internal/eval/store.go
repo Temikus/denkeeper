@@ -261,7 +261,8 @@ CREATE TABLE IF NOT EXISTS eval_verdicts (
     notes          TEXT    NOT NULL DEFAULT '',
     judge_ident    TEXT    NOT NULL DEFAULT '',
     rubric_version TEXT    NOT NULL DEFAULT '',
-    created_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at     DATETIME
 );
 
 CREATE INDEX IF NOT EXISTS idx_eval_tasks_set      ON eval_tasks (set_id);
@@ -301,6 +302,13 @@ var evalMigrations = []string{
 	// [eval] judge_max_cost_per_run. Folding them would make a judged run look
 	// like it had blown its cap.
 	`ALTER TABLE eval_runs ADD COLUMN judge_cost REAL NOT NULL DEFAULT 0`,
+	// updated_at: a verdict's latest call, beside created_at (its first). Nullable
+	// because ALTER cannot add a CURRENT_TIMESTAMP default. The backfill runs on
+	// every start, so rows an older binary wrote get their created_at; reads
+	// scan it into time.Time, which fails on NULL. COALESCE would not help: the
+	// driver parses a time only from a column declared DATETIME.
+	`ALTER TABLE eval_verdicts ADD COLUMN updated_at DATETIME`,
+	`UPDATE eval_verdicts SET updated_at = created_at WHERE updated_at IS NULL`,
 }
 
 // TaskSet is a named collection of eval tasks.
@@ -507,8 +515,12 @@ type Verdict struct {
 	// the judge reported it (the `Rubric version:` line of the judge-eval
 	// skill). Empty when the judge did not say, which is why the results view
 	// reports the distinct set rather than assuming one.
-	RubricVersion string    `db:"rubric_version" json:"rubric_version,omitempty"`
-	CreatedAt     time.Time `db:"created_at"     json:"created_at"`
+	RubricVersion string `db:"rubric_version" json:"rubric_version,omitempty"`
+	// CreatedAt is this ident's first call on the item and UpdatedAt its latest.
+	// Agreement compares marks against the first; the newest-verdict pick
+	// reads the latest.
+	CreatedAt time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt time.Time `db:"updated_at" json:"updated_at"`
 }
 
 // Store persists eval task sets, runs and samples. It owns its own handle on
