@@ -550,7 +550,7 @@ Note the direction: `[tools.*]` is Denkeeper connecting *outward* to MCP servers
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `type` | string | *required* | `"subprocess"` or `"docker"` |
-| `command` | string | *required for subprocess* | Plugin binary path. Not used by docker plugins |
+| `command` | string | *required for subprocess* | Plugin binary path (subprocess). For docker plugins it is optional: when set, it is passed after the image as the command to run, followed by `args`; empty uses the image default |
 | `image` | string | *required for docker* | Docker/OCI image to run, e.g. `"ghcr.io/example/mcp-code-runner:latest"` |
 | `args` | string[] | — | Command-line arguments |
 | `env` | map | — | Environment variable overrides |
