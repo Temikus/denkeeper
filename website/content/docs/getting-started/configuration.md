@@ -61,7 +61,7 @@ Setting one value therefore relocates all of them. The Helm chart uses this: it 
 | `[kv]` | Agent KV store limits |
 | `[web]` | Built-in `web_search` / `web_fetch` tools |
 | `[script]` | `run_javascript` sandbox bounds |
-| `[skills]` | Per-file skill size cap |
+| `[skills]` | Per-file skill size cap, skill index in the system prompt |
 | `[browser]` | Browser automation container and URL allowlist |
 | `[costs]` | Model pricing overrides and fallback rate |
 | `[audit]` | Audit log retention and buffering |

@@ -317,7 +317,7 @@ denkeeper plugin keygen my-plugin --output /path/to/keys
 
 | Flag | Description |
 |---|---|
-| `--output` | Output directory for key files (default: current directory) |
+| `--output`, `-o` | Output directory for key files (default: current directory) |
 
 Creates two files: `<name>.pub` (public key, PEM) and `<name>.key` (private key, PEM, mode 0600).
 
@@ -331,7 +331,7 @@ denkeeper plugin sign ./my-plugin --key my-plugin.key
 
 | Flag | Description |
 |---|---|
-| `--key` | Path to private key file (required) |
+| `--key`, `-k` | Path to private key file (required) |
 
 Creates a detached signature file `<binary>.sig`.
 
@@ -346,6 +346,6 @@ denkeeper plugin verify ./my-plugin --key key1.pub --key key2.pub
 
 | Flag | Description |
 |---|---|
-| `--key` | Path to public key file (required, repeatable) |
+| `--key`, `-k` | Path to public key file (required, repeatable) |
 
 Exits with code 0 if the signature is valid for any of the provided keys.

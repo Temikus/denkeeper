@@ -232,7 +232,7 @@ Restart the server process.
 
 **Scope:** `sessions:read`
 
-List all conversations.
+List conversations, paginated (`sessions`, `total`, `limit`, `offset`). Filters: `?agent=`, `?limit=` (max 500), `?offset=`. Isolated scheduled-run sessions (`sched:*`) are hidden unless `?include_scheduled=true`.
 
 ### `GET /api/v1/sessions/{id}/messages`
 
@@ -400,7 +400,7 @@ Only running agents with a shadow-mode decider are listed. The count looks back 
 
 **Scope:** `agents:read`
 
-Read one persona section. `{section}` is `soul`, `user`, or `memory` — corresponding to `SOUL.md`, `USER.md`, and `MEMORY.md`.
+Read one persona section. `{section}` is `identity`, `soul`, `user`, or `memory` — corresponding to `IDENTITY.md`, `SOUL.md`, `USER.md`, and `MEMORY.md`.
 
 ### `PUT /api/v1/agents/{name}/persona/{section}`
 
@@ -914,12 +914,13 @@ Create an auto-approve rule.
 ```json
 {
   "agent": "default",
-  "tool_name": "web_search",
+  "tool": "web_search",
   "scope": "permanent"
 }
 ```
 
-- `scope`: `"session"` (in-memory, cleared on restart) or `"permanent"` (persisted in SQLite). `"config"` is rejected with `400` — config-scoped rules can only be declared in TOML.
+- `scope`: `"session"` (in-memory, cleared on restart; requires `conversation_id`) or `"permanent"` (persisted in SQLite, the default). `"config"` is rejected with `400` — config-scoped rules can only be declared in TOML.
+- `tool_add` and `plugin_add` are rejected with `400`: adding a tool server or plugin always needs a one-off operator approval and cannot be auto-approved.
 
 ### `DELETE /api/v1/auto-approve/{id}`
 
@@ -1035,7 +1036,7 @@ Test OIDC provider reachability (fresh discovery, 10 s timeout).
 Set preferred login method (`auto`, `password`, or `apikey`).
 
 ```json
-{ "preferred_method": "password" }
+{ "preferred_login_method": "password" }
 ```
 
 ### `GET /api/v1/onboarding`
@@ -1265,7 +1266,7 @@ Remove a tool server. The process is stopped and the configuration is removed fr
 
 **Scope:** `tools:read`
 
-Get health status for a specific tool server. Returns `connected`, `error`, or `disabled` status with restart count, last error, and uptime.
+Get health status for a specific tool server. `status` is `connected`, `connecting`, `error`, `disabled`, `config_error`, `pending_auth` (OAuth not yet authorised) or `draining`; the response also carries the transport, restart count, last error, and uptime.
 
 ### `GET /api/v1/tools/{name}/defs`
 

@@ -490,7 +490,7 @@ Dry-run turns persist nothing — no messages, telemetry, or memory — and exec
 | `websocket_replay_buffer_ttl` | string | `"5m"` | How long to buffer events for replay after a client disconnects |
 | `external_url` | string | — | Publicly-reachable base URL (used for OAuth callback URLs; defaults to `http(s)://<listen>`) |
 | `timezone` | string | `"UTC"` | IANA timezone used for cron evaluation and as the fallback for agents without their own `timezone`. Cron evaluation is restart-only |
-| `login_rate_limit` | int | `5` | Failed password logins allowed per window per IP |
+| `login_rate_limit` | int | `5` | Failed password logins allowed per window per IP. `0` disables the limit |
 | `login_rate_window` | string | `"15m"` | Window for `login_rate_limit` |
 | `onboarding_dismissed` | bool | `false` | Set by the dashboard when the onboarding checklist is dismissed |
 | `wizard_completed` | bool | `false` | Set by the dashboard when the setup wizard finishes or is left for later |
@@ -550,7 +550,8 @@ Note the direction: `[tools.*]` is Denkeeper connecting *outward* to MCP servers
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `type` | string | *required* | `"subprocess"` or `"docker"` |
-| `command` | string | *required* | Plugin binary path (subprocess) or Docker image (docker) |
+| `command` | string | *required for subprocess* | Plugin binary path (subprocess). For docker plugins it is optional: when set, it is passed after the image as the command to run, followed by `args`; empty uses the image default |
+| `image` | string | *required for docker* | Docker/OCI image to run, e.g. `"ghcr.io/example/mcp-code-runner:latest"` |
 | `args` | string[] | — | Command-line arguments |
 | `env` | map | — | Environment variable overrides |
 | `capabilities` | string[] | *required* | `["tools"]` |

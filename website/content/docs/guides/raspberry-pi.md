@@ -62,7 +62,7 @@ Denkeeper is a single static binary (~30 MB). Typical idle memory usage is under
 
 ## Using Ollama locally
 
-For fully offline operation, you can run [Ollama](https://ollama.ai/) on the Pi and configure Denkeeper to use it:
+For fully offline operation, you can run [Ollama](https://ollama.com/) on the Pi and configure Denkeeper to use it:
 
 ```toml
 [llm]
